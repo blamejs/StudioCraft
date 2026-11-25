@@ -1562,7 +1562,9 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "criterion",
  "rayon",
+ "sha2",
  "stats_alloc",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -1816,6 +1818,13 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "stats_alloc",
+]
+
+[[package]]
+name = "craft-rtp"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
@@ -6682,6 +6691,7 @@ dependencies = [
  "criterion",
  "image",
  "jpeg-encoder",
+ "libc",
  "log",
  "serde_json",
  "stats_alloc",
@@ -6699,6 +6709,7 @@ dependencies = [
  "chrono",
  "craft-atomic",
  "craft-captions",
+ "craft-face-track",
  "craft-hwenc",
  "craft-speech",
  "dirs",

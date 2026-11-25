@@ -45,6 +45,8 @@ Each shared crate in `crates/` has a README that describes it for use in other a
 - [craft-hwenc-native](../crates/craft-hwenc-native/README.md) calls hardware encoders through
   their drivers.
 - [craft-rtmp](../crates/craft-rtmp/README.md) publishes a stream to an RTMP or RTMPS server.
+- [craft-rtp](../crates/craft-rtp/README.md) reads RTP and RTCP, buffers packets against jitter,
+  and rebuilds H.264, VP8, Opus and AAC frames.
 - [craft-scopes](../crates/craft-scopes/README.md) computes waveforms, parades, histograms and
   vectorscopes.
 - [craft-transitions](../crates/craft-transitions/README.md) holds the Cut, Fade, Fade through

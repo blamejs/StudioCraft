@@ -250,6 +250,18 @@ impl SharedRing {
         let _ = self.fallback.compare_exchange(0, reason.code(), Ordering::AcqRel, Ordering::Acquire);
     }
 
+    /// `value`, the ready fence's completed value as Direct3D reports it on the compositor's side.
+    /// A removed device reports [`REMOVED`](crate::export::REMOVED): then
+    /// [`Fallback::DeviceRemoved`] is recorded and 0 returned, so no frame counts as ready.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn completed(&self, value: u64) -> u64 {
+        if value == crate::export::REMOVED {
+            self.refuse(Fallback::DeviceRemoved);
+            return 0;
+        }
+        value
+    }
+
     /// Record that texture `slot` now holds the frame with value `ready`, handed to the
     /// compositor. The capture side calls it before it hands out the frame.
     fn hand_out(&self, slot: usize, ready: u64) {

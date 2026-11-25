@@ -71,7 +71,8 @@ pub(crate) fn import(device: &wgpu::Device, ring: &SharedRing) -> Result<Importe
 }
 
 impl Imported {
-    /// The ready fence's value now, without waiting.
+    /// The ready fence's value now, without waiting; [`REMOVED`](crate::export::REMOVED) once the
+    /// device that holds the fence has been removed.
     pub(crate) fn completed(&self) -> u64 {
         // SAFETY: `ready` is a valid fence; reading its completed value does not wait.
         unsafe { self.ready.GetCompletedValue() }
@@ -171,9 +172,9 @@ impl Exported {
         );
         // SAFETY: the encoder belongs to `device` and records nothing but these commands. The
         // plane textures are textures of `device` in the copy-source state, `dst` is open on the
-        // same device, and each region lies inside both textures: the luma plane is the NV12
-        // texture's size and the chroma plane half of it, as the caller made them. The unused
-        // texture state (`UNINITIALIZED`) is the common state on Direct3D 12.
+        // same device, and each region lies inside both textures: `Exporter::copy` refuses planes
+        // unless the luma plane is the NV12 texture's size and the chroma plane half of it. The
+        // unused texture state (`UNINITIALIZED`) is the common state on Direct3D 12.
         let recorded = unsafe {
             encoder.as_hal_mut::<wgpu::hal::api::Dx12, _, _>(|hal| {
                 let Some(hal) = hal else { return false };

@@ -47,10 +47,10 @@ system calls through `libc`, and PipeWire's buffer queue through the `pipewire` 
 | `ExportRing::buffer(slot)`, `ExportRing::render_node()` (Linux) | They return the ring's `ExportBuffer` of a slot (the DMA-BUF descriptor, its size, its DRM format modifier, and the offset and row pitch of each plane) and the device number of the compositor GPU's DRM render node, for an encoder to import the buffers on that node. Each image is the ring's size rounded up to multiples of 16 (`ExportRing::padded_size`), with the picture at its top left, so an H.264 encoder reads its padded rows from the buffer; each copy fills the padding with the picture's last column and row. A ring made elsewhere has neither. |
 | `nv12_planes_fit(width, height, size, offsets, pitches, linear)` | It says whether an NV12 picture's two planes lie inside a buffer of `size` bytes, with rows at least the picture's width in a linear layout. |
 | `ExportFrame` | It names one texture of an export ring and the ready fence value at which the copy into it is done. |
-| `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished, `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
+| `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished (the ring keeps the newest frame whose copy still runs, and `ExportRing::reclaim` hands its texture back once that copy has finished), `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
 | `check_export(backend, compositor)` | It returns the adapter to make the export ring on, or the `Fallback`: a backend other than Direct3D 12 and Vulkan, an adapter the driver does not report, or a Vulkan device without `VK_KHR_external_memory_win32` or timeline semaphores. |
 | `check_dmabuf_export(backend, compositor, modifiers)` | It returns the adapter of a Linux export ring, or the `Fallback`: the reasons of `check_export` with the DMA-BUF extensions in place of `VK_KHR_external_memory_win32`, then `Modifier` when the device has no DRM format modifier in which it can export an NV12 image of the ring's size. |
-| `Exporter` (`wgpu` feature) | It opens an export ring on the compositor's device. `reserve` makes one-texel textures of the planes' formats outside the frame loop, `prepare` records a one-texel copy from each plane into them so the planes end in the copy-source state, `copy` records the copy of a frame's luma and chroma planes (8-bit one- and two-channel) into a free texture as a command buffer of its own, and `submitted` sets the ready fence after that submission and returns the `ExportFrame`. |
+| `Exporter` (`wgpu` feature) | It opens an export ring on the compositor's device. `reserve` makes one-texel textures of the planes' formats outside the frame loop, `prepare` records a one-texel copy from each plane into them so the planes end in the copy-source state, `copy` records the copy of a frame's luma and chroma planes (8-bit one- and two-channel) into a free texture as a command buffer of its own, and `submitted` sets the ready fence after that submission and returns the `ExportFrame`. `copy` refuses planes other than a luma plane of the ring's size and a chroma plane of half of it with `Fallback::ImportFailed`. The `Ticket` that `copy` returns keeps the ring's textures open on the compositor's device until it is dropped, even after the `Exporter` is dropped. |
 
 ## Synchronization
 
@@ -95,7 +95,9 @@ exporter's next `copy` or `poll`. The encoder side reads the ready fence's compl
 encodes a frame only once the value has been reached; a frame whose copy is late stays in the
 `Feed`. Once the frame's packet is out, the encoder's Direct3D 11 context signals the released
 fence with the frame's value, and the compositor writes that texture again. When an encoder stops,
-only the textures whose copies have finished are handed back. Neither side
+only the textures whose copies have finished are handed back; the textures whose copies were still
+running go back on the compositor's next `copy` after those copies finish. A new encoder session
+on the same ring does not take a frame whose release is queued or still to come. Neither side
 queues a wait on the GPU. wgpu cannot write NV12 textures, so the export ring's textures stay
 wgpu-hal textures and the copies are raw commands in a command buffer of their own. On Vulkan that
 command buffer takes the image from the external queue family before the copies and hands it back
@@ -134,7 +136,16 @@ work, without waiting.
   `Fallback::ImportFailed`. An encoder that cannot open a session on the export ring's device
   records `Fallback::NoEncoder` on the ring, and `Exporter::copy` then returns it. The caller reads
   the frames back through CPU memory instead. `ExportRing::release` also records
-  `Fallback::NoEncoder` when the released fence's signal cannot be queued.
+  `Fallback::NoEncoder` when the released fence's signal cannot be queued, and a Vulkan export
+  records `Fallback::ImportFailed` when it cannot set the ready fence. When the device that holds
+  the export ring has been removed, `ExportRing::ready` and `released` return 0 and record
+  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back. When a
+  Vulkan export is dropped while copies still run, the ready fence is raised only to the value the
+  compositor's semaphore reached once its queue has finished, and the ring records
+  `Fallback::DeviceRemoved` when that value is short of the last copy or cannot be read. The
+  importer records `Fallback::DeviceRemoved` the same way when the device that holds a captured
+  ring's fences on the compositor's side has been removed, and a Vulkan import records
+  `Fallback::ImportFailed` when it cannot set the released fence.
 - On Linux `Exporter::open` returns `Fallback::UnsupportedBackend` for a device not on Vulkan,
   `Fallback::MissingExtension` for a Vulkan device without timeline semaphores or without the
   extensions `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
@@ -148,6 +159,9 @@ work, without waiting.
   that are not one and two bytes per texel (R8 and RG8 formats) is `Fallback::ImportFailed`. When the compositor's device stops before the last copy into a frame is
   seen to finish, the ring records `Fallback::DeviceLost`, and the frames after the last finished
   copy never become ready.
+- On Vulkan a shared texture opens only when the driver reports that it imports a Direct3D 11
+  texture as an image of that format and usage, and its memory goes in a device-local type that
+  both the image and the texture's handle allow.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
   alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
   its color, which the system delivers multiplied by alpha, is divided by alpha.

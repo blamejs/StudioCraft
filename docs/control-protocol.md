@@ -65,7 +65,7 @@ answer.
 | --- | --- | --- |
 | `engine.execute` | `{"command": "<id>", "params"?: {...}}` | The command's result. |
 | `engine.commands` | `{"filter"?: "<text>"}` | Every command, or those whose id or label contains `filter` (case is ignored). |
-| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream and replay buffer state (`recording`, `streaming`, `replay`), frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
+| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream, replay buffer and virtual camera state (`recording`, `streaming`, `replay`, `virtual_camera`), frame statistics and canvas. `virtual_camera` is `{"active": false}`, or while it runs `active`, `status`, `target` (the device), `seconds` and `bytes` (the picture bytes sent). `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
 | `render.preview` | `{"view"?: "program" \| "preview", "max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the program, or of the preview in studio mode. |
 | `ui.inspect` | none | The window's layout and open dialogs ([`ui.inspect`](#uiinspect)). |
 | `ui.menu.list` | none | The menu bar as the window shows it, as a tree ([`ui.menu.list`](#uimenulist)). |
@@ -90,7 +90,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `source.mix_tracks`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `marker.rename`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -346,6 +346,16 @@ delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in samp
 the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
 are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
 
+### `source.mix_tracks`
+
+`source.mix_tracks` takes `{"source", "tracks"}` and assigns the source's audio to the mix tracks
+listed in `tracks`, numbers from 1 to 6 in any order; `[]` takes the source off every track. A
+number out of range, a number listed twice, a value that is not a list of whole numbers, or a
+source without audio is an error and changes nothing. Giving the tracks the source already has is
+no change and adds no undo step. The scene collection saves each source's tracks as
+`audio.mix_tracks`, and a new source is on all six. A recording writes the tracks in its profile's
+`output.recording_tracks` ([Recording](features.md#recording)).
+
 ### `filter.meter`
 
 `filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
@@ -566,6 +576,33 @@ files. A file of that name that already exists is not replaced. The
 files are written once the phrases up to the recording's end are finished, when captions stop, or
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
+
+### `avatar.models` and the face tracking model
+
+The face tracking model is kept in the speech models' `models_dir`, as
+`<models_dir>/face-landmarker/face_landmarker.task` (3,758,596 bytes).
+
+`avatar.models` takes no params and returns `models_dir`, `models` (each with `id`, `name`,
+`description`, `bytes`, `installed`, `license`, `license_url`, `author` and `source`), `job` (the
+`model` being downloaded or installed, its `kind`, `download` or `install`, and `done` and `total`
+bytes, or null) and `failure` (why the last download or install failed, or null; it is cleared
+when the next one starts). `installed` says whether the model's file is in place with its pinned
+size; over MCP with roots it is null for a file outside the read roots.
+
+`avatar.model_download` takes `{"model"?}` and downloads that model, by default `face-landmarker`,
+on a background thread. It returns `{"model", "downloading": true, "bytes"}` at once. A file
+already there with its pinned size and SHA-256 sum is kept; otherwise the file is downloaded into
+`face_landmarker.task.part`, checked against them, and renamed into place. A file that fails the
+check is deleted.
+
+`avatar.model_install` takes `{"path", "model"?}` and copies the model file at `path` into the
+models folder. Its size is checked at once, and a file of another size is an error. Its SHA-256 sum
+is checked on a background thread while it is copied, and a file that fails the check is deleted
+without changing a model already in place. It returns `{"model", "installing": true, "bytes"}`.
+
+A status message reports the end of a download or install. `avatar.model_download_cancel` stops
+the one that runs and deletes its partial file. An unknown model, an empty `model` or `path`, a
+missing file, a folder, and a second download or install while one runs are errors.
 
 ### `pause.*`
 

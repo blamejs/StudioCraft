@@ -371,7 +371,7 @@
 	Video	視訊
 	Video bitrate	視訊位元率
 	Video encoder	視訊編碼器
-	Video settings can't change while recording, streaming or running the replay buffer.	錄影、直播或執行重播緩衝時無法變更視訊設定。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	錄影、直播或執行重播緩衝、虛擬攝影機時無法變更視訊設定。
 	View	檢視
 	waiting for a choice in the system picker	正在等待在系統選擇器中選擇
 	waiting for the camera	正在等待攝影機

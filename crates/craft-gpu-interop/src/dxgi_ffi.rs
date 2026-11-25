@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Interface, PCWSTR};
 
 use crate::CaptureError;
+use crate::export::ReleaseGate;
 use crate::fallback::Fallback;
 use crate::ring::{AdapterId, SLOTS};
 
@@ -325,19 +326,21 @@ impl Drop for Output {
 /// has read one.
 pub(crate) struct Nv12Ring {
     device: ID3D11Device,
-    /// Only [`Nv12Ring::release`] uses it, from the encoder's thread; the lock keeps a second
-    /// thread off the immediate context.
-    context: std::sync::Mutex<ID3D11DeviceContext4>,
+    /// Only [`Nv12Ring::release`] uses it, from the caller that holds `gate`, so one thread at a
+    /// time uses the immediate context.
+    context: ID3D11DeviceContext4,
     textures: [ID3D11Texture2D; SLOTS],
     ready: ID3D11Fence,
     released: ID3D11Fence,
+    /// The values asked for and queued on `released`.
+    gate: ReleaseGate,
     /// Only the exporter (the `wgpu` feature) opens them.
     #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
     pub(crate) handles: Handles,
 }
 
 // SAFETY: the Direct3D 11 device and its fences are free-threaded, the textures are only handed out
-// as new references, and the immediate context is used only under its lock.
+// as new references, and the immediate context is used only by the caller that holds the gate.
 unsafe impl Send for Nv12Ring {}
 // SAFETY: as above; shared references read the fences and clone the COM pointers.
 unsafe impl Sync for Nv12Ring {}
@@ -416,7 +419,7 @@ pub(crate) fn nv12_ring(adapter: AdapterId, width: u32, height: u32) -> Result<N
     let (released, released_handle) = fence()?;
     handles.released = released_handle;
     let textures: [ID3D11Texture2D; SLOTS] = made.try_into().map_err(|_| Fallback::Unsupported)?;
-    Ok(Nv12Ring { device, context: std::sync::Mutex::new(context), textures, ready, released, handles })
+    Ok(Nv12Ring { device, context, textures, ready, released, gate: ReleaseGate::default(), handles })
 }
 
 impl Nv12Ring {
@@ -440,16 +443,25 @@ impl Nv12Ring {
         unsafe { self.released.GetCompletedValue() }
     }
 
+    /// The highest value asked of [`Nv12Ring::release`], queued on the device or about to be.
+    pub(crate) fn queued(&self) -> u64 {
+        self.gate.asked()
+    }
+
     /// Set the released fence to `value` once the work already queued on the device has run. The
     /// encoder calls it after the packet of the frame has come out, when the texture has been
-    /// read. Returns whether the signal was queued.
+    /// read. A value not above the highest one queued so far is not signaled, so the fence never
+    /// goes back; that counts as queued. It takes no lock: while another caller is signaling, the
+    /// value is left for that caller to signal. Returns whether the signals this call ran were
+    /// queued.
     pub(crate) fn release(&self, value: u64) -> bool {
-        let Ok(context) = self.context.lock() else { return false };
-        // SAFETY: `released` is a fence of this device; the signal runs on the GPU after the work
-        // queued so far, without waiting here.
-        let signaled = unsafe { context.Signal(&self.released, value) }.is_ok();
-        // SAFETY: the context is valid; flushing sends the signal to the GPU.
-        unsafe { context.Flush() };
-        signaled
+        self.gate.release(value, |value| {
+            // SAFETY: `released` is a fence of this device; the signal runs on the GPU after the
+            // work queued so far, without waiting here. Only the gate's holder runs this.
+            let signaled = unsafe { self.context.Signal(&self.released, value) }.is_ok();
+            // SAFETY: the context is valid; flushing sends the signal to the GPU.
+            unsafe { self.context.Flush() };
+            signaled
+        })
     }
 }

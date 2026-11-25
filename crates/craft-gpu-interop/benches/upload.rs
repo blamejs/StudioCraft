@@ -12,12 +12,15 @@
 //! (Windows on Direct3D 12, or Vulkan with the shared-memory extension; Linux on Vulkan with the
 //! DMA-BUF and DRM format modifier extensions, where the ring's images are DMA-BUFs a VA-API
 //! encoder imports). Comparing `NV12 read-back` with `NV12 export ring copy` at a size gives what
-//! the GPU path saves per frame before the encoder.
+//! the GPU path saves per frame before the encoder. A copy, submission or release that fails during
+//! the export case stops the run.
 //!
 //! On Linux the display sizes also run `DMA-BUF import`: a linear BGRX DMA-BUF made over ordinary
 //! memory through `/dev/udmabuf`, handed to the importer as a screen-cast buffer and drawn into the
 //! source texture, on a Vulkan device with the DMA-BUF extensions. It does not run, and says why,
 //! where the device cannot import a linear buffer or `/dev/udmabuf` cannot be opened.
+
+#![allow(clippy::panic)]
 
 use craft_gpu_interop::{Exporter, Opaque};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -31,8 +34,9 @@ const BACKENDS: [(&str, wgpu::Backends); 1] = [("", wgpu::Backends::PRIMARY)];
 /// The features an export ring needs on the measured device, where the adapter has them.
 #[cfg(target_os = "linux")]
 const EXPORT_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+/// Elsewhere the Vulkan export opens its ring only on a device with the shared-memory feature.
 #[cfg(not(target_os = "linux"))]
-const EXPORT_FEATURES: wgpu::Features = wgpu::Features::empty();
+const EXPORT_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
 
 fn device(backends: wgpu::Backends) -> Option<(wgpu::Device, wgpu::Queue)> {
     device_with(backends, EXPORT_FEATURES)
@@ -198,9 +202,20 @@ fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, l
             copy(&mut enc, &planes[0], 0, h);
             copy(&mut enc, &planes[1], luma, h / 2);
             queue.submit([enc.finish()]);
-            buffer.map_async(wgpu::MapMode::Read, .., |_| {});
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            if let Ok(view) = buffer.get_mapped_range(..) {
+            // A failed mapping, wait or read fails the case instead of counting as a read-back.
+            let (sent, mapped) = std::sync::mpsc::channel();
+            buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+                let _ = sent.send(r);
+            });
+            if let Err(e) = device.poll(wgpu::PollType::wait_indefinitely()) {
+                panic!("the NV12 read-back for {label} did not finish: {e:?}");
+            }
+            match mapped.try_recv() {
+                Ok(Ok(())) => {}
+                other => panic!("the NV12 read-back for {label} was not mapped: {other:?}"),
+            }
+            {
+                let view = buffer.get_mapped_range(..).unwrap_or_else(|e| panic!("the NV12 read-back for {label} could not be read: {e:?}"));
                 std::hint::black_box(view.len());
             }
             buffer.unmap();
@@ -215,17 +230,23 @@ fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, l
         b.iter(|| {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             exporter.prepare(device, &mut enc, &planes);
-            let Ok(Some((commands, ticket))) = exporter.copy(device, &planes, std::time::Instant::now()) else { return };
+            // A failed copy, submission or release fails the case.
+            let (commands, ticket) = match exporter.copy(device, &planes, std::time::Instant::now()) {
+                Ok(Some(copy)) => copy,
+                Ok(None) => panic!("no free export texture for {label}"),
+                Err(reason) => panic!("the export copy for {label} failed: {reason}"),
+            };
             queue.submit([enc.finish(), commands]);
-            let frame = exporter.submitted(ticket);
+            let frame = exporter.submitted(ticket).unwrap_or_else(|reason| panic!("the export submission for {label} failed: {reason}"));
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             // The encoder's side hands each texture straight back, and the next copy starts once
             // the released fence has the value, so every iteration times a copy.
-            if let Ok(frame) = frame {
-                exporter.ring().release(frame.ready());
-                while exporter.ring().released() < frame.ready() && exporter.ring().fallback().is_none() {
-                    std::hint::spin_loop();
+            exporter.ring().release(frame.ready());
+            while exporter.ring().released() < frame.ready() {
+                if let Some(reason) = exporter.ring().fallback() {
+                    panic!("the export release for {label} failed: {reason}");
                 }
+                std::hint::spin_loop();
             }
         })
     });

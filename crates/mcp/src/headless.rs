@@ -183,6 +183,16 @@ impl Headless {
         Ok(())
     }
 
+    /// The models folder, and the folder and file of face tracking model `model` in it, held to
+    /// the roots.
+    fn face_model_allowed(&self, model: Option<&str>, access: Access) -> Result<(), McpError> {
+        self.allowed(self.studio.models_dir(), access)?;
+        for path in self.studio.face_model_paths(model) {
+            self.allowed(&path, access)?;
+        }
+        Ok(())
+    }
+
     /// Every path field of `schema` set in `settings`, held to the roots: `settings` with each such
     /// path replaced by the path the roots resolved, so the source opens the file that was checked.
     fn check_paths(&self, schema: &SettingsSchema, settings: &Settings) -> Result<Settings, McpError> {
@@ -281,6 +291,16 @@ impl Headless {
             }
             Command::CaptionsToggle {} if !matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running) => {
                 self.speech_model_allowed(None, Access::Read)?;
+            }
+            // A face tracking model is downloaded into the models folder.
+            Command::AvatarModelDownload { model } => {
+                self.face_model_allowed(model.as_deref(), Access::Write)?;
+            }
+            // An install reads the user's file and writes it into the models folder.
+            Command::AvatarModelInstall { path, model } => {
+                let resolved = self.allowed(Path::new(path.as_str()), Access::Read)?;
+                *path = setting_text(roots, &resolved, Access::Read)?;
+                self.face_model_allowed(model.as_deref(), Access::Write)?;
             }
             // The pause screen reads its picture or video.
             Command::PauseStart { media: Some(media), .. } if !media.trim().is_empty() => {

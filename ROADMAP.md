@@ -20,6 +20,7 @@ description in [docs/features.md](docs/features.md).
 ### Filters
 
 - Color correction with white balance, chroma key, color key, crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a three-band equalizer are built in ([Filters](docs/features.md#filters)).
+- The Apply LUT filter changes a source's colors through a `.cube` or `.png` color lookup table, with an Amount ([Filters](docs/features.md#filters)).
 
 ### Transitions
 
@@ -33,12 +34,14 @@ description in [docs/features.md](docs/features.md).
 - The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
 - Audio input and output capture stay in step with the mix when the device's clock runs a little fast or slow ([Audio](docs/features.md#audio)).
+- Each source is assigned to any of six mix tracks with `source.mix_tracks`, and a recording writes each track in its profile's `output.recording_tracks` as its own audio stream, in the built-in MKV writer and through `ffmpeg`; the window does not set either yet ([Audio](docs/features.md#audio), [Recording](docs/features.md#recording)).
 
 ### Recording
 
 - MKV files are recorded with the built-in H.264 and AAC encoders without ffmpeg ([Encoders](docs/features.md#encoders)).
 - MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
+- On Linux the virtual camera sends the program to a v4l2loopback device that other apps open as a camera ([Virtual camera](docs/features.md#virtual-camera)).
 - Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
 - Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 - One marker command marks the recording and the audio tracks at the same moment, and lists the session's markers ([Recording markers](docs/features.md#recording-markers)).
@@ -102,8 +105,8 @@ description in [docs/features.md](docs/features.md).
    carries, `craft-packet` shares each encoded packet by reference with every destination's
    bounded ring, and `craft-rtmp` publishes a stream to an RTMP or RTMPS server. The app does not
    use them yet, and a stream still goes to one server through `ffmpeg`. The list of
-   destinations, publishing from StudioCraft's own process and the virtual camera are still to
-   be built.
+   destinations and publishing from StudioCraft's own process are still to be built. The virtual
+   camera works on Linux; the Windows and macOS devices are still to be built.
 3. **Web build (partly done).** The browser editor in `apps/studiocraft-web` edits the scenes and
    sources of a scene collection file
    ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)). Adding
@@ -121,8 +124,10 @@ description in [docs/features.md](docs/features.md).
    Audio dock lists microphones and running applications as lanes with live meters, grays a lane
    the program does not hear, and routes an application into every scene
    ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume with up to
-   +20 dB of boost, mute, filters, a sync offset and monitoring. Track assignment is still to be
-   built.
+   +20 dB of boost, mute, filters, a sync offset and monitoring. The mixer assigns each source to
+   mix tracks 1 to 6 and a recording writes the profile's tracks as separate audio streams
+   ([Audio](docs/features.md#audio)); the lanes, the Audio Mixer dock and Settings › Output do not
+   show the assignment yet.
 6. **Application audio on macOS and Linux (partly done).** Linux lists the applications that
    have PipeWire playback streams and captures one by linking its streams to a capture stream
    ([Application audio capture](docs/features.md#application-audio-capture)). Linux shows no
@@ -173,3 +178,7 @@ description in [docs/features.md](docs/features.md).
     minimized or that display is disconnected ([Staged windows](docs/features.md#staged-windows)).
     A dock of staged windows with live thumbnails to click, and a transition on each swap are still
     to be built.
+17. **Remote cameras (partly done).** A phone, camcorder or IP camera on the local network will be
+    a source, sending its picture and sound over WebRTC, RTMP or RTSP. `craft-rtp` reads RTP and
+    RTCP, puts packets back in order against network jitter, and rebuilds H.264, VP8, Opus and AAC
+    frames. The app does not use it yet.

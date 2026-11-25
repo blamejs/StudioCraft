@@ -371,7 +371,7 @@
 	Video	Video
 	Video bitrate	Video bit hızı
 	Video encoder	Video kodlayıcı
-	Video settings can't change while recording, streaming or running the replay buffer.	Kayıt, yayın veya tekrar arabelleği çalışırken video ayarları değiştirilemez.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Kayıt, yayın, tekrar arabelleği veya sanal kamera çalışırken video ayarları değiştirilemez.
 	View	Görünüm
 	waiting for a choice in the system picker	sistem seçicisinde seçim bekleniyor
 	waiting for the camera	kamera bekleniyor

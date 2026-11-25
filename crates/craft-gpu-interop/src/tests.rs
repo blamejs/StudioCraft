@@ -192,6 +192,22 @@ fn a_vulkan_import_needs_the_display_adapter_the_external_memory_extension_and_t
 }
 
 #[test]
+fn a_failed_open_destroys_the_resources_opened_before_it() {
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| if h == 3 { Err(Fallback::ImportFailed) } else { Ok(h * 10) }, |r| destroyed.push(r));
+    assert_eq!(result, Err(Fallback::ImportFailed));
+    assert_eq!(destroyed, [10, 20], "both textures opened before the failure are destroyed");
+
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| Ok::<_, Fallback>(h * 10), |r| destroyed.push(r));
+    assert_eq!(result, Ok(vec![10, 20, 30]));
+    assert!(destroyed.is_empty(), "nothing is destroyed when every open succeeds");
+
+    let result = crate::fallback::open_all(&[1], |_| Err::<u32, _>(Fallback::ImportFailed), |_| panic!("nothing was opened"));
+    assert_eq!(result, Err(Fallback::ImportFailed));
+}
+
+#[test]
 fn an_adapter_id_keeps_both_parts() {
     assert_eq!(AdapterId::from_parts(1, 2).0, (2 << 32) | 1);
     assert_eq!(AdapterId::from_parts(u32::MAX, -1).0, u64::MAX);
@@ -1048,6 +1064,178 @@ fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
 }
 
 #[test]
+fn a_release_while_another_is_signaling_returns_at_once_and_its_value_is_signaled() {
+    let gate = export::ReleaseGate::default();
+    let mut signaled = Vec::new();
+    let held = gate.release(5, |value| {
+        if signaled.is_empty() {
+            // A second thread releases while this call holds the gate; it must not wait for it.
+            let other = std::thread::scope(|s| s.spawn(|| gate.release(9, |_| panic!("only the caller that holds the gate signals"))).join());
+            assert!(matches!(other, Ok(true)), "the second release returns without signaling");
+        }
+        signaled.push(value);
+        true
+    });
+    assert!(held);
+    assert_eq!(signaled, [5, 9], "the holder signals the value left while it was signaling");
+    // A value not above the highest one signaled is not signaled again.
+    assert!(gate.release(7, |_| panic!("the fence never goes back")));
+    // A signal that cannot be queued is reported, and the next release tries the value again.
+    assert!(!gate.release(12, |_| false));
+    let mut again = Vec::new();
+    assert!(gate.release(10, |value| {
+        again.push(value);
+        true
+    }));
+    assert_eq!(again, [12]);
+}
+
+#[test]
+fn a_removed_device_counts_no_frame_as_done_and_records_why() {
+    let ring = ExportRing::detached(64, 2);
+    assert_eq!(ring.completed(7), 7);
+    assert_eq!(ring.fallback(), None, "an ordinary fence value is kept");
+    assert_eq!(ring.completed(export::REMOVED), 0);
+    assert_eq!(ring.fallback(), Some(Fallback::DeviceRemoved));
+    // With nothing counted as done, no frame is ready and no written texture is free.
+    let frame = exported(&ring, 0, 1);
+    assert!(frame.ring().completed(export::REMOVED) < frame.ready());
+    let mut slots = SlotTable::default();
+    let slot = slots.pick_released(0).unwrap();
+    slots.fill_released(slot, Instant::now()).unwrap();
+    assert_ne!(slots.pick_released(ring.completed(export::REMOVED)), Some(slot));
+}
+
+/// Once the queue has finished, a fence is raised only to the value its semaphore was read at:
+/// a short or unread value leaves the later frames not done and says the work did not finish.
+#[test]
+fn a_fence_is_raised_only_to_the_value_its_semaphore_reached() {
+    let mut raised = Vec::new();
+    assert!(export::settle(Some(3), 3, |v| raised.push(v)));
+    assert!(export::settle(Some(4), 3, |v| raised.push(v)));
+    assert!(!export::settle(Some(2), 3, |v| raised.push(v)), "a device lost before the last signal");
+    assert!(!export::settle(None, 3, |v| raised.push(v)), "a value that could not be read");
+    assert_eq!(raised, [3, 4, 2]);
+}
+
+#[test]
+fn a_frame_given_again_is_refused_while_it_waits_and_after_its_texture_went_back() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    let first = exported(&ring, 0, 1);
+    assert!(feed.offer(first.clone(), 100).is_none());
+    // The same frame again while it waits.
+    assert!(!feed.accepts(&first));
+    assert_eq!(feed.offer(first.clone(), 101).map(|f| f.ready()), Some(1));
+    assert_eq!(feed.waiting(), 1, "the copy is not queued");
+    ring.set_ready(1);
+    assert!(feed.take_ready().is_some());
+    assert_eq!(feed.out(1), 1);
+    // Its texture went back and the compositor wrote frame 4 into it: the old frame is refused.
+    let newer = exported(&ring, 0, 4);
+    assert!(feed.offer(newer, 400).is_none());
+    assert!(!feed.accepts(&first));
+    assert_eq!(feed.offer(first, 102).map(|f| f.ready()), Some(1));
+    assert_eq!(feed.waiting(), 1);
+    // A frame older than the newest offered is refused too.
+    assert!(!feed.accepts(&exported(&ring, 1, 3)));
+    // A session on a ring read before refuses the frames that went back before it started.
+    ring.set_ready(4);
+    ring.release(4);
+    let feed = Feed::default();
+    assert!(!feed.accepts(&exported(&ring, 0, 4)));
+    assert!(feed.accepts(&exported(&ring, 1, 5)));
+}
+
+#[test]
+fn a_session_on_a_ring_refuses_a_frame_whose_release_is_queued_but_not_finished() {
+    let ring = ExportRing::detached(64, 2);
+    ring.hold_releases.store(true, std::sync::atomic::Ordering::Release);
+    ring.set_ready(2);
+    let mut feed = Feed::default();
+    for value in 1..=2 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert_eq!(feed.out(2), 2);
+    assert_eq!(ring.released(), 0, "the release is queued and has not run");
+    // A replacement session gets a copy of frame 2: its texture may be written again any moment.
+    let mut next = Feed::default();
+    assert!(!next.accepts(&exported(&ring, 1, 2)));
+    assert_eq!(next.offer(exported(&ring, 1, 2), 2).map(|f| f.ready()), Some(2));
+    assert!(next.accepts(&exported(&ring, 2, 3)));
+    ring.finish_releases();
+    assert_eq!(ring.released(), 2);
+}
+
+#[test]
+fn a_stopped_encoders_textures_go_back_once_their_copies_finish() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    for value in 1..=SLOTS as u64 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+    }
+    // Every copy is still running when the encoder stops.
+    assert_eq!(feed.drain(), SLOTS);
+    assert_eq!(ring.released(), 0, "a texture being written is not handed back");
+    assert_eq!(ring.handed_back(), SLOTS as u64, "no later session takes those frames");
+    ring.reclaim();
+    assert_eq!(ring.released(), 0, "the copies have not finished");
+    ring.set_ready(SLOTS as u64 - 1);
+    ring.reclaim();
+    assert_eq!(ring.released(), 0, "the newest copy has not finished");
+    // Every copy finished: the compositor gets the whole ring back.
+    ring.set_ready(SLOTS as u64);
+    ring.reclaim();
+    assert_eq!(ring.released(), SLOTS as u64);
+    let mut slots = SlotTable::default();
+    for _ in 0..SLOTS {
+        let slot = slots.pick_released(0).unwrap();
+        slots.fill_released(slot, Instant::now()).unwrap();
+    }
+    assert!(slots.pick_released(ring.released()).is_some());
+}
+
+#[test]
+fn a_removed_device_on_the_compositors_side_counts_no_captured_frame_as_done() {
+    let ring = SharedRing::detached(64, 2);
+    assert_eq!(ring.completed(7), 7);
+    assert_eq!(ring.fallback(), None, "an ordinary fence value is kept");
+    assert_eq!(ring.completed(export::REMOVED), 0);
+    assert_eq!(ring.fallback(), Some(Fallback::DeviceRemoved));
+    let mut handoff = Handoff::default();
+    handoff.offer(frame(&ring, 0, 1));
+    assert!(handoff.take_ready(ring.completed(export::REMOVED)).is_none());
+}
+
+#[test]
+fn an_imported_handle_gets_a_memory_type_both_it_and_the_image_allow() {
+    use crate::fallback::memory_type;
+    // The image allows types 0 and 1, the handle only type 1.
+    assert_eq!(memory_type(0b11, 0b10, [true, true]), Some(1));
+    assert_eq!(memory_type(0b11, 0b11, [true, true]), Some(0));
+    // Only device-local types count.
+    assert_eq!(memory_type(0b111, 0b111, [false, false, true]), Some(2));
+    assert_eq!(memory_type(0b01, 0b10, [true, true]), None, "no type is in both masks");
+    assert_eq!(memory_type(0b10, 0b10, [true]), None, "a type the device does not list");
+}
+
+#[test]
+fn the_export_copy_needs_a_luma_plane_of_the_rings_size_and_a_chroma_plane_of_half() {
+    use crate::export::planes_fit;
+    assert!(planes_fit(64, 2, (64, 2), (32, 1)));
+    assert!(!planes_fit(64, 2, (128, 2), (32, 1)), "a luma plane wider than the ring");
+    assert!(!planes_fit(64, 2, (64, 2), (64, 2)), "a chroma plane of the full size");
+    assert!(!planes_fit(64, 2, (64, 4), (32, 2)));
+}
+
+#[test]
+fn a_vulkan_device_without_external_memory_or_timeline_semaphores_says_which_is_needed() {
+    let message = Fallback::MissingExtension.to_string();
+    assert!(message.contains("shared textures") && message.contains("timeline semaphores"), "{message}");
+}
+
+#[test]
 fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
     let ring = ExportRing::detached(64, 2);
     let mut feed = Feed::default();
@@ -1243,10 +1431,14 @@ mod gpu {
         queue.submit([encoder.finish()]);
         assert!(pollster::block_on(validation.pop()).is_none(), "each copy is valid");
         // Planes of other formats get new scratch textures; the same formats keep them.
+        // A wgpu texture compares equal only to itself and its clones.
         let unorm = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let uint_scratch = scratch.clone();
         let scratch = crate::export::scratch_for(&device, &unorm, Some(scratch));
         assert_eq!(formats(&scratch), formats(&unorm));
-        assert_eq!(formats(&crate::export::scratch_for(&device, &unorm, Some(scratch))), formats(&unorm));
+        assert!(scratch.iter().zip(&uint_scratch).all(|(new, old)| new != old), "other formats get new textures");
+        let kept = scratch.clone();
+        assert_eq!(crate::export::scratch_for(&device, &unorm, Some(scratch)), kept, "the same formats keep the textures");
     }
 
     /// A device on wgpu's `backends`, opened with those of `features` the adapter has.
@@ -1518,7 +1710,12 @@ mod gpu {
         let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
             Ok(e) => e,
             Err(reason) => {
-                assert!(check_export(backend, adapter).is_err() || matches!(reason, Fallback::Unsupported | Fallback::ImportFailed));
+                // The preflight's reason when it fails; otherwise only opening the ring's
+                // resources can fail.
+                match check_export(backend, adapter) {
+                    Err(expected) => assert_eq!(reason, expected),
+                    Ok(_) => assert!(matches!(reason, Fallback::Unsupported | Fallback::ImportFailed), "{reason:?}"),
+                }
                 return;
             }
         };

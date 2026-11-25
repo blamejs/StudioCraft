@@ -20,6 +20,7 @@ pub(crate) fn job(rate: RateControl) -> OutputJob {
         video_encoder_settings: Settings::new(),
         rate,
         audio_bitrate_kbps: 128,
+        audio_streams: Vec::new(),
         ffmpeg: PathBuf::new(),
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
@@ -143,6 +144,54 @@ fn a_recording_through_the_built_in_encoders_has_every_frame_and_the_sound() {
     let mut dec = craft_audio::aac::Decoder::new(&tracks[1].codec_private).unwrap();
     assert_eq!(dec.decode(&audio[0].2).unwrap().len(), 2);
     assert!(audio.windows(2).all(|w| w[1].0 > w[0].0), "the sound is in time order");
+    assert_eq!(tracks.len(), 2, "one audio track");
+    assert_eq!(tracks[1].name, "", "a recording of one stream leaves it unnamed");
+}
+
+#[test]
+fn a_recording_of_several_mix_tracks_writes_an_audio_track_for_each() {
+    let path = temp_file("tracks");
+    let j = OutputJob { audio_streams: vec!["Track 1".into(), "Track 3".into()], ..job(RateControl::Quality(20)) };
+    let mut out = Recording.start(&Settings::new().with("path", path.to_string_lossy().as_ref()), j).unwrap();
+    let queues = out.audio_streams();
+    assert_eq!(queues.len(), 2);
+    assert!(Arc::ptr_eq(&queues[0], &out.audio()), "the first track is the output's audio queue");
+    // The first track carries a tone and the second gets no block at all: it is written as
+    // silence on the same timeline.
+    let sent = feed(&out.video(), &queues[0], 1.5);
+    out.stop().unwrap();
+    let file = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+
+    let mut d = Demuxer::from_slice(&file).unwrap();
+    let tracks = d.tracks().to_vec();
+    let mut by_track: [Vec<(i64, Vec<u8>)>; 3] = Default::default();
+    while let Ok(Some(p)) = d.next_packet() {
+        by_track[p.track].push((p.pts_ns, p.data));
+    }
+    let names: Vec<_> = tracks.iter().map(|t| (t.codec_id.as_str(), t.name.as_str())).collect();
+    assert_eq!(names, [("V_MPEG4/ISO/AVC", ""), ("A_AAC", "Track 1"), ("A_AAC", "Track 3")]);
+    assert_eq!(by_track[0].len() as u64, sent);
+    let [_, tone, silent] = &by_track;
+    assert!(tone.len() >= 70, "{} audio frames", tone.len());
+    let times = |p: &[(i64, Vec<u8>)]| p.iter().map(|(t, _)| *t).collect::<Vec<_>>();
+    assert_eq!(times(tone), times(silent), "both tracks keep the same timeline");
+    let energy = |track: usize, packets: &[(i64, Vec<u8>)]| {
+        let mut dec = craft_audio::aac::Decoder::new(&tracks[track].codec_private).unwrap();
+        packets.iter().flat_map(|(_, p)| dec.decode(p).unwrap()).flatten().map(|s| s * s).sum::<f32>()
+    };
+    assert!(energy(1, tone) > 1.0, "the first track has the tone");
+    assert!(energy(2, silent) < 1e-6, "the second track is silent");
+}
+
+#[test]
+fn more_audio_tracks_than_there_are_mix_tracks_are_refused() {
+    let path = temp_file("too-many");
+    let j = OutputJob { audio_streams: vec!["x".into(); studiocraft_model::MIX_TRACKS + 1], ..job(RateControl::Quality(20)) };
+    let Err(e) = Native::start(&j, &path) else { panic!("seven audio tracks started") };
+    assert!(e.to_string().contains("at most 6"), "{e}");
+    assert!(!path.exists(), "no file is made");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
 #[test]
@@ -303,7 +352,7 @@ fn a_flush_that_fails_fails_the_recording() {
 }
 
 fn item(track: Track, order_ns: i64, bytes: usize) -> Item {
-    Item { track, order_ns, pts_ns: order_ns, dts_ns: order_ns, keyframe: true, data: vec![0; bytes] }
+    Item { track, audio: 0, order_ns, pts_ns: order_ns, dts_ns: order_ns, keyframe: true, data: vec![0; bytes] }
 }
 
 #[test]
@@ -370,6 +419,21 @@ fn the_tracks_are_written_in_time_order() {
     assert_eq!(order, [0, 100], "the late video goes before the later sound");
     pending[1].push_back(item(Track::Audio, 5_000_000_000 + MAX_LAG_NS + 1, 1));
     assert_eq!(next_item(&mut pending, running).err(), Some(Track::Video), "a video encoder that falls too far behind is named");
+}
+
+#[test]
+fn the_audio_tracks_packets_go_to_the_file_thread_merged_by_time() {
+    let shared = Shared::new(PacketQueue::new(1 << 20, QUEUE_SPAN_NS), Duration::ZERO);
+    let track = |packets: usize| AudioTrack { session: AacSession::new(128).unwrap(), units: 0, out: vec![vec![0u8; 4]; packets] };
+    // A gap filled with silence gives each track several packets in one turn; the second track
+    // also has one packet more, as a flush can give.
+    let mut tracks = vec![track(3), track(4)];
+    assert!(send_audio(&mut tracks, 0, &shared));
+    let sent: Vec<(usize, i64)> = std::iter::from_fn(|| shared.packets.pop()).map(|i| (i.audio, i.order_ns)).collect();
+    let at = |n: i64| samples_ns(n * 1024);
+    assert_eq!(sent, [(0, 0), (1, 0), (0, at(1)), (1, at(1)), (0, at(2)), (1, at(2)), (1, at(3))]);
+    assert!(tracks.iter().all(|t| t.out.is_empty()));
+    assert_eq!(tracks.iter().map(|t| t.units).collect::<Vec<_>>(), [3, 4]);
 }
 
 #[test]

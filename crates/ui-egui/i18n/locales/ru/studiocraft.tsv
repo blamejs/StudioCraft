@@ -371,7 +371,7 @@
 	Video	Видео
 	Video bitrate	Битрейт видео
 	Video encoder	Кодировщик видео
-	Video settings can't change while recording, streaming or running the replay buffer.	Настройки видео нельзя менять во время записи, трансляции или работы буфера повтора.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Настройки видео нельзя менять во время записи, трансляции, работы буфера повтора или виртуальной камеры.
 	View	Вид
 	waiting for a choice in the system picker	ожидание выбора в системном окне выбора
 	waiting for the camera	ожидание камеры

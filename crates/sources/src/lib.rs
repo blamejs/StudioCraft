@@ -16,7 +16,7 @@
 //! | `captions` | the live captions of the program audio, from the studio's [`CaptionBoard`] |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
-//! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll` (video).
+//! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll`, `apply_lut` (video).
 
 mod app_audio;
 mod audio;
@@ -84,6 +84,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting, captions: &Arc<C
     reg.register_filter(Arc::new(filters::ColorKey))?;
     reg.register_filter(Arc::new(filters::ImageMask))?;
     reg.register_filter(Arc::new(filters::Scroll))?;
+    reg.register_filter(Arc::new(filters::ApplyLut))?;
     Ok(())
 }
 

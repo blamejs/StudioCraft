@@ -183,11 +183,12 @@ reads and reopens a camera.
 ## Filters
 
 Each source can carry a list of filters. The video filters are color correction, chroma key,
-color key, crop and pad, image mask, scroll and sharpen. The audio filters are gain, noise gate,
-compressor, limiter and a three-band equalizer.
+color key, crop and pad, image mask, scroll, sharpen and Apply LUT. The audio filters are gain,
+noise gate, compressor, limiter and a three-band equalizer.
 
 | Filter | What it does |
 | --- | --- |
+| Apply LUT | Changes a source's colors through a color lookup table, blended with the original colors by Amount (0 to 100%). The table comes from a `.cube` file (a 3D table of 2 to 90 colors a side, or a 1D table of up to 65536 entries, with its input range) or a `.png` picture (a row of n tiles of n x n pixels, or a square grid of tiles such as 512 x 512 pixels for 64 colors a side). Colors between the table's entries are blended from the nearest eight, and transparency is kept. A 1D table is read at up to 64 evenly spaced points per channel, blended from its two nearest entries, so detail in a longer table that falls between those points is not kept. Table values below 0 or above 1 are blended as they are, and only the result is clipped to 0 to 1. The file is read when the filter starts or its file changes; a file that could not be read is tried again at the next change to the scene collection. |
 | Color correction | Sets gamma, contrast, brightness, saturation and opacity, and the white balance by temperature and tint. |
 | Chroma key | Makes the pixels near a key color transparent by their chroma distance from it, with key color spill reduction. |
 | Color key | Makes the pixels near a key color transparent by their RGB distance from it, with Similarity and Smoothness, and adjusts the rest by gamma, contrast, brightness and opacity. |
@@ -249,6 +250,14 @@ second. When the mixer starts reading the source, the source adds silence or dro
 audio to start at that amount. While the mixer does not read the source, the source keeps the
 rate it had.
 
+The mixer also makes six mix tracks, numbered 1 to 6. Each source with audio is assigned to any
+of them, and a new source goes to all six. A track holds the sources assigned to it at their
+volume, mute and monitoring settings, and it is clipped at full scale like the program mix. The
+`source.mix_tracks` command assigns a source; the Settings window and the Audio Mixer dock do not
+show the assignment yet. A recording writes the tracks listed in its profile's
+`output.recording_tracks`, each as its own stereo audio stream (see [Recording](#recording)).
+Streams and the replay buffer always take the program mix.
+
 ### Application Audio dock
 
 Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
@@ -290,6 +299,14 @@ The Lossless level encodes the video frames without compression loss and writes 
 The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with
 `-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
 and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
+
+A recording writes one audio stream for each [mix track](#audio) in the profile's
+`output.recording_tracks`, a list of track numbers from 1 to 6 that is `[1]` by default. With one
+track the file has one unnamed audio stream. With several, the streams follow the track order and
+are titled `Track 1`, `Track 2` and so on. The built-in MKV writer and recordings through `ffmpeg`
+both write them. A track that misses a block of sound is written as silence for that block, so
+every stream keeps the same length. A recording with an empty list does not start, and the status
+bar gives the reason.
 
 StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
 it uses your Videos folder, then your home folder when the system has no Videos folder, and then
@@ -373,6 +390,18 @@ the recording folder, and the buffer keeps running. Settings › Output sets the
 seconds, 20 by default) and the memory limit (32 to 16384 MB, 512 by default). Start or Stop
 Replay Buffer and Save Replay can be given shortcuts in Settings › Hotkeys. While the buffer runs,
 the status bar shows REPLAY with the time it has run.
+
+### Virtual camera
+
+File › Virtual Camera sends the program at the output size and frame rate to a virtual camera
+device, which video call and other camera apps then list as a camera. It runs no encoder and sends
+no audio. On Linux the device is a v4l2loopback output device: load the module first, for example
+with `sudo modprobe v4l2loopback exclusive_caps=1`, and the first such device is used. Frames go
+out as YUYV when the device takes it, otherwise as NV12 or I420. When the device is busy, older
+frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
+runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
+a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
+and stop it.
 
 ### Audio tracks
 
@@ -464,6 +493,18 @@ CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, A
 A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
 captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
 left out. Recordings do not carry closed captions; they get the caption files.
+
+### Face tracking model
+
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
 
 ## Streaming
 
@@ -952,7 +993,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer or the virtual camera. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

@@ -174,6 +174,13 @@ impl Nv12 {
         }
     }
 
+    /// Why the frames stopped going to the GPU queues: the reason kept when the export stopped, or
+    /// one the running export's ring has recorded since its last frame, such as a ready fence the
+    /// last poll could not set.
+    pub(crate) fn export_fallback(&self) -> Option<Fallback> {
+        self.fallback.or_else(|| self.export.as_ref().and_then(|e| e.exporter.ring().fallback()))
+    }
+
     /// Whether frames go to GPU queues.
     pub(crate) fn exporting(&self) -> bool {
         self.export.is_some()

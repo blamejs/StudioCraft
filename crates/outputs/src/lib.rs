@@ -13,12 +13,14 @@
 //! or to a built-in hardware encoder for an MKV recording, a stream or the replay buffer, before an
 //! output starts. The
 //! replay buffer ([`replay`]) runs the built-in encoders and keeps their newest packets in memory
-//! until a save writes them to a Matroska file.
+//! until a save writes them to a Matroska file. The virtual camera ([`virtual_camera`]) sends the
+//! program's raw frames to a device other apps open as a camera.
 
 pub mod encoders;
 pub mod native;
 pub mod replay;
 pub mod stream;
+pub mod virtual_camera;
 pub mod writer;
 
 use std::path::Path;
@@ -34,12 +36,13 @@ use crate::native::Native;
 pub use crate::stream::{AutoCheck, Streaming, Target};
 use crate::writer::{Writer, audio_args};
 
-/// Register the recording, the stream, the replay buffer and every video encoder: the ffmpeg
-/// ones, the hardware choice, then the built-in ones.
+/// Register the recording, the stream, the replay buffer, the virtual camera and every video
+/// encoder: the ffmpeg ones, the hardware choice, then the built-in ones.
 pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_output(Arc::new(Recording))?;
     reg.register_output(Arc::new(Stream))?;
     reg.register_output(Arc::new(replay::Replay))?;
+    reg.register_output(Arc::new(virtual_camera::VirtualCamera))?;
     for e in encoders::all() {
         reg.register_encoder(Arc::new(e))?;
     }
@@ -118,6 +121,12 @@ impl OutputInstance for Running {
         match &self.backend {
             Backend::Ffmpeg(w) => w.audio(),
             Backend::Native(n) => n.audio(),
+        }
+    }
+    fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        match &self.backend {
+            Backend::Ffmpeg(w) => w.audio_streams(),
+            Backend::Native(n) => n.audio_streams(),
         }
     }
     fn status(&self) -> OutputStatus {

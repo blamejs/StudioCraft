@@ -19,11 +19,13 @@
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
 	Alpha mask (color channel)	Alpha mask (color channel)
 	AMD AMF H.264	AMD AMF H.264
+	Amount (%)	Amount (%)
 	Apache 2.0	Apache 2.0
 	Apply	Apply
 	Application	Application
 	Application audio capture	Application audio capture
 	Apply Dock Layout	Apply Dock Layout
+	Apply LUT	Apply LUT
 	Attack (ms)	Attack (ms)
 	Audio	Audio
 	Audio bitrate	Audio bitrate
@@ -73,6 +75,7 @@
 	Color	Color
 	Color correction	Color correction
 	Color key	Color key
+	Color lookup tables	Color lookup tables
 	Community	Community
 	Compact (small files)	Compact (small files)
 	Compressor	Compressor
@@ -187,6 +190,7 @@
 	Limit height	Limit height
 	Limit width	Limit width
 	Limiter	Limiter
+	LUT file	LUT file
 	Linear	Linear
 	List Stream Destinations	List Stream Destinations
 	LIVE	LIVE
@@ -385,10 +389,12 @@
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
+	Start or Stop Virtual Camera	Start or Stop Virtual Camera
 	Start Recording	Start Recording
 	Start Replay Buffer	Start Replay Buffer
 	Start Stream Destination	Start Stream Destination
 	Start Streaming	Start Streaming
+	Start Virtual Camera	Start Virtual Camera
 	Starting…	Starting…
 	Stats	Stats
 	Status Bar	Status Bar
@@ -398,6 +404,7 @@
 	Stop Replay Buffer	Stop Replay Buffer
 	Stop Stream Destination	Stop Stream Destination
 	Stop Streaming	Stop Streaming
+	Stop Virtual Camera	Stop Virtual Camera
 	Stop this destination before removing it	Stop this destination before removing it
 	Stopped	Stopped
 	Stopping Replay Buffer…	Stopping Replay Buffer…
@@ -546,8 +553,9 @@
 	Video	Video
 	Video bitrate	Video bitrate
 	Video encoder	Video encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.
 	View	View
+	Virtual Camera	Virtual Camera
 	waiting for a choice in the system picker	waiting for a choice in the system picker
 	waiting for the camera	waiting for the camera
 	Waiting for the program picture…	Waiting for the program picture…
@@ -687,6 +695,8 @@
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended
 @msg	The stream stopped: {error}	The stream stopped: {error}
+@msg	The virtual camera could not be stopped: {error}	The virtual camera could not be stopped: {error}
+@msg	The virtual camera stopped: {error}	The virtual camera stopped: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
 	Record as its own track	Record as its own track
@@ -851,6 +861,16 @@ menu	Transform	Transform
 @msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
+	Face Tracking Models	Face Tracking Models
+	Download Face Tracking Model	Download Face Tracking Model
+	Cancel Face Tracking Model Download	Cancel Face Tracking Model Download
+	Install Face Tracking Model from File	Install Face Tracking Model from File
+@msg	Face tracking model {model} downloaded	Face tracking model {model} downloaded
+@msg	Face tracking model {model} installed	Face tracking model {model} installed
+@msg	The download of face tracking model {model} was canceled	The download of face tracking model {model} was canceled
+@msg	The install of face tracking model {model} was canceled	The install of face tracking model {model} was canceled
+@msg	Face tracking model {model} could not be downloaded: {error}	Face tracking model {model} could not be downloaded: {error}
+@msg	Face tracking model {model} could not be installed: {error}	Face tracking model {model} could not be installed: {error}
 @msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}
 	Pause Program	Pause Program
 	Resume Program	Resume Program

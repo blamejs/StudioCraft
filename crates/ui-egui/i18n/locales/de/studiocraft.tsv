@@ -355,7 +355,7 @@
 	Video	Video
 	Video bitrate	Video-Bitrate
 	Video encoder	Video-Encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Während einer Aufnahme, eines Streams oder des Replay-Puffers lassen sich die Videoeinstellungen nicht ändern.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Während einer Aufnahme, eines Streams, des Replay-Puffers oder der virtuellen Kamera lassen sich die Videoeinstellungen nicht ändern.
 	View	Ansicht
 	waiting for a choice in the system picker	wartet auf eine Auswahl in der Systemauswahl
 	waiting for the camera	wartet auf die Kamera

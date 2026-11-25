@@ -9,8 +9,10 @@
 //! window is on. When the window's size changes, its pictures go into a new ring of the new size.
 //!
 //! With the `wgpu` feature, an [`Importer`] opens the ring's textures and fences on a wgpu
-//! Direct3D 12 or Vulkan device and draws the frame into the caller's texture with alpha set to 1.
-//! It never waits: a frame whose copy has not finished stays pending, and the next call tries
+//! Direct3D 12 or Vulkan device and draws the frame into the caller's texture. A display's frame is
+//! drawn with alpha set to 1. A window's frame keeps its alpha, and its color, which the system
+//! delivers multiplied by alpha, is drawn as straight color ([`SharedRing::keeps_alpha`]). It never
+//! waits: a frame whose copy has not finished stays pending, and the next call tries
 //! again. After the draw it signals the ring's released fence, which tells the capture side that
 //! the texture may be written again. On Direct3D 12 the queue signals the fence. On Vulkan the
 //! textures are opened through `VK_KHR_external_memory_win32` and the fences on a Direct3D 12

@@ -40,10 +40,15 @@ pub enum Fallback {
     /// rejected the submission that held the copy, so the encoder cannot tell whether the frame is
     /// complete.
     DeviceLost,
+    /// The graphics device that holds the export ring, or the fences of a captured ring on the
+    /// compositor's side, was removed or reset, so the fences no longer say which frames are done.
+    /// Also recorded when a Vulkan compositor's export stops before the copies it submitted are
+    /// seen to finish.
+    DeviceRemoved,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 11] = [
+    pub(crate) const ALL: [Fallback; 12] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -55,6 +60,7 @@ impl Fallback {
         Fallback::Refused,
         Fallback::Modifier,
         Fallback::DeviceLost,
+        Fallback::DeviceRemoved,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -70,6 +76,7 @@ impl Fallback {
             Fallback::Refused => 9,
             Fallback::Modifier => 10,
             Fallback::DeviceLost => 11,
+            Fallback::DeviceRemoved => 12,
         }
     }
 
@@ -87,13 +94,14 @@ impl std::fmt::Display for Fallback {
             Fallback::Unsupported => "this system cannot share captured textures between devices",
             Fallback::Format => "the desktop is not in 8-bit color",
             Fallback::Rotated => "the display is rotated",
-            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared textures",
+            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared textures or has no timeline semaphores",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
             Fallback::Modifier => "the compositor's device cannot share the picture in a memory layout the other side reads",
             Fallback::DeviceLost => {
                 "the compositor's graphics device stopped, or refused the copy into a program frame, before the frame was finished"
             }
+            Fallback::DeviceRemoved => "the graphics device that holds the shared frames was removed or reset",
         })
     }
 }
@@ -155,4 +163,30 @@ pub fn check_dmabuf_export(backend: Backend, compositor: Option<AdapterId>, modi
         return Err(Fallback::Modifier);
     }
     Ok(adapter)
+}
+
+/// Open each of `handles` with `open`, in order. When one fails, every resource opened before it
+/// is passed to `destroy`, and the failure is returned.
+#[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
+pub(crate) fn open_all<H: Copy, T, E>(handles: &[H], mut open: impl FnMut(H) -> Result<T, E>, destroy: impl FnMut(T)) -> Result<Vec<T>, E> {
+    let mut opened = Vec::with_capacity(handles.len());
+    for &handle in handles {
+        match open(handle) {
+            Ok(resource) => opened.push(resource),
+            Err(e) => {
+                opened.into_iter().for_each(destroy);
+                return Err(e);
+            }
+        }
+    }
+    Ok(opened)
+}
+
+/// The first memory type that both the image's mask `image` and the imported handle's mask
+/// `handle` allow (bit `i` of a mask is type `i`) and that `device_local`, one entry per type in
+/// order, marks as device-local. `None` when no type is in both masks.
+#[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
+pub(crate) fn memory_type(image: u32, handle: u32, device_local: impl IntoIterator<Item = bool>) -> Option<u32> {
+    let allowed = image & handle;
+    (0..u32::BITS).zip(device_local).find(|&(i, local)| local && allowed & (1 << i) != 0).map(|(i, _)| i)
 }

@@ -555,6 +555,9 @@ fn runtime_commands_are_handed_to_the_app() {
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
+        ("vcam.start", RuntimeAction::StartVirtualCamera),
+        ("vcam.stop", RuntimeAction::StopVirtualCamera),
+        ("vcam.toggle", RuntimeAction::ToggleVirtualCamera),
         ("audio.loudness", RuntimeAction::AudioLoudness),
         ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
         ("audio_tracks.open_last", RuntimeAction::AudioTracksOpenLast),
@@ -820,6 +823,43 @@ fn caption_commands_are_handed_to_the_app() {
 }
 
 #[test]
+fn face_tracking_model_commands_are_handed_to_the_app() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (id, params, action) in [
+        ("avatar.models", json!({}), RuntimeAction::AvatarModels),
+        ("avatar.model_download", json!({}), RuntimeAction::AvatarModelDownload { model: None }),
+        ("avatar.model_download", json!({"model": "face-landmarker"}), RuntimeAction::AvatarModelDownload { model: Some("face-landmarker".into()) }),
+        ("avatar.model_download_cancel", json!({}), RuntimeAction::AvatarModelDownloadCancel),
+        ("avatar.model_install", json!({"path": "/m/f.task"}), RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: None }),
+        (
+            "avatar.model_install",
+            json!({"path": "/m/f.task", "model": "face-landmarker"}),
+            RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: Some("face-landmarker".into()) },
+        ),
+    ] {
+        let o = run(&mut e, id, params).unwrap();
+        assert_eq!(o.runtime, Some(action), "{id}");
+        assert!(!o.changed);
+    }
+    assert_eq!(e.revision(), rev, "nothing in the collection changed");
+    for (id, bad) in [
+        ("avatar.model_download", json!({"model": ""})),
+        ("avatar.model_download", json!({"model": " "})),
+        ("avatar.model_download", json!({"model": 3})),
+        ("avatar.model_download", json!({"modle": "face-landmarker"})),
+        ("avatar.model_install", json!({})),
+        ("avatar.model_install", json!({"path": ""})),
+        ("avatar.model_install", json!({"path": "  "})),
+        ("avatar.model_install", json!({"path": 3})),
+        ("avatar.model_install", json!({"path": "/m/f.task", "model": ""})),
+        ("avatar.models", json!({"model": "face-landmarker"})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
 fn a_source_is_set_to_record_its_own_track_or_not() {
     let mut e = engine();
     run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
@@ -846,6 +886,41 @@ fn a_source_is_set_to_record_its_own_track_or_not() {
     let silent = run(&mut e, "source.set_record_track", json!({"source": "Video", "on": true}));
     assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
     assert!(matches!(run(&mut e, "source.set_record_track", json!({"source": "ghost", "on": true})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
+fn a_source_is_assigned_to_mix_tracks() {
+    let mut e = engine();
+    run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let tracks = |e: &Engine| e.collection().source_by_name("Mic").map(|s| s.audio.mix_tracks.numbers().collect::<Vec<_>>());
+    assert_eq!(tracks(&e), Some(vec![1, 2, 3, 4, 5, 6]), "a new source goes to every track");
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [3, 1]})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "the order given does not matter");
+    assert_eq!(e.undo_label(), Some("Mix Tracks"));
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [1, 3]})).unwrap().changed, "the same tracks are no change");
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": []})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![]), "a source can be on no track");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "one undo step");
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"source": "Mic", "tracks": [0]}),
+        json!({"source": "Mic", "tracks": [7]}),
+        json!({"source": "Mic", "tracks": [2, 2]}),
+        json!({"source": "Mic", "tracks": [1.5]}),
+        json!({"source": "Mic", "tracks": 1}),
+        json!({"source": "Mic", "tracks": null}),
+        json!({"source": "Mic", "tracks": ["1"]}),
+    ] {
+        assert!(run(&mut e, "source.mix_tracks", bad.clone()).is_err(), "{bad}");
+        assert_eq!(tracks(&e), Some(vec![1, 3]), "{bad} changes nothing");
+    }
+    add_color(&mut e, "Video");
+    let silent = run(&mut e, "source.mix_tracks", json!({"source": "Video", "tracks": [1]}));
+    assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
+    assert!(matches!(run(&mut e, "source.mix_tracks", json!({"source": "ghost", "tracks": [1]})), Err(EngineError::NoSource(_))));
 }
 
 #[test]
@@ -1717,8 +1792,10 @@ fn every_spec_is_reachable() {
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
+            "source.mix_tracks" => json!({"source": 1, "tracks": [1, 2]}),
             "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
+            "avatar.model_install" => json!({"path": "x.task"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),

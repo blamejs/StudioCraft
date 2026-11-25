@@ -182,7 +182,7 @@ pub enum Drawn {
 /// ring of DMA-BUFs, whose buffers are imported as they first arrive.
 #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 struct Opened {
-    ring: u64,
+    ring: std::sync::Arc<crate::ring::SharedRing>,
     binds: Vec<Option<wgpu::BindGroup>>,
     #[cfg(windows)]
     raw: Raw,
@@ -229,10 +229,14 @@ impl Importer {
 
     /// Hand the textures whose draws have finished back to the capture side, without waiting.
     /// A compositor calls it on each frame on which it does not call [`Importer::draw`]; only a
-    /// Vulkan import has anything to do.
+    /// Vulkan import has anything to do. When the textures cannot be handed back,
+    /// [`Fallback::ImportFailed`] is recorded on the ring, and the capture side goes back to a CPU
+    /// copy instead of running out of textures.
     pub fn poll(&self) {
-        if let Some(opened) = &self.opened {
-            poll(opened);
+        if let Some(opened) = &self.opened
+            && !poll(opened)
+        {
+            opened.ring.refuse(Fallback::ImportFailed);
         }
     }
 
@@ -258,7 +262,7 @@ impl Importer {
             self.handoff.clear();
             return Err(reason);
         }
-        if self.opened.as_ref().is_none_or(|o| o.ring != ring.id()) {
+        if self.opened.as_ref().is_none_or(|o| o.ring.id() != ring.id()) {
             self.opened = None;
             match open(device, queue, &ring, self.opaque.get_or_insert_with(|| Opaque::new(device))) {
                 Ok(o) => self.opened = Some(o),
@@ -270,7 +274,17 @@ impl Importer {
             }
         }
         let Some(opened) = &mut self.opened else { return Ok(Drawn::Idle) };
-        let done = self.handoff.pending().map_or(0, |f| completed(opened, f));
+        // A removed device's fence value counts no frame as done and records why on the ring;
+        // textures that cannot be handed back record why too.
+        if !poll(opened) {
+            ring.refuse(Fallback::ImportFailed);
+        }
+        let done = ring.completed(self.handoff.pending().map_or(0, |f| completed(opened, f)));
+        if let Some(reason) = ring.fallback() {
+            self.handoff.clear();
+            self.opened = None;
+            return Err(reason);
+        }
         // A frame whose texture the capture side took back is dropped, and the next one is tried.
         let frame = loop {
             match self.handoff.take_ready(done) {
@@ -324,7 +338,7 @@ impl Importer {
 
 /// Open `ring` on `device`: on Direct3D 12, else on Vulkan.
 #[cfg(windows)]
-fn open(device: &wgpu::Device, queue: &wgpu::Queue, ring: &crate::ring::SharedRing, opaque: &Opaque) -> Result<Opened, Fallback> {
+fn open(device: &wgpu::Device, queue: &wgpu::Queue, ring: &std::sync::Arc<crate::ring::SharedRing>, opaque: &Opaque) -> Result<Opened, Fallback> {
     let raw = match crate::d3d12_ffi::import(device, ring) {
         Err(Fallback::UnsupportedBackend) => Raw::Vulkan(Box::new(crate::vulkan_ffi::import(device, queue, ring)?)),
         imported => Raw::Dx12(imported?),
@@ -334,22 +348,22 @@ fn open(device: &wgpu::Device, queue: &wgpu::Queue, ring: &crate::ring::SharedRi
         Raw::Vulkan(r) => &r.textures,
     };
     let binds = textures.iter().map(|t| Some(opaque.bind(device, &t.create_view(&wgpu::TextureViewDescriptor::default())))).collect();
-    Ok(Opened { ring: ring.id(), binds, raw })
+    Ok(Opened { ring: std::sync::Arc::clone(ring), binds, raw })
 }
 
 /// Open a ring of DMA-BUFs on `device`, which must run on Vulkan. Its buffers are imported by
 /// [`prepare`] as their first frames are drawn. A ring of another kind cannot be opened here.
 #[cfg(target_os = "linux")]
-fn open(device: &wgpu::Device, _queue: &wgpu::Queue, ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
+fn open(device: &wgpu::Device, _queue: &wgpu::Queue, ring: &std::sync::Arc<crate::ring::SharedRing>, _opaque: &Opaque) -> Result<Opened, Fallback> {
     if ring.dmabuf_layout().is_none() {
         return Err(Fallback::Unsupported);
     }
     let raw = crate::dmabuf_ffi::open(device, ring)?;
-    Ok(Opened { ring: ring.id(), binds: vec![None; ring.slots()], raw })
+    Ok(Opened { ring: std::sync::Arc::clone(ring), binds: vec![None; ring.slots()], raw })
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn open(_device: &wgpu::Device, _queue: &wgpu::Queue, _ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
+fn open(_device: &wgpu::Device, _queue: &wgpu::Queue, _ring: &std::sync::Arc<crate::ring::SharedRing>, _opaque: &Opaque) -> Result<Opened, Fallback> {
     Err(Fallback::Unsupported)
 }
 
@@ -443,15 +457,20 @@ fn completed(_opened: &Opened, _frame: &SharedFrame) -> u64 {
     0
 }
 
+/// Copy the values the compositor's queue has reached to the released fence, without waiting;
+/// false when that failed. Only a Vulkan import has anything to do.
 #[cfg(windows)]
-fn poll(opened: &Opened) {
-    if let Raw::Vulkan(r) = &opened.raw {
-        r.poll();
+fn poll(opened: &Opened) -> bool {
+    match &opened.raw {
+        Raw::Vulkan(r) => r.poll(),
+        Raw::Dx12(_) => true,
     }
 }
 
 #[cfg(not(windows))]
-fn poll(_opened: &Opened) {}
+fn poll(_opened: &Opened) -> bool {
+    true
+}
 
 /// Hand the texture of the frame with ready value `value`, drawn or skipped, back to the capture
 /// side after the work already submitted to the compositor's queue.
