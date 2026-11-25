@@ -10,7 +10,7 @@ automatically by the graphics adapter's vendor, with the software encoder as the
 
 | Item | Description |
 |---|---|
-| `CANDIDATES`, `candidate(id)` | These list 16 encoders: NVENC, AMF, Quick Sync, Media Foundation, VideoToolbox and VA-API, each for H.264, HEVC and AV1 where FFmpeg has the codec. |
+| `CANDIDATES`, `candidate(id)` | These list 17 encoders: NVENC, AMF, Quick Sync, Media Foundation, VideoToolbox and VA-API, each for H.264, HEVC and AV1 where FFmpeg has the codec. |
 | `Candidate::runs_on(os)` | NVENC and Quick Sync run on Windows and Linux, AMF and Media Foundation on Windows, VideoToolbox on macOS, and VA-API on Linux. |
 | `Candidate::accepts(input)` | Every encoder accepts NV12, and HEVC and AV1 encoders except Media Foundation also accept P010. |
 | `Candidate::prelude(input)` | It returns the arguments before the codec arguments. VA-API opens `vaapi_device()` and uploads each frame with `-vf format=<input>,hwupload`. |

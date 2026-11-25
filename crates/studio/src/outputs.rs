@@ -1106,6 +1106,12 @@ fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
     }
 }
 
+/// Whether the `craft_hwenc` candidate `candidate` has a built-in encoder that runs it in this
+/// process, so an MKV recording or a stream can use it without `ffmpeg`.
+pub fn has_built_in_twin(candidate: &str) -> bool {
+    hardware::for_candidate(candidate).is_some()
+}
+
 /// `resolved` with a hardware encoder that also runs in this process replaced by that built-in
 /// encoder.
 fn built_in_twin(resolved: Resolved) -> Resolved {
@@ -1838,6 +1844,7 @@ mod tests {
         assert_eq!(built_in_twin(("nvenc_av1".into(), Some(run("nvenc_av1")), None)).0, "nvenc_native_av1");
         assert_eq!(built_in_twin(("mf_h264".into(), Some(run("mf_h264")), None)).0, "mf_native_h264");
         assert_eq!(built_in_twin(("mf_hevc".into(), Some(run("mf_hevc")), None)).0, "mf_native_hevc");
+        assert_eq!(built_in_twin(("mf_av1".into(), Some(run("mf_av1")), None)).0, "mf_native_av1");
         assert_eq!(built_in_twin(("vt_h264".into(), Some(run("vt_h264")), None)).0, "vt_native_h264");
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");

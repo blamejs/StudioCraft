@@ -72,6 +72,8 @@ fn the_automatic_order_puts_the_adapter_vendors_api_first_then_the_systems() {
     assert_eq!(ids(&nvidia), ["nvenc_h264", "mf_h264", "amf_h264", "qsv_h264"]);
     let intel = auto_order(Vendor::from_pci_id(0x8086), Os::Windows, Codec::Hevc);
     assert_eq!(ids(&intel), ["qsv_hevc", "mf_hevc", "nvenc_hevc", "amf_hevc"]);
+    let nvidia_av1 = auto_order(Vendor::from_pci_id(0x10de), Os::Windows, Codec::Av1);
+    assert_eq!(ids(&nvidia_av1), ["nvenc_av1", "mf_av1", "amf_av1", "qsv_av1"]);
     let amd_linux = auto_order(Vendor::from_pci_id(0x1002), Os::Linux, Codec::Av1);
     assert_eq!(ids(&amd_linux), ["vaapi_av1", "nvenc_av1", "qsv_av1"], "AMF is not offered on Linux; VA-API runs AMD there");
     let apple = auto_order(Vendor::from_pci_id(0x106b), Os::MacOs, Codec::H264);

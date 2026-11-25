@@ -265,8 +265,8 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | Software (x264) | MKV, MP4 and MOV at every level | Yes | All |
 | H.264 (built in) | MKV at Compact, High and Pristine, with a Speed, Balanced or Quality preset, and streams | No | All |
 | Hardware (set in Settings › Video) | MKV, MP4 and MOV, and streams, with the hardware encoder set in Settings › Video › Hardware acceleration | Yes, except for the built-in encoders below and for streams | All |
-| NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
-| Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
+| NVIDIA NVENC H.264, HEVC and AV1 (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
+| Windows Media Foundation H.264, HEVC and AV1 (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
 | VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
@@ -615,7 +615,11 @@ the chosen adapter is missing or the app fell back to software. After a device l
 again on a new device, and after 3 losses in 10 minutes it draws in software.
 
 **Hardware encoder** picks the encoder that recordings and streams use when their encoder is
-Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
+Hardware: Automatic, Software only, or one of the listed hardware encoders. The list holds this
+system's built-in hardware encoders and the hardware encoders the `ffmpeg` program lists, or
+every hardware encoder of this system when the `ffmpeg` list cannot be read. A built-in encoder
+that `ffmpeg` does not list is marked "(not in this ffmpeg)": it records MKV files, and an MP4,
+MOV or Lossless recording cannot use it. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
 encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
 H.264 (built in) for a stream. One test stops after 5 s, and the tests of one start stop after
@@ -631,7 +635,7 @@ candidates run in `ffmpeg`, except for a stream:
 | NVIDIA NVENC | H.264, HEVC and AV1 |
 | AMD AMF | H.264, HEVC and AV1 |
 | Intel Quick Sync | H.264, HEVC and AV1 |
-| Windows Media Foundation | H.264 and HEVC |
+| Windows Media Foundation | H.264, HEVC and AV1 |
 | VideoToolbox | H.264 and HEVC |
 | VA-API | H.264, HEVC and AV1 |
 
@@ -640,10 +644,10 @@ a built-in encoder in the following list with that built-in encoder, inside its 
 instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the built-in encoder.
 A stream tests only the H.264 candidates in this list, and skips every other candidate:
 
-- NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver on Windows and 64-bit
-  Linux.
-- Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
-  lists, on Windows.
+- NVIDIA NVENC H.264, HEVC and AV1 (built in) run through the NVIDIA driver on Windows and
+  64-bit Linux. AV1 needs a GPU whose encoder writes AV1.
+- Windows Media Foundation H.264, HEVC and AV1 (built in) run the hardware encoders Media
+  Foundation lists, on Windows. AV1 is 8-bit.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
 - VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
   Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with

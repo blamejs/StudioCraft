@@ -568,6 +568,7 @@
 	Intel Quick Sync HEVC	Intel Quick Sync HEVC
 	Intel Quick Sync AV1	Intel Quick Sync AV1
 	Windows Media Foundation HEVC	Windows Media Foundation HEVC
+	Windows Media Foundation AV1	Windows Media Foundation AV1
 	VideoToolbox H.264	VideoToolbox H.264
 	VideoToolbox HEVC	VideoToolbox HEVC
 	VA-API H.264	VA-API H.264
