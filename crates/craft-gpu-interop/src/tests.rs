@@ -921,10 +921,14 @@ mod gpu {
         queue.submit([encoder.finish()]);
         assert!(pollster::block_on(validation.pop()).is_none(), "each copy is valid");
         // Planes of other formats get new scratch textures; the same formats keep them.
+        // A wgpu texture compares equal only to itself and its clones.
         let unorm = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let uint_scratch = scratch.clone();
         let scratch = crate::export::scratch_for(&device, &unorm, Some(scratch));
         assert_eq!(formats(&scratch), formats(&unorm));
-        assert_eq!(formats(&crate::export::scratch_for(&device, &unorm, Some(scratch))), formats(&unorm));
+        assert!(scratch.iter().zip(&uint_scratch).all(|(new, old)| new != old), "other formats get new textures");
+        let kept = scratch.clone();
+        assert_eq!(crate::export::scratch_for(&device, &unorm, Some(scratch)), kept, "the same formats keep the textures");
     }
 
     #[cfg(not(windows))]
