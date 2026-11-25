@@ -1,6 +1,6 @@
 [package]
 name = "craft-hwenc-native"
-description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264, HEVC and AV1 from NV12 or P010 frames with BT.709, HLG or PQ signaling for HEVC, the Windows Media Foundation hardware H.264, HEVC and AV1 encoders and the macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, with the avcC, hvcC and av1C records built from the headers the encoder writes"
+description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264, HEVC and AV1 from NV12 or P010 frames with BT.709, HLG or PQ signaling for HEVC, the Windows Media Foundation and Linux VA-API hardware H.264, HEVC and AV1 encoders and the macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, with the avcC, hvcC and av1C records built from the headers the encoder writes"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -46,6 +46,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Ole",
     "Win32_System_Variant",
 ] }
+# The `#[implement]` macro, which writes the callback that takes back released input samples, names
+# this crate in the code it writes.
+windows-core = "0.62"
 
 # 64-bit Linux: `libnvidia-encode.so.1` and `libcuda.so.1` for NVENC, and `libva.so.2` and
 # `libva-drm.so.2` for VA-API, are loaded at run time, so building needs no NVIDIA or libva

@@ -106,6 +106,8 @@
 	Filters…	Filtri…
 	Finishing Recording…	Completamento della registrazione…
 	Fit to Screen	Adatta allo schermo
+	Flip Horizontal	Rifletti orizzontalmente
+	Flip Vertical	Rifletti verticalmente
 	Font	Carattere
 	Font family	Famiglia di caratteri
 	Format	Formato
@@ -138,6 +140,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrato)
 	VA-API H.264 (built in)	VA-API H.264 (integrato)
 	VA-API HEVC (built in)	VA-API HEVC (integrato)
+	VA-API AV1 (built in)	VA-API AV1 (integrato)
 	Height	Altezza
 	Help	Aiuto
 	Hide	Nascondi

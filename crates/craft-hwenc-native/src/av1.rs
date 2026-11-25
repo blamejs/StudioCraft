@@ -18,6 +18,7 @@ use craft_media::isobmff::Av1Config;
 pub const OBU_SEQUENCE_HEADER: u8 = 1;
 pub const OBU_TEMPORAL_DELIMITER: u8 = 2;
 pub const OBU_FRAME_HEADER: u8 = 3;
+pub const OBU_TILE_GROUP: u8 = 4;
 pub const OBU_FRAME: u8 = 6;
 pub const OBU_TILE_LIST: u8 = 8;
 pub const OBU_PADDING: u8 = 15;
@@ -341,6 +342,11 @@ impl Stream {
     /// The stream's sequence header.
     pub fn sequence_header(&self) -> &SequenceHeader {
         &self.header
+    }
+
+    /// Append the stream's sequence header OBU to `out`, with its size.
+    pub fn write_sequence_header(&self, out: &mut Vec<u8>) {
+        Obu { kind: OBU_SEQUENCE_HEADER, header: &[OBU_SEQUENCE_HEADER << 3], payload: &self.payload }.write(out);
     }
 
     /// Whether `other` has the same sequence header, byte for byte.

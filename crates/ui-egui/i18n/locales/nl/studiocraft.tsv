@@ -105,6 +105,8 @@
 	Filters…	Filters…
 	Finishing Recording…	Opname afronden…
 	Fit to Screen	Aanpassen aan scherm
+	Flip Horizontal	Horizontaal spiegelen
+	Flip Vertical	Verticaal spiegelen
 	Font	Lettertype
 	Font family	Lettertypefamilie
 	Format	Indeling
@@ -136,6 +138,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (ingebouwd)
 	VA-API H.264 (built in)	VA-API H.264 (ingebouwd)
 	VA-API HEVC (built in)	VA-API HEVC (ingebouwd)
+	VA-API AV1 (built in)	VA-API AV1 (ingebouwd)
 	Height	Hoogte
 	Hide	Verbergen
 	High	Hoog

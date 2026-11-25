@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Kończenie nagrywania…
 	Fit to Screen	Dopasuj do ekranu
+	Flip Horizontal	Odbij w poziomie
+	Flip Vertical	Odbij w pionie
 	Font	Czcionka
 	Font family	Rodzina czcionek
 	Format	Format
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (wbudowany)
 	VA-API H.264 (built in)	VA-API H.264 (wbudowany)
 	VA-API HEVC (built in)	VA-API HEVC (wbudowany)
+	VA-API AV1 (built in)	VA-API AV1 (wbudowany)
 	Height	Wysokość
 	Help	Pomoc
 	Hide	Ukryj

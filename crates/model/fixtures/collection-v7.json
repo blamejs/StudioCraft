@@ -11,7 +11,14 @@
           {
             "id": 5,
             "source": 3,
-            "transform": { "position": { "x": 0, "y": 0 }, "scale": { "x": 1, "y": 1 }, "rotation": 0, "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 } },
+            "transform": {
+              "position": { "x": 0, "y": 0 },
+              "scale": { "x": 1, "y": 1 },
+              "rotation": 0,
+              "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+              "flip_horizontal": false,
+              "flip_vertical": false
+            },
             "visible": true,
             "locked": true,
             "fit": "fill"
@@ -19,7 +26,14 @@
           {
             "id": 6,
             "source": 4,
-            "transform": { "position": { "x": 40, "y": 600 }, "scale": { "x": 1, "y": 1 }, "rotation": 15, "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 } },
+            "transform": {
+              "position": { "x": 40, "y": 600 },
+              "scale": { "x": 1, "y": 1 },
+              "rotation": 15,
+              "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+              "flip_horizontal": true,
+              "flip_vertical": false
+            },
             "visible": true,
             "locked": false
           }
@@ -35,7 +49,7 @@
         "name": "Background",
         "settings": { "color": "#203040ff", "width": 1280, "height": 720 },
         "filters": [ { "id": 9, "kind": "color_adjust", "kind_version": 1, "name": "Warmer", "enabled": true, "settings": { "brightness": 0.1 } } ],
-        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": null, "mix_tracks": [1, 2, 3, 4, 5, 6], "balance": 0.0, "mono": false }
+        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": null, "mix_tracks": [1, 2, 3, 4, 5, 6] }
       },
       {
         "id": 4,
@@ -44,7 +58,7 @@
         "name": "Title",
         "settings": { "text": "Starting soon", "size": 48, "color": "#ffffffff" },
         "filters": [],
-        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": false, "mix_tracks": [], "balance": 1.0, "mono": false }
+        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": false, "mix_tracks": [] }
       },
       {
         "id": 7,
@@ -53,7 +67,7 @@
         "name": "Microphone",
         "settings": { "device": "" },
         "filters": [],
-        "audio": { "gain": 0.5, "muted": true, "sync_offset_ms": 250, "monitor": "monitor_only", "record_track": true, "mix_tracks": [1, 3], "balance": -0.25, "mono": true }
+        "audio": { "gain": 0.5, "muted": true, "sync_offset_ms": 250, "monitor": "monitor_only", "record_track": true, "mix_tracks": [1, 3] }
       }
     ],
     "global_audio": [7],
