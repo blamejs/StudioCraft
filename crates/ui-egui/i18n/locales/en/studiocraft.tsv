@@ -19,11 +19,13 @@
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
 	Alpha mask (color channel)	Alpha mask (color channel)
 	AMD AMF H.264	AMD AMF H.264
+	Amount (%)	Amount (%)
 	Apache 2.0	Apache 2.0
 	Apply	Apply
 	Application	Application
 	Application audio capture	Application audio capture
 	Apply Dock Layout	Apply Dock Layout
+	Apply LUT	Apply LUT
 	Attack (ms)	Attack (ms)
 	Audio	Audio
 	Audio bitrate	Audio bitrate
@@ -73,6 +75,7 @@
 	Color	Color
 	Color correction	Color correction
 	Color key	Color key
+	Color lookup tables	Color lookup tables
 	Community	Community
 	Compact (small files)	Compact (small files)
 	Compressor	Compressor
@@ -187,6 +190,7 @@
 	Limit height	Limit height
 	Limit width	Limit width
 	Limiter	Limiter
+	LUT file	LUT file
 	Linear	Linear
 	List Stream Destinations	List Stream Destinations
 	LIVE	LIVE

@@ -19,6 +19,7 @@ description in [docs/features.md](docs/features.md).
 ### Filters
 
 - Color correction with white balance, chroma key, color key, crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a three-band equalizer are built in ([Filters](docs/features.md#filters)).
+- The Apply LUT filter changes a source's colors through a `.cube` or `.png` color lookup table, with an Amount ([Filters](docs/features.md#filters)).
 
 ### Transitions
 

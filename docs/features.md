@@ -169,11 +169,12 @@ reads and reopens a camera.
 ## Filters
 
 Each source can carry a list of filters. The video filters are color correction, chroma key,
-color key, crop and pad, image mask, scroll and sharpen. The audio filters are gain, noise gate,
-compressor, limiter and a three-band equalizer.
+color key, crop and pad, image mask, scroll, sharpen and Apply LUT. The audio filters are gain,
+noise gate, compressor, limiter and a three-band equalizer.
 
 | Filter | What it does |
 | --- | --- |
+| Apply LUT | Changes a source's colors through a color lookup table, blended with the original colors by Amount (0 to 100%). The table comes from a `.cube` file (a 3D table of 2 to 90 colors a side, or a 1D table of up to 65536 entries, with its input range) or a `.png` picture (a row of n tiles of n x n pixels, or a square grid of tiles such as 512 x 512 pixels for 64 colors a side). Colors between the table's entries are blended from the nearest eight, and transparency is kept. The file is read when the filter starts or its file changes. |
 | Color correction | Sets gamma, contrast, brightness, saturation and opacity, and the white balance by temperature and tint. |
 | Chroma key | Makes the pixels near a key color transparent by their chroma distance from it, with key color spill reduction. |
 | Color key | Makes the pixels near a key color transparent by their RGB distance from it, with Similarity and Smoothness, and adjusts the rest by gamma, contrast, brightness and opacity. |
