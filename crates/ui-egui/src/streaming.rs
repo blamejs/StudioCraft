@@ -994,8 +994,8 @@ fn encoder_params(cmd: &craft_keymap::CommandRef) -> Result<(Option<String>, Opt
 }
 
 /// An error for an `encoder` a destination cannot run: one that is not a built-in H.264 encoder a
-/// stream can run, or `hardware` while the stream's encoder, `stream`, is another. Empty, for the
-/// stream's encoder, and `None` are fine.
+/// stream can run, one the list shows as unable to start, or `hardware` while the stream's encoder,
+/// `stream`, is another. Empty, for the stream's encoder, and `None` are fine.
 fn check_destination_encoder(
     cmd: &craft_keymap::CommandRef,
     registry: &studiocraft_plugin::Registry,
@@ -1013,7 +1013,7 @@ fn check_destination_encoder(
             key = "video_encoder"
         ));
     }
-    if destination_encoder_list(registry, &[]).iter().any(|(id, _, _)| id == encoder) {
+    if destination_encoder_list(registry, &[]).iter().any(|(id, _, available)| id == encoder && *available) {
         return Ok(());
     }
     Err(tmsg!(

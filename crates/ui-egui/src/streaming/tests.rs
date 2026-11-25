@@ -186,6 +186,43 @@ fn a_destination_names_only_an_encoder_a_destination_can_run() {
 }
 
 #[test]
+fn a_destination_cannot_name_an_encoder_the_list_shows_as_unable_to_start() {
+    struct Missing;
+    impl studiocraft_plugin::Plugin for Missing {
+        fn id(&self) -> &'static str {
+            "missing"
+        }
+        fn name(&self) -> &'static str {
+            "Missing"
+        }
+        fn schema(&self) -> studiocraft_plugin::SettingsSchema {
+            studiocraft_plugin::SettingsSchema::default()
+        }
+    }
+    impl studiocraft_plugin::Encoder for Missing {
+        fn codec(&self) -> studiocraft_plugin::Codec {
+            studiocraft_plugin::Codec::H264
+        }
+        fn availability(&self, _: &studiocraft_plugin::EncoderEnv) -> studiocraft_plugin::Availability {
+            studiocraft_plugin::Availability::NotInFfmpeg
+        }
+    }
+    let a = app();
+    let mut registry = studiocraft_plugin::Registry::new();
+    for e in a.studio().registry().encoders() {
+        registry.register_encoder(e.clone()).unwrap();
+    }
+    registry.register_encoder(std::sync::Arc::new(Missing)).unwrap();
+    let cmd = CommandRef::new("stream.destination_set");
+    assert!(destination_encoder_list(&registry, &[]).iter().any(|(id, _, ok)| id == "missing" && !*ok));
+    let Err(e) = check_destination_encoder(&cmd, &registry, Some("missing"), "h264") else {
+        panic!("an encoder that cannot start was taken");
+    };
+    assert!(e.english().contains("is not a video encoder a destination can run: `missing`"), "{}", e.english());
+    assert!(check_destination_encoder(&cmd, &registry, Some("h264"), "h264").is_ok());
+}
+
+#[test]
 fn a_destination_gets_its_own_encoder_and_the_list_says_which_share_one() {
     let mut a = app();
     let ctx = egui::Context::default();

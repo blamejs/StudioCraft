@@ -778,12 +778,17 @@ impl Dest {
 
     /// The thread gives up because the encoder `ended.0` it ran for itself ended, with `ended.1`,
     /// unless it was started again since or given another encoder: then it goes on, and says so
-    /// with `false`.
-    fn fail_ended(&self, ended: (Arc<EncoderFeed>, Failure)) -> bool {
+    /// with `false`. Asked to stop since, or with the stream of `hub` stopping, it ends as stopped.
+    fn fail_ended(&self, hub: &Hub, ended: (Arc<EncoderFeed>, Failure)) -> bool {
         let _slot = lock(&self.thread);
         let (feed, failure) = ended;
         if self.restarted.load(Ordering::SeqCst) || !Arc::ptr_eq(&lock(&self.feed), &feed) {
             return false;
+        }
+        if self.stopping() || hub.ending.load(Ordering::SeqCst) || hub.control.is_ended() {
+            self.set(DestinationStatus::Stopped);
+            self.alive.store(false, Ordering::SeqCst);
+            return true;
         }
         self.set(DestinationStatus::Failed(failure));
         self.alive.store(false, Ordering::SeqCst);
@@ -1590,7 +1595,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                     // The connection is not at fault, so it is not checked. Started again with
                     // another encoder meanwhile, it goes on with that one.
                     NetWait::EncoderEnded(ended) => {
-                        if d.fail_ended(ended) {
+                        if d.fail_ended(hub, ended) {
                             return;
                         }
                     }
@@ -1604,7 +1609,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         // at fault, so it is not checked. Started again with another encoder since, it tries with
         // that one.
         if let Some(ended) = d.feed_ended(hub)
-            && d.fail_ended(ended)
+            && d.fail_ended(hub, ended)
         {
             return;
         }
@@ -1687,7 +1692,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             End::Done => {
                 if !d.stopping()
                     && let Some(ended) = d.feed_ended(hub)
-                    && d.fail_ended(ended)
+                    && d.fail_ended(hub, ended)
                 {
                     return;
                 }
@@ -2203,6 +2208,9 @@ impl Streaming {
             ));
         };
         if groups.len() >= MAX_SUBSCRIBERS {
+            self.drop_unused(&mut groups);
+        }
+        if groups.len() >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!("a stream can run at most {MAX_SUBSCRIBERS} encoders for its destinations")));
         }
         let start = split.newest().unwrap_or(job.start);
@@ -2228,6 +2236,24 @@ impl Streaming {
         };
         self.set_taps(groups);
         drop(ended);
+    }
+
+    /// Stops and drops the encoders of `groups`, held from `own`, that no destination holds: one a
+    /// destination left when it was started again with another encoder. A destination that is
+    /// stopped keeps its encoder, and so does one being started with it.
+    fn drop_unused(&self, groups: &mut Vec<(Arc<EncoderFeed>, Native)>) {
+        // Only `groups` holds the feed of such an encoder, and it is held locked, so no
+        // destination can take that feed meanwhile.
+        let unused: Vec<(Arc<EncoderFeed>, Native)> = {
+            let (unused, used) = std::mem::take(groups).into_iter().partition(|(f, _)| Arc::strong_count(f) == 1);
+            *groups = used;
+            unused
+        };
+        if unused.is_empty() {
+            return;
+        }
+        self.set_taps(groups);
+        drop(unused);
     }
 
     /// Makes the caption feeds of `groups`, the running encoders of `own`, the ones the stream's

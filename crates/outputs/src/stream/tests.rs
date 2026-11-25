@@ -1835,6 +1835,24 @@ fn try_now_ends_the_wait_before_a_try_again() {
 }
 
 #[test]
+fn an_encoder_end_after_a_stop_shows_the_destination_stopped() {
+    let (a, _seen) = server(vec![Plan::Accept]);
+    let mut out = Streaming::start_timed(&job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 }), vec![target("a", &a, "k")], quick()).unwrap();
+    let d = Dest::new(named("b"), Arc::default(), None, Arc::clone(&out.hub.main));
+    let ended = || (Arc::clone(&out.hub.main), Failure::new(Cause::Other, "its video encoder stopped"));
+    // Asked to stop while its thread read the encoder's end: the stop wins.
+    d.stop.store(true, Ordering::SeqCst);
+    assert!(d.fail_ended(&out.hub, ended()));
+    assert_eq!(d.status(), DestinationStatus::Stopped);
+    assert!(!d.running());
+    // Neither stopped nor started again: the encoder's end is its failure.
+    d.stop.store(false, Ordering::SeqCst);
+    assert!(d.fail_ended(&out.hub, ended()));
+    assert!(matches!(d.status(), DestinationStatus::Failed(f) if f.detail.contains("video encoder")), "{:?}", d.status());
+    let _ = out.stop();
+}
+
+#[test]
 fn the_next_try_and_try_now_are_one_atomic_word() {
     // A running stream gives the destination its encoder.
     let (a, _seen) = server(vec![Plan::Accept]);
@@ -2879,6 +2897,30 @@ fn destinations_run_their_own_encoders_beside_the_streams() {
     for id in ["a", "b", "c"] {
         assert_eq!(until(&out, id, |_| true).status, DestinationStatus::Stopped, "{id}");
     }
+}
+
+#[test]
+fn an_encoder_no_destination_holds_gives_up_its_place() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![with_own("b", &closed_url(), "kb", own(1200, "quality"))], quick()).unwrap();
+    let held = feed_for_test(&out, &own(800, "quality"));
+    // Started for a destination that has since taken another encoder: nothing holds it.
+    drop(feed_for_test(&out, &own(700, "quality")));
+    assert_eq!(lock(&out.own).len(), 3);
+    {
+        let mut groups = lock(&out.own);
+        out.drop_unused(&mut groups);
+    }
+    let left: Vec<Option<u32>> = lock(&out.own).iter().map(|(f, _)| f.own.as_ref().map(|o| o.kbps)).collect();
+    assert_eq!(left, vec![Some(1200), Some(800)], "b's encoder and the held one stay, in order");
+    drop(held);
+    // b has no server to reach, so the stream may have failed by now.
+    let _ = out.stop();
+}
+
+/// The encoder `own` names, started or shared as a destination starting with it gets it.
+fn feed_for_test(out: &Streaming, own: &OwnEncoder) -> Arc<EncoderFeed> {
+    out.feed_for(Some(own)).unwrap_or_else(|e| panic!("no encoder for {own:?}: {e}"))
 }
 
 #[test]
