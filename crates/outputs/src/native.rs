@@ -630,19 +630,23 @@ struct AudioTrack {
     out: Vec<Vec<u8>>,
 }
 
-impl AudioTrack {
-    /// Hand the packets the encoder made to the file thread as track `index`; `false` when the
-    /// recording cannot go on.
-    fn send(&mut self, index: usize, delay_ns: i64, shared: &Shared) -> bool {
-        // Every access unit holds 1024 samples; the first ones are the encoder's delay.
-        for data in self.out.drain(..) {
-            let at = samples_ns(self.units * 1024) - delay_ns;
-            self.units += 1;
-            if !shared.send(Item { track: Track::Audio, audio: index, order_ns: at, pts_ns: at, dts_ns: at, keyframe: true, data }) {
-                return false;
-            }
+/// Hand the packets the tracks' encoders made to the file thread, merged by time: the earliest
+/// packet of any track goes first, and packets of the same time go in track order. `false` when
+/// the recording cannot go on.
+fn send_audio(tracks: &mut [AudioTrack], delay_ns: i64, shared: &Shared) -> bool {
+    let mut made: Vec<VecDeque<Vec<u8>>> = tracks.iter_mut().map(|t| VecDeque::from(std::mem::take(&mut t.out))).collect();
+    loop {
+        // Every access unit holds 1024 samples, so the track that has handed over the fewest
+        // units has the earliest packet.
+        let next = tracks.iter().zip(&made).enumerate().filter(|(_, (_, m))| !m.is_empty()).min_by_key(|(i, (t, _))| (t.units, *i));
+        let Some((index, _)) = next else { return true };
+        let (Some(t), Some(data)) = (tracks.get_mut(index), made.get_mut(index).and_then(VecDeque::pop_front)) else { return true };
+        // The first units are the encoder's delay.
+        let at = samples_ns(t.units * 1024) - delay_ns;
+        t.units += 1;
+        if !shared.send(Item { track: Track::Audio, audio: index, order_ns: at, pts_ns: at, dts_ns: at, keyframe: true, data }) {
+            return false;
         }
-        true
     }
 }
 
@@ -654,9 +658,8 @@ fn encode_audio(sessions: Vec<AacSession>, queues: &[Arc<Fifo<PooledBlock>>], sh
     let mut written = 0i64;
     let mut tracks: Vec<AudioTrack> = sessions.into_iter().map(|session| AudioTrack { session, units: 0, out: Vec::new() }).collect();
     let mut gather = Gather::new(queues);
-    // Each track's packets go to the file thread after the track has taken the same block of
-    // time, so the packets of every track arrive in time order.
-    let send_all = |tracks: &mut [AudioTrack]| tracks.iter_mut().enumerate().all(|(i, t)| t.send(i, delay_ns, shared));
+    // Each track's packets go to the file thread after every track has taken the same block of
+    // time, merged by time, so the packets of all tracks arrive in time order.
     loop {
         if shared.halted() {
             return;
@@ -685,14 +688,14 @@ fn encode_audio(sessions: Vec<AacSession>, queues: &[Arc<Fifo<PooledBlock>>], sh
         }
         gather.done(at);
         written += gap + frames as i64;
-        if !send_all(&mut tracks) {
+        if !send_audio(&mut tracks, delay_ns, shared) {
             return;
         }
     }
     for t in &mut tracks {
         t.session.flush(&mut t.out);
     }
-    send_all(&mut tracks);
+    send_audio(&mut tracks, delay_ns, shared);
 }
 
 /// The next packet to write from `pending` (video, then audio): the one with the earlier

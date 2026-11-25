@@ -422,6 +422,21 @@ fn the_tracks_are_written_in_time_order() {
 }
 
 #[test]
+fn the_audio_tracks_packets_go_to_the_file_thread_merged_by_time() {
+    let shared = Shared::new(PacketQueue::new(1 << 20, QUEUE_SPAN_NS), Duration::ZERO);
+    let track = |packets: usize| AudioTrack { session: AacSession::new(128).unwrap(), units: 0, out: vec![vec![0u8; 4]; packets] };
+    // A gap filled with silence gives each track several packets in one turn; the second track
+    // also has one packet more, as a flush can give.
+    let mut tracks = vec![track(3), track(4)];
+    assert!(send_audio(&mut tracks, 0, &shared));
+    let sent: Vec<(usize, i64)> = std::iter::from_fn(|| shared.packets.pop()).map(|i| (i.audio, i.order_ns)).collect();
+    let at = |n: i64| samples_ns(n * 1024);
+    assert_eq!(sent, [(0, 0), (1, 0), (0, at(1)), (1, at(1)), (0, at(2)), (1, at(2)), (1, at(3))]);
+    assert!(tracks.iter().all(|t| t.out.is_empty()));
+    assert_eq!(tracks.iter().map(|t| t.units).collect::<Vec<_>>(), [3, 4]);
+}
+
+#[test]
 fn only_mkv_files_and_48_khz_are_taken() {
     let path = temp_file("formats");
     let mp4 = path.with_extension("mp4");
