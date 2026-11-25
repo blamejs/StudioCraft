@@ -32,6 +32,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L1 | `craft-transitions` | The Cut, Fade, Fade through color and Swipe transitions: each one's WGSL blend, the values its shader reads, its ease from `craft-ease`, the gains of the old and new audio, and the same blend on the CPU, with typed parameters that carry a version for apps that save them. It depends on no StudioCraft crate. |
+| L1 | `craft-avatar` | Avatars: the rigged model (humanoid bones, meshes with morph targets, expressions with their override rules, look-at maps and spring bones), the 52 face-tracking shapes and their mapping to expressions, neutral-pose calibration, the hold and fade when the face is lost, idle blinks, breathing and sway, and the spring step. The per-frame step does not allocate. It uses the eases of `craft-ease` and depends on no StudioCraft crate. |
 | L1 | `craft-packet` | Encoded packets shared by reference through a pool, fanned out to bounded per-subscriber rings with packet and byte caps. A full ring drops packets up to the next keyframe, its receiver skips stale packets to a keyframe, and each subscriber keeps its own counters. When the pool is full, the ring holding the most bytes is emptied, so a stalled destination loses only its own packets. It converts the `craft-video` H.264 encoder's packets and the `craft-hwenc-native` encoders' packets to its packet info. It depends on no StudioCraft crate. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
@@ -58,6 +59,7 @@ build for `wasm32-unknown-unknown`:
 - `craft-ease`
 - `craft-transitions`
 - `craft-closed-captions`
+- `craft-avatar`
 
 `cargo xtask wasm` also checks the browser editor, `studiocraft-web`, and with it
 `studiocraft-engine`. The editor uses only the engine's commands and undo history. The engine's
