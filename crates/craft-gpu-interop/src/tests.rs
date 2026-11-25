@@ -613,6 +613,23 @@ mod gpu {
         assert_eq!(crate::vulkan_ffi::import(&plain, &plain_queue, &ring).err(), Some(Fallback::MissingExtension));
     }
 
+    /// The export image is one non-disjoint NV12 image, so its ownership barriers name the color
+    /// aspect and cover both planes.
+    #[cfg(windows)]
+    #[test]
+    fn the_export_ownership_barriers_name_the_color_aspect_of_the_whole_image() {
+        use ash::vk;
+        let [acquire, hand_back] = crate::vulkan_ffi::export_barriers(vk::Image::null(), 3);
+        for barrier in [acquire, hand_back] {
+            assert_eq!(barrier.subresource_range.aspect_mask, vk::ImageAspectFlags::COLOR);
+            assert_eq!((barrier.subresource_range.level_count, barrier.subresource_range.layer_count), (1, 1));
+        }
+        assert_eq!((acquire.src_queue_family_index, acquire.dst_queue_family_index), (vk::QUEUE_FAMILY_EXTERNAL, 3));
+        assert_eq!((acquire.old_layout, acquire.new_layout), (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL));
+        assert_eq!((hand_back.src_queue_family_index, hand_back.dst_queue_family_index), (3, vk::QUEUE_FAMILY_EXTERNAL));
+        assert_eq!((hand_back.old_layout, hand_back.new_layout), (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::GENERAL));
+    }
+
     #[cfg(windows)]
     #[test]
     fn a_direct3d_12_device_is_not_opened_as_vulkan() {

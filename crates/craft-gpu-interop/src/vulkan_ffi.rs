@@ -232,6 +232,32 @@ fn range(aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange { aspect_mask: aspect, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 }
 }
 
+/// The barriers around the copies into the NV12 image `image`: the first takes it from the
+/// external queue family to `family`, its old contents discarded, and the second hands it back in
+/// `GENERAL`. The image is not disjoint, so the barriers name the color aspect, which covers both
+/// planes (VUID-VkImageMemoryBarrier-image-09242); only the copies name a plane.
+pub(crate) fn export_barriers(image: vk::Image, family: u32) -> [vk::ImageMemoryBarrier<'static>; 2] {
+    let acquire = vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+        .dst_queue_family_index(family)
+        .image(image)
+        .subresource_range(range(vk::ImageAspectFlags::COLOR));
+    let hand_back = vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::empty())
+        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .src_queue_family_index(family)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+        .image(image)
+        .subresource_range(range(vk::ImageAspectFlags::COLOR));
+    [acquire, hand_back]
+}
+
 /// A command buffer that holds only the raw commands `record` records into the Vulkan command
 /// buffer it is given. wgpu does not let an encoder that recorded raw commands record its own, so
 /// raw commands go in a command buffer of their own, submitted next to wgpu's.
@@ -435,25 +461,7 @@ impl Exported {
         // SAFETY: the guards are only used to read the image handles, which stay owned by wgpu.
         let raw = |t: &wgpu::Texture| unsafe { t.as_hal::<wgpu::hal::api::Vulkan>().map(|h| h.raw_handle()) };
         let (Some(luma_image), Some(chroma_image)) = (raw(luma), raw(chroma)) else { return Err(Fallback::UnsupportedBackend) };
-        let planes_aspect = vk::ImageAspectFlags::PLANE_0 | vk::ImageAspectFlags::PLANE_1;
-        let acquire = vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
-            .dst_queue_family_index(self.family)
-            .image(dst)
-            .subresource_range(range(planes_aspect));
-        let hand_back = vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::empty())
-            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(self.family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
-            .image(dst)
-            .subresource_range(range(planes_aspect));
+        let [acquire, hand_back] = export_barriers(dst, self.family);
         let layers = |aspect| vk::ImageSubresourceLayers { aspect_mask: aspect, mip_level: 0, base_array_layer: 0, layer_count: 1 };
         let region = |aspect, texture: &wgpu::Texture| vk::ImageCopy {
             src_subresource: layers(vk::ImageAspectFlags::COLOR),
