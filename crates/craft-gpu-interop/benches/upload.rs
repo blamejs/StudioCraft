@@ -10,6 +10,11 @@
 //! encoder: read back into a mapped buffer, as the compositor does without an export ring, and
 //! copied into an export ring's texture, which runs only where [`Exporter::open`] succeeds
 //! (Windows on Direct3D 12, or Vulkan with the shared-memory extension).
+//!
+//! On Linux the display sizes also run `DMA-BUF import`: a linear BGRX DMA-BUF made over ordinary
+//! memory through `/dev/udmabuf`, handed to the importer as a screen-cast buffer and drawn into the
+//! source texture, on a Vulkan device with the DMA-BUF extensions. It does not run, and says why,
+//! where the device cannot import a linear buffer or `/dev/udmabuf` cannot be opened.
 
 use craft_gpu_interop::{Exporter, Opaque};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -21,13 +26,18 @@ const BACKENDS: [(&str, wgpu::Backends); 2] = [(" dx12", wgpu::Backends::DX12), 
 const BACKENDS: [(&str, wgpu::Backends); 1] = [("", wgpu::Backends::PRIMARY)];
 
 fn device(backends: wgpu::Backends) -> Option<(wgpu::Device, wgpu::Queue)> {
+    device_with(backends, wgpu::Features::empty())
+}
+
+/// A device on `backends` with those of `features` its adapter has.
+fn device_with(backends: wgpu::Backends, features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = backends;
     let instance = wgpu::Instance::new(desc);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let info = adapter.get_info();
     eprintln!("adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
-    let desc = wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() };
+    let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & features, required_limits: adapter.limits(), ..Default::default() };
     pollster::block_on(adapter.request_device(&desc)).ok()
 }
 
@@ -49,6 +59,64 @@ fn bench(c: &mut Criterion) {
         match device(backends) {
             Some((device, queue)) => bench_on(c, &device, &queue, suffix),
             None => eprintln!("no graphics adapter on {backends:?}: nothing to measure there"),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    bench_dmabuf(c);
+}
+
+/// A linear BGRX DMA-BUF of each display size into a source texture, as a Linux display capture's
+/// buffers are drawn.
+#[cfg(target_os = "linux")]
+fn bench_dmabuf(c: &mut Criterion) {
+    use craft_gpu_interop::{DmabufFormat, DmabufLayout, DmabufStream, Drawn, Importer, MOD_LINEAR};
+    use std::os::fd::AsRawFd;
+    let Some((device, queue)) = device_with(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else {
+        return eprintln!("no Vulkan adapter: no DMA-BUF import to measure");
+    };
+    craft_gpu_interop::publish_import_caps(&device);
+    let Some(caps) = craft_gpu_interop::dmabuf_caps().filter(|caps| caps.supports(DmabufFormat::Bgrx, MOD_LINEAR)) else {
+        return eprintln!("the Vulkan device cannot import a linear BGRX DMA-BUF: no DMA-BUF import to measure");
+    };
+    for (size, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
+        let stride = w * 4;
+        // A whole number of 4 KiB pages.
+        let len = (u64::from(stride) * u64::from(h)).div_ceil(4096) * 4096;
+        let buffer = match craft_gpu_interop::dmabuf_in_memory(len) {
+            Ok(fd) => fd,
+            Err(e) => return eprintln!("no DMA-BUF in memory for {size} ({e}): no DMA-BUF import to measure"),
+        };
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((w, h, DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, caps.device)));
+        let dst =
+            texture(&device, w, h, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let target = dst.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut importer = Importer::new();
+        let mut draw = || {
+            let frame = stream.frame(buffer.as_raw_fd(), 0, stride)?.ok_or(craft_gpu_interop::Fallback::ImportFailed)?;
+            importer.offer(frame);
+            let drawn = importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| Some(target.clone()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            drawn
+        };
+        // A case whose buffer the device does not draw is not measured.
+        match draw() {
+            Ok(Drawn::Frame { .. }) => {}
+            other => {
+                eprintln!("the {size} DMA-BUF is not drawn ({other:?}): no DMA-BUF import to measure for it");
+                continue;
+            }
+        }
+        let mut missed = 0u64;
+        c.bench_function(&format!("DMA-BUF import {size}"), |b| {
+            b.iter(|| {
+                if !matches!(std::hint::black_box(draw()), Ok(Drawn::Frame { .. })) {
+                    missed += 1;
+                }
+            })
+        });
+        if missed > 0 {
+            eprintln!("the {size} DMA-BUF was not drawn {missed} times: its timings include those runs");
         }
     }
 }

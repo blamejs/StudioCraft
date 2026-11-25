@@ -2,8 +2,11 @@
 //! handing the newest frame from the stream thread to the source thread. Camera capture hands its
 //! frames over the same way on every system.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::io::{PipeWriter, Write};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use craft_gpu_interop::SharedFrame;
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::video::{PixelFormat, VideoFrame};
 
@@ -87,11 +90,20 @@ impl State {
 
 /// Hands the newest picture from the stream thread to the source thread without locks. The stream
 /// thread fills a spare frame and publishes it; a picture the source thread has not taken yet is
-/// replaced by the newer one and goes back to the spares.
+/// replaced by the newer one and goes back to the spares. A stream whose buffers stay on the GPU
+/// publishes shared frames the same way, the newest replacing one not taken yet.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct FrameSlot {
     newest: ArrayQueue<VideoFrame>,
     spare: ArrayQueue<VideoFrame>,
     state: AtomicU8,
+    shared: ArrayQueue<SharedFrame>,
+    /// Whether the source asked for pictures on the GPU, read when the stream negotiates.
+    share: AtomicBool,
+    /// Whether the stream's buffers are on the GPU now.
+    on_gpu: AtomicBool,
+    /// The pipe that wakes the stream thread's loop to leave the GPU ([`FrameSlot::wake_stream`]).
+    wake: OnceLock<PipeWriter>,
 }
 
 /// Frames a capture keeps for reuse besides the newest one and the one on screen.
@@ -99,7 +111,15 @@ pub const SPARE_FRAMES: usize = 2;
 
 impl Default for FrameSlot {
     fn default() -> Self {
-        FrameSlot { newest: ArrayQueue::new(1), spare: ArrayQueue::new(SPARE_FRAMES), state: AtomicU8::new(0) }
+        FrameSlot {
+            newest: ArrayQueue::new(1),
+            spare: ArrayQueue::new(SPARE_FRAMES),
+            state: AtomicU8::new(0),
+            shared: ArrayQueue::new(1),
+            share: AtomicBool::new(false),
+            on_gpu: AtomicBool::new(false),
+            wake: OnceLock::new(),
+        }
     }
 }
 
@@ -152,6 +172,57 @@ impl FrameSlot {
         std::mem::swap(frame, &mut newest);
         let _ = self.spare.push(newest);
         true
+    }
+}
+
+/// The pictures on the GPU, which only a Linux screen capture publishes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl FrameSlot {
+    /// Ask for the stream's pictures on the GPU, when the stream has not negotiated yet.
+    pub fn request_gpu(&self) {
+        self.share.store(true, Ordering::Release);
+    }
+
+    pub fn gpu_requested(&self) -> bool {
+        self.share.load(Ordering::Acquire)
+    }
+
+    /// Record whether the stream's buffers are on the GPU. Turning it off drops a shared frame not
+    /// taken yet.
+    pub fn set_on_gpu(&self, on: bool) {
+        self.on_gpu.store(on, Ordering::Release);
+        if !on {
+            let _ = self.shared.pop();
+        }
+    }
+
+    pub fn on_gpu(&self) -> bool {
+        self.on_gpu.load(Ordering::Acquire)
+    }
+
+    /// Publish a picture on the GPU, replacing one not taken yet.
+    pub fn publish_shared(&self, frame: SharedFrame) {
+        let _ = self.shared.force_push(frame);
+        self.set_state(State::Streaming);
+    }
+
+    /// The newest picture on the GPU since the last call.
+    pub fn take_shared(&self) -> Option<SharedFrame> {
+        self.shared.pop()
+    }
+
+    /// Give the stream thread the pipe through which [`FrameSlot::wake_stream`] reaches it. Only
+    /// the first call keeps its pipe.
+    pub fn set_wake(&self, wake: PipeWriter) {
+        let _ = self.wake.set(wake);
+    }
+
+    /// Ask the stream thread to leave the GPU without waiting for its next picture, which a still
+    /// screen does not send. It writes one byte, which the stream thread reads when it wakes.
+    pub fn wake_stream(&self) {
+        if let Some(mut wake) = self.wake.get() {
+            let _ = wake.write(&[1]);
+        }
     }
 }
 
@@ -274,6 +345,27 @@ mod tests {
             slot.set_state(State::Waiting);
             assert_eq!(slot.state(), end);
         }
+    }
+
+    #[test]
+    fn the_newest_gpu_picture_replaces_one_not_taken_and_leaving_the_gpu_drops_it() {
+        let slot = FrameSlot::default();
+        assert!(!slot.gpu_requested() && !slot.on_gpu());
+        slot.request_gpu();
+        assert!(slot.gpu_requested());
+        let ring = craft_gpu_interop::SharedRing::detached(4, 2);
+        let shared = |ready| SharedFrame::new(std::sync::Arc::clone(&ring), 0, ready).unwrap();
+        assert!(slot.take_shared().is_none());
+        slot.set_on_gpu(true);
+        slot.publish_shared(shared(1));
+        slot.publish_shared(shared(2));
+        assert_eq!(slot.state(), State::Streaming);
+        assert_eq!(slot.take_shared().map(|f| f.ready()), Some(2));
+        assert!(slot.take_shared().is_none(), "each picture is taken once");
+        slot.publish_shared(shared(3));
+        slot.set_on_gpu(false);
+        assert!(!slot.on_gpu());
+        assert!(slot.take_shared().is_none(), "a picture of a stream that left the GPU is not shown");
     }
 
     #[test]

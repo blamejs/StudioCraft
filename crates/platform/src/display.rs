@@ -83,10 +83,17 @@ impl DisplayCapture {
         Ok(DisplayCapture { inner: imp::Capture::open(id, false)?, gpu: None })
     }
 
-    /// Capture into textures shared with the compositor where the system allows it (Windows, with
-    /// desktop duplication and shared fences). Returns whether the GPU capture runs; elsewhere it
-    /// does not, and [`DisplayCapture::grab_shared`] returns [`SharedGrab::Memory`].
+    /// Capture into textures shared with the compositor where the system allows it: on Windows
+    /// with desktop duplication and shared fences, and on Linux with DMA-BUF buffers from the
+    /// screen-cast stream once the compositor has published what its Vulkan device imports.
+    /// Returns whether the GPU capture was started; elsewhere it is not, and
+    /// [`DisplayCapture::grab_shared`] returns [`SharedGrab::Memory`]. On Linux the stream decides
+    /// when it negotiates, and [`DisplayCapture::grab_shared`] returns [`SharedGrab::Memory`]
+    /// while its buffers are in memory.
     pub fn share_on_gpu(&mut self) -> bool {
+        if let Some(on) = self.inner.share_on_gpu() {
+            return on;
+        }
         if self.gpu.is_none() {
             self.gpu = self.inner.device_name().and_then(|name| Duplication::open(&name).ok());
         }
@@ -97,6 +104,9 @@ impl DisplayCapture {
     /// that it cannot take the shared textures, or the GPU capture fails, this returns
     /// [`SharedGrab::Memory`] from then on.
     pub fn grab_shared(&mut self) -> SharedGrab {
+        if let Some(grab) = self.inner.grab_shared() {
+            return grab;
+        }
         let Some(gpu) = &mut self.gpu else { return SharedGrab::Memory };
         match step(gpu.grab()) {
             Step::Give(g) => g,
@@ -205,6 +215,15 @@ mod imp {
         pub fn device_name(&self) -> Option<String> {
             None
         }
+
+        /// The capture's own GPU path; this one has none, and desktop duplication takes over.
+        pub fn share_on_gpu(&mut self) -> Option<bool> {
+            None
+        }
+
+        pub fn grab_shared(&mut self) -> Option<super::SharedGrab> {
+            None
+        }
     }
 }
 
@@ -236,6 +255,15 @@ mod imp {
         pub fn device_name(&self) -> Option<String> {
             None
         }
+
+        /// The stream's DMA-BUF buffers, imported by the compositor.
+        pub fn share_on_gpu(&mut self) -> Option<bool> {
+            Some(self.0.share_on_gpu())
+        }
+
+        pub fn grab_shared(&mut self) -> Option<super::SharedGrab> {
+            Some(self.0.grab_shared())
+        }
     }
 }
 
@@ -262,6 +290,14 @@ mod imp {
         }
 
         pub fn device_name(&self) -> Option<String> {
+            None
+        }
+
+        pub fn share_on_gpu(&mut self) -> Option<bool> {
+            None
+        }
+
+        pub fn grab_shared(&mut self) -> Option<super::SharedGrab> {
             None
         }
     }

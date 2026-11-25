@@ -19,7 +19,9 @@ pub enum Fallback {
     /// The display is rotated; desktop duplication gives its picture unrotated.
     Rotated,
     /// The compositor's Vulkan device was opened without `VK_KHR_external_memory_win32`, which
-    /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2).
+    /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2). On Linux: it was
+    /// opened without `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`
+    /// (wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`).
     MissingExtension,
     /// The hardware encoder cannot open a session on the compositor's graphics adapter, so the
     /// program frames it encodes go through CPU memory.
@@ -27,10 +29,13 @@ pub enum Fallback {
     /// The system does not let this window be captured into textures (a window the capture API
     /// does not accept, or a capture the system or the person refused).
     Refused,
+    /// The compositor's device cannot read the captured buffers' pixel format with their memory
+    /// layout (their DRM format modifier), or a buffer's layout does not match the stream's.
+    Modifier,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 9] = [
+    pub(crate) const ALL: [Fallback; 10] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -40,6 +45,7 @@ impl Fallback {
         Fallback::MissingExtension,
         Fallback::NoEncoder,
         Fallback::Refused,
+        Fallback::Modifier,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -53,6 +59,7 @@ impl Fallback {
             Fallback::MissingExtension => 7,
             Fallback::NoEncoder => 8,
             Fallback::Refused => 9,
+            Fallback::Modifier => 10,
         }
     }
 
@@ -70,9 +77,10 @@ impl std::fmt::Display for Fallback {
             Fallback::Unsupported => "this system cannot share captured textures between devices",
             Fallback::Format => "the desktop is not in 8-bit color",
             Fallback::Rotated => "the display is rotated",
-            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures",
+            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared textures",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
+            Fallback::Modifier => "the compositor's device cannot read the captured picture's memory layout",
         })
     }
 }

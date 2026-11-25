@@ -178,13 +178,16 @@ pub enum Drawn {
     Frame { width: u32, height: u32 },
 }
 
-/// A ring opened on the compositor's device. Only Windows opens one.
-#[cfg_attr(not(windows), allow(dead_code))]
+/// A ring opened on the compositor's device. Windows opens a ring of shared textures, and Linux a
+/// ring of DMA-BUFs, whose buffers are imported as they first arrive.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 struct Opened {
     ring: u64,
-    binds: Vec<wgpu::BindGroup>,
+    binds: Vec<Option<wgpu::BindGroup>>,
     #[cfg(windows)]
     raw: Raw,
+    #[cfg(target_os = "linux")]
+    raw: crate::dmabuf_ffi::Imported,
 }
 
 /// A ring's textures and fences on a Direct3D 12 or a Vulkan device.
@@ -266,8 +269,8 @@ impl Importer {
                 }
             }
         }
-        let Some(opened) = &self.opened else { return Ok(Drawn::Idle) };
-        let done = completed(opened);
+        let Some(opened) = &mut self.opened else { return Ok(Drawn::Idle) };
+        let done = completed(opened, &self.handoff);
         // A frame whose texture the capture side took back is dropped, and the next one is tried.
         let frame = loop {
             match self.handoff.take_ready(done) {
@@ -277,14 +280,23 @@ impl Importer {
                 None => return Ok(Drawn::Idle),
             }
         };
-        let Some(bind) = opened.binds.get(frame.slot()) else {
+        let Some(opaque) = &mut self.opaque else { return Ok(Drawn::Idle) };
+        if let Err(reason) = prepare(opened, device, &ring, opaque, frame.slot()) {
+            ring.refuse(reason);
+            self.opened = None;
+            return Err(reason);
+        }
+        let Some(Some(bind)) = opened.binds.get(frame.slot()) else {
             ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
-        let Some(opaque) = &mut self.opaque else { return Ok(Drawn::Idle) };
         let Some(target) = target(frame.width(), frame.height()) else {
             // The texture goes back to the capture side unread.
             release(opened, frame.ready())?;
+            // Its DMA-BUF, and those of the frames before it, go back once the draws already
+            // submitted have finished.
+            #[cfg(target_os = "linux")]
+            release_dmabuf_after_submitted(queue, &frame);
             return Ok(Drawn::Idle);
         };
         // wgpu does not let one encoder take both its own commands and raw ones, so the barriers
@@ -298,6 +310,9 @@ impl Importer {
         }
         let after = hand_back(opened, device, frame.slot());
         queue.submit(before.into_iter().chain([encoder.finish()]).chain(after));
+        // A DMA-BUF goes back to its producer once the GPU has finished the draw that reads it.
+        #[cfg(target_os = "linux")]
+        release_dmabuf_after_submitted(queue, &frame);
         if let Err(reason) = release(opened, frame.ready()) {
             ring.refuse(reason);
             self.opened = None;
@@ -318,13 +333,54 @@ fn open(device: &wgpu::Device, queue: &wgpu::Queue, ring: &crate::ring::SharedRi
         Raw::Dx12(r) => &r.textures,
         Raw::Vulkan(r) => &r.textures,
     };
-    let binds = textures.iter().map(|t| opaque.bind(device, &t.create_view(&wgpu::TextureViewDescriptor::default()))).collect();
+    let binds = textures.iter().map(|t| Some(opaque.bind(device, &t.create_view(&wgpu::TextureViewDescriptor::default())))).collect();
     Ok(Opened { ring: ring.id(), binds, raw })
 }
 
-#[cfg(not(windows))]
+/// Open a ring of DMA-BUFs on `device`, which must run on Vulkan. Its buffers are imported by
+/// [`prepare`] as their first frames are drawn. A ring of another kind cannot be opened here.
+#[cfg(target_os = "linux")]
+fn open(device: &wgpu::Device, _queue: &wgpu::Queue, ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
+    if ring.dmabuf_layout().is_none() {
+        return Err(Fallback::Unsupported);
+    }
+    let raw = crate::dmabuf_ffi::open(device, ring)?;
+    Ok(Opened { ring: ring.id(), binds: vec![None; ring.slots()], raw })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn open(_device: &wgpu::Device, _queue: &wgpu::Queue, _ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
     Err(Fallback::Unsupported)
+}
+
+/// Record `frame` of a DMA-BUF ring as read once all the work submitted to `queue` so far has
+/// finished on the GPU. The queue finishes its work in order, so every earlier frame has been read
+/// by then too. The frame is marked as drawn first, so its buffer waits for that point.
+#[cfg(target_os = "linux")]
+pub(crate) fn release_dmabuf_after_submitted(queue: &wgpu::Queue, frame: &crate::ring::SharedFrame) {
+    if frame.ring().dmabuf_layout().is_some() {
+        frame.mark_drawn();
+        let (ring, ready) = (std::sync::Arc::clone(frame.ring()), frame.ready());
+        queue.on_submitted_work_done(move || ring.release_dmabuf(ready));
+    }
+}
+
+/// Make texture `slot` of `ring` ready to draw: on Linux, import its buffer the first time.
+#[cfg(target_os = "linux")]
+fn prepare(opened: &mut Opened, device: &wgpu::Device, ring: &crate::ring::SharedRing, opaque: &Opaque, slot: usize) -> Result<(), Fallback> {
+    if opened.binds.get(slot).is_some_and(Option::is_some) {
+        return Ok(());
+    }
+    let texture = opened.raw.import(device, ring, slot)?;
+    let bind = opaque.bind(device, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
+    let entry = opened.binds.get_mut(slot).ok_or(Fallback::ImportFailed)?;
+    *entry = Some(bind);
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prepare(_opened: &mut Opened, _device: &wgpu::Device, _ring: &crate::ring::SharedRing, _opaque: &Opaque, _slot: usize) -> Result<(), Fallback> {
+    Ok(())
 }
 
 /// The commands, submitted before the draw that reads texture `slot`, that pass the texture to the
@@ -337,7 +393,12 @@ fn acquire(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu::
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn acquire(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+    opened.raw.acquire(device, slot)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn acquire(_opened: &Opened, _device: &wgpu::Device, _slot: usize) -> Option<wgpu::CommandBuffer> {
     None
 }
@@ -352,21 +413,34 @@ fn hand_back(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn hand_back(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+    opened.raw.hand_back(device, slot)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn hand_back(_opened: &Opened, _device: &wgpu::Device, _slot: usize) -> Option<wgpu::CommandBuffer> {
     None
 }
 
+/// The ready value up to which the waiting frames' ring has finished writing, without waiting.
 #[cfg(windows)]
-fn completed(opened: &Opened) -> u64 {
+fn completed(opened: &Opened, _handoff: &Handoff) -> u64 {
     match &opened.raw {
         Raw::Dx12(r) => r.completed(),
         Raw::Vulkan(r) => r.completed(),
     }
 }
 
-#[cfg(not(windows))]
-fn completed(_opened: &Opened) -> u64 {
+/// On Linux: the newest waiting frame's own value once its buffer has no pending write, else the
+/// older frame's once its buffer has none, else 0.
+#[cfg(target_os = "linux")]
+fn completed(_opened: &Opened, handoff: &Handoff) -> u64 {
+    crate::dmabuf::completed_in(handoff)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn completed(_opened: &Opened, _handoff: &Handoff) -> u64 {
     0
 }
 
