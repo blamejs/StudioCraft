@@ -159,7 +159,9 @@ The camera source behaves as follows:
 | Format is Default | The camera opens at its largest picture up to 1920 × 1080 at 30 fps or more. |
 | A camera is plugged in or out while the Properties window is open | The lists update within about 3 seconds. |
 | A saved camera is not plugged in | The camera shows as "(not connected)". |
-| The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. |
+| The source's camera is unplugged on Windows or Linux | The source clears its picture at once, and the Properties window reports "the camera is not connected". The source does not try to open the camera while the system does not list it. |
+| The source's camera is plugged in on Windows or Linux | The source opens it at once. A camera unplugged and plugged in again so quickly that the system's list does not change is opened again as soon as its old stream fails. |
+| The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. On Windows and Linux, a camera the system does not list is opened when it is plugged in instead. On Linux a camera that another program holds stays listed, and the source opens it again every 2 seconds. |
 | Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
@@ -169,11 +171,12 @@ reads and reopens a camera.
 ## Filters
 
 Each source can carry a list of filters. The video filters are color correction, chroma key,
-color key, crop and pad, image mask, scroll and sharpen. The audio filters are gain, noise gate,
-compressor, limiter and a three-band equalizer.
+color key, crop and pad, image mask, scroll, sharpen and Apply LUT. The audio filters are gain,
+noise gate, compressor, limiter and a three-band equalizer.
 
 | Filter | What it does |
 | --- | --- |
+| Apply LUT | Changes a source's colors through a color lookup table, blended with the original colors by Amount (0 to 100%). The table comes from a `.cube` file (a 3D table of 2 to 90 colors a side, or a 1D table of up to 65536 entries, with its input range) or a `.png` picture (a row of n tiles of n x n pixels, or a square grid of tiles such as 512 x 512 pixels for 64 colors a side). Colors between the table's entries are blended from the nearest eight, and transparency is kept. A 1D table is read at up to 64 evenly spaced points per channel, blended from its two nearest entries, so detail in a longer table that falls between those points is not kept. Table values below 0 or above 1 are blended as they are, and only the result is clipped to 0 to 1. The file is read when the filter starts or its file changes; a file that could not be read is tried again at the next change to the scene collection. |
 | Color correction | Sets gamma, contrast, brightness, saturation and opacity, and the white balance by temperature and tint. |
 | Chroma key | Makes the pixels near a key color transparent by their chroma distance from it, with key color spill reduction. |
 | Color key | Makes the pixels near a key color transparent by their RGB distance from it, with Similarity and Smoothness, and adjusts the rest by gamma, contrast, brightness and opacity. |
@@ -386,6 +389,18 @@ seconds, 20 by default) and the memory limit (32 to 16384 MB, 512 by default). S
 Replay Buffer and Save Replay can be given shortcuts in Settings › Hotkeys. While the buffer runs,
 the status bar shows REPLAY with the time it has run.
 
+### Virtual camera
+
+File › Virtual Camera sends the program at the output size and frame rate to a virtual camera
+device, which video call and other camera apps then list as a camera. It runs no encoder and sends
+no audio. On Linux the device is a v4l2loopback output device: load the module first, for example
+with `sudo modprobe v4l2loopback exclusive_caps=1`, and the first such device is used. Frames go
+out as YUYV when the device takes it, otherwise as NV12 or I420. When the device is busy, older
+frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
+runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
+a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
+and stop it.
+
 ### Audio tracks
 
 Settings › Output › Audio tracks writes each audio source and the program mix to their own 32-bit
@@ -477,6 +492,18 @@ A phrase goes out within about a second of being finished, at most 32 characters
 captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
 left out. Recordings do not carry closed captions; they get the caption files.
 
+### Face tracking model
+
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant
@@ -555,7 +582,11 @@ tried (at most four) with its own outcome. A lookup with no answer within 10 s s
 did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
-Stop send to one destination or stop sending to it while the others go on. A destination added
+Stop send to one destination or stop sending to it while the others go on. A destination that
+waits to try again shows its try number out of the tries it has, such as "try 3 of 10", and when
+the next try starts, as a countdown in seconds, or "when a network route to the server returns" for
+a server given as an IP address that has no route. Try Now starts that try at once, without a route
+too; unlike Stop and Start, the try counts toward the tries. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
 Check Connection, under each destination of the Streaming window, checks what this computer's
@@ -832,6 +863,42 @@ A profile is a set of stream and output settings, and a scene collection is a se
 can keep several of each and switch between them from the menu bar. Scene Collection › Import…
 and Export… read and write a scene collection as a file.
 
+### Scene collections in the browser
+
+The browser editor in `apps/studiocraft-web` edits a scene collection file without the app. Open…
+reads a file of any version the app imports, up to 16 MiB (16,777,216 bytes), and refuses a
+larger file before reading it. The page stays usable while the file is read. Picking another file or New before the
+read ends drops the first file.
+
+The Scenes list adds, renames, reorders and removes scenes, and a click on a scene lists its
+sources, the top of the picture first. The Sources list reorders a scene's sources, renames a
+source in every scene that shows it, and removes a source from the scene. Add to Scene places a
+source that another scene shows. A removed scene or source takes with it the sources that no
+other scene shows, as in the app. New sources are added in the app. Each edit runs the app's
+command, with the same names and limits, and Undo and Redo step through the edits. In the browser
+each change is its own undo step.
+
+Save downloads the collection as `<name>.json` in the current format, which Scene Collection ›
+Import… reads. Characters that file systems refuse become `_` in the file name, and a name that
+Windows reserves for a device, such as `CON` or `COM1`, gets a leading `_`. New, opening a
+file and leaving the page ask first when the collection has unsaved changes.
+
+The page shows its labels and messages in the browser's preferred language when the app has a
+translation for it, from the app's own catalogs, and in English otherwise.
+
+To build and serve the editor, add the target and `trunk` once, then run `trunk serve` in
+`apps/studiocraft-web`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+cd apps/studiocraft-web
+trunk serve
+```
+
+The editor opens on http://127.0.0.1:8770. `trunk build --release` writes the page to
+`target/web`.
+
 ### Stats and scopes
 
 View › Stats shows the frame count, late frames, frame times, encoded and skipped frames, the
@@ -890,7 +957,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer or the virtual camera. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

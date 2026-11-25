@@ -333,6 +333,7 @@
 	the audio stream failed	ett fel uppstod i ljudströmmen
 	the camera capture could not start	kamerainspelningen kunde inte starta
 	the camera is already open in another format	kameran är redan öppen i ett annat format
+	the camera is not connected	kameran är inte ansluten
 	the camera is still closing	kameran håller fortfarande på att stängas
 	the camera offers no format StudioCraft reads	kameran erbjuder inget format som StudioCraft kan läsa
 	the camera sends frames that cannot be read	kameran skickar bilder som inte kan läsas
@@ -370,7 +371,7 @@
 	Video	Video
 	Video bitrate	Videobithastighet
 	Video encoder	Videokodare
-	Video settings can't change while recording, streaming or running the replay buffer.	Videoinställningarna kan inte ändras under inspelning, sändning eller när reprisbufferten körs.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Videoinställningarna kan inte ändras under inspelning, sändning eller när reprisbufferten eller den virtuella kameran körs.
 	View	Visa
 	waiting for a choice in the system picker	väntar på ett val i systemets valdialog
 	waiting for the camera	väntar på kameran

@@ -42,6 +42,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("stream.destination_set", "Change Stream Destination"),
     ("stream.destination_start", "Start Stream Destination"),
     ("stream.destination_stop", "Stop Stream Destination"),
+    ("stream.retry_now", "Try Stream Destination Now"),
     ("stream.reconnect_set", "Change Automatic Reconnect"),
     ("stream.diagnose", "Check Stream Destination Connection"),
     ("stream.check_service_set", "Change Connection Checks After a Failure"),
@@ -111,7 +112,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "stream.destination_set" => {
             "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
-        "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" | "stream.diagnose" => "id: string",
+        "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" | "stream.retry_now" | "stream.diagnose" => "id: string",
         "stream.check_service_set" => {
             "enabled: boolean (whether the check after a failure also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers)"
         }
@@ -164,6 +165,7 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
         bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
         bindable(c("replay.save"), "Save Replay", &[]),
+        bindable(c("vcam.toggle"), "Start or Stop Virtual Camera", &[]),
         bindable(c("pause.toggle"), "Pause or Resume Program", &[]),
         bindable(CommandRef::with_params("pause.extend", json!({"seconds": 60})), "Add a Minute to the Pause", &[]),
         bindable(c("captions.toggle"), "Start or Stop Live Captions", &[]),
@@ -246,6 +248,8 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             item("record.marker", "Add Recording Marker"),
             item("audio_tracks.marker", "Add Audio Tracks Marker"),
             item("audio_tracks.open_last", "Open Last Audio Tracks in Editor"),
+            Node::Separator,
+            Node::Item(Item::new(CommandRef::new("vcam.toggle"), crate::i18n::command_label("vcam.toggle", "Virtual Camera")).check(false)),
             Node::Separator,
             item("pause.start", "Pause Program"),
             item("pause.stop", "Resume Program"),

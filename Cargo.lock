@@ -1464,6 +1464,17 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
 
 [[package]]
+name = "craft-avatar"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-ease",
+ "serde",
+ "serde_json",
+ "stats_alloc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
@@ -1551,7 +1562,9 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "criterion",
  "rayon",
+ "sha2",
  "stats_alloc",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -1801,6 +1814,13 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "stats_alloc",
+]
+
+[[package]]
+name = "craft-rtp"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
@@ -6591,6 +6611,7 @@ dependencies = [
 name = "studiocraft-platform"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "arc-swap",
  "ashpd",
  "comedy",
  "cpal",
@@ -6603,11 +6624,13 @@ dependencies = [
  "nokhwa-bindings-macos",
  "pipewire",
  "pollster 0.4.0",
+ "rustix 1.1.6",
  "serde_json",
  "studiocraft-media",
  "thiserror 2.0.21",
  "v4l",
  "wayland-client",
+ "windows 0.62.2",
  "x11rb",
  "xcap",
  "zune-jpeg",
@@ -6663,6 +6686,7 @@ dependencies = [
  "criterion",
  "image",
  "jpeg-encoder",
+ "libc",
  "log",
  "serde_json",
  "stats_alloc",
@@ -6680,6 +6704,7 @@ dependencies = [
  "chrono",
  "craft-atomic",
  "craft-captions",
+ "craft-face-track",
  "craft-hwenc",
  "craft-speech",
  "dirs",
@@ -6734,6 +6759,22 @@ dependencies = [
  "studiocraft-render",
  "studiocraft-studio",
  "wgpu",
+]
+
+[[package]]
+name = "studiocraft-web"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-i18n",
+ "js-sys",
+ "serde_json",
+ "studiocraft-engine",
+ "studiocraft-model",
+ "studiocraft-plugin",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

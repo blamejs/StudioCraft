@@ -65,7 +65,7 @@ answer.
 | --- | --- | --- |
 | `engine.execute` | `{"command": "<id>", "params"?: {...}}` | The command's result. |
 | `engine.commands` | `{"filter"?: "<text>"}` | Every command, or those whose id or label contains `filter` (case is ignored). |
-| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream and replay buffer state (`recording`, `streaming`, `replay`), frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
+| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream, replay buffer and virtual camera state (`recording`, `streaming`, `replay`, `virtual_camera`), frame statistics and canvas. `virtual_camera` is `{"active": false}`, or while it runs `active`, `status`, `target` (the device), `seconds` and `bytes` (the picture bytes sent). `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
 | `render.preview` | `{"view"?: "program" \| "preview", "max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the program, or of the preview in studio mode. |
 | `ui.inspect` | none | The window's layout and open dialogs ([`ui.inspect`](#uiinspect)). |
 | `ui.menu.list` | none | The menu bar as the window shows it, as a tree ([`ui.menu.list`](#uimenulist)). |
@@ -589,6 +589,33 @@ files are written once the phrases up to the recording's end are finished, when 
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
 
+### `avatar.models` and the face tracking model
+
+The face tracking model is kept in the speech models' `models_dir`, as
+`<models_dir>/face-landmarker/face_landmarker.task` (3,758,596 bytes).
+
+`avatar.models` takes no params and returns `models_dir`, `models` (each with `id`, `name`,
+`description`, `bytes`, `installed`, `license`, `license_url`, `author` and `source`), `job` (the
+`model` being downloaded or installed, its `kind`, `download` or `install`, and `done` and `total`
+bytes, or null) and `failure` (why the last download or install failed, or null; it is cleared
+when the next one starts). `installed` says whether the model's file is in place with its pinned
+size; over MCP with roots it is null for a file outside the read roots.
+
+`avatar.model_download` takes `{"model"?}` and downloads that model, by default `face-landmarker`,
+on a background thread. It returns `{"model", "downloading": true, "bytes"}` at once. A file
+already there with its pinned size and SHA-256 sum is kept; otherwise the file is downloaded into
+`face_landmarker.task.part`, checked against them, and renamed into place. A file that fails the
+check is deleted.
+
+`avatar.model_install` takes `{"path", "model"?}` and copies the model file at `path` into the
+models folder. Its size is checked at once, and a file of another size is an error. Its SHA-256 sum
+is checked on a background thread while it is copied, and a file that fails the check is deleted
+without changing a model already in place. It returns `{"model", "installing": true, "bytes"}`.
+
+A status message reports the end of a download or install. `avatar.model_download_cancel` stops
+the one that runs and deletes its partial file. An unknown model, an empty `model` or `path`, a
+missing file, a folder, and a second download or install while one runs are errors.
+
 ### `pause.*`
 
 `pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,
@@ -708,8 +735,13 @@ under that name now. `status` is `idle` while no stream runs, `not_in_stream` fo
 added after the stream started, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
-`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
-`cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `max_tries`,
+`next_try_ms`, `error` and `cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`attempt` is the number of the next try and `max_tries` the failed tries in a row the running
+stream allows, so the tries left, the next one included, are `max_tries - attempt + 1`.
+`next_try_ms` is the time in milliseconds until the next try starts. It is `null` while a try runs,
+and for a `waiting_for_network` destination whose server is given as an IP address, which tries
+when a route to the server returns.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |
@@ -773,13 +805,20 @@ or trying to is not removed until it is stopped.
 `stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
 that destination of the running stream; the others go on. They return `{"id", "on"}`.
 
+`stream.retry_now` takes `{"id"}` and starts the next try of that destination of the running stream
+at once, as Try Now in the Streaming window does, when it is `retrying` and waits for its next try or
+is `waiting_for_network`; a destination waiting for the network tries without a route. It returns
+`{"id", "started"}`, where `started` is `false` for a destination that was not waiting, which it
+leaves as it is. Unlike a stop and start, the try counts toward the failed tries in a row.
+
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
 that is not empty and is not a streaming service id, a parameter
-of the wrong type, a start or stop while no stream runs or while the running stream was started with
-another profile, and a start of a destination whose held key is not set. While a stream of another
+of the wrong type, a start, stop or `stream.retry_now` while no stream runs or while the running
+stream was started with another profile, a `stream.retry_now` of a destination that is not in the
+running stream, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.

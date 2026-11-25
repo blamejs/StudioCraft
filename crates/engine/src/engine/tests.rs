@@ -555,6 +555,9 @@ fn runtime_commands_are_handed_to_the_app() {
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
+        ("vcam.start", RuntimeAction::StartVirtualCamera),
+        ("vcam.stop", RuntimeAction::StopVirtualCamera),
+        ("vcam.toggle", RuntimeAction::ToggleVirtualCamera),
         ("audio.loudness", RuntimeAction::AudioLoudness),
         ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
         ("audio_tracks.open_last", RuntimeAction::AudioTracksOpenLast),
@@ -814,6 +817,43 @@ fn caption_commands_are_handed_to_the_app() {
         ("captions.start", json!({"modle": "whisper-tiny"})),
         ("captions.download", json!({"model": ""})),
         ("captions.download", json!({"model": 3})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
+fn face_tracking_model_commands_are_handed_to_the_app() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (id, params, action) in [
+        ("avatar.models", json!({}), RuntimeAction::AvatarModels),
+        ("avatar.model_download", json!({}), RuntimeAction::AvatarModelDownload { model: None }),
+        ("avatar.model_download", json!({"model": "face-landmarker"}), RuntimeAction::AvatarModelDownload { model: Some("face-landmarker".into()) }),
+        ("avatar.model_download_cancel", json!({}), RuntimeAction::AvatarModelDownloadCancel),
+        ("avatar.model_install", json!({"path": "/m/f.task"}), RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: None }),
+        (
+            "avatar.model_install",
+            json!({"path": "/m/f.task", "model": "face-landmarker"}),
+            RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: Some("face-landmarker".into()) },
+        ),
+    ] {
+        let o = run(&mut e, id, params).unwrap();
+        assert_eq!(o.runtime, Some(action), "{id}");
+        assert!(!o.changed);
+    }
+    assert_eq!(e.revision(), rev, "nothing in the collection changed");
+    for (id, bad) in [
+        ("avatar.model_download", json!({"model": ""})),
+        ("avatar.model_download", json!({"model": " "})),
+        ("avatar.model_download", json!({"model": 3})),
+        ("avatar.model_download", json!({"modle": "face-landmarker"})),
+        ("avatar.model_install", json!({})),
+        ("avatar.model_install", json!({"path": ""})),
+        ("avatar.model_install", json!({"path": "  "})),
+        ("avatar.model_install", json!({"path": 3})),
+        ("avatar.model_install", json!({"path": "/m/f.task", "model": ""})),
+        ("avatar.models", json!({"model": "face-landmarker"})),
     ] {
         assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
     }
@@ -1810,6 +1850,7 @@ fn every_spec_is_reachable() {
             "source.mono" => json!({"source": 1, "on": true}),
             "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
+            "avatar.model_install" => json!({"path": "x.task"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),

@@ -100,6 +100,9 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    StartVirtualCamera,
+    StopVirtualCamera,
+    ToggleVirtualCamera,
     /// The program's loudness readings and the profile's loudness target.
     AudioLoudness,
     /// The state of the audio tracks.
@@ -123,6 +126,19 @@ pub enum RuntimeAction {
         model: Option<String>,
     },
     CaptionsDownloadCancel,
+    /// The face tracking models and whether each is installed.
+    AvatarModels,
+    /// Download the face tracking model `model`.
+    AvatarModelDownload {
+        model: Option<String>,
+    },
+    /// Stop the face tracking model download or install that runs.
+    AvatarModelDownloadCancel,
+    /// Install the face tracking model `model` from the file at `path`.
+    AvatarModelInstall {
+        path: String,
+        model: Option<String>,
+    },
     /// Open the session of the last take of audio tracks in the audio editor.
     AudioTracksOpenLast,
     /// Mark the running take of audio tracks now, named `name` or numbered when it is `None`.
@@ -465,6 +481,13 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// Send the program to the virtual camera device, which other apps open as a camera.
+    #[serde(rename = "vcam.start")]
+    VirtualCameraStart {},
+    #[serde(rename = "vcam.stop")]
+    VirtualCameraStop {},
+    #[serde(rename = "vcam.toggle")]
+    VirtualCameraToggle {},
     /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
     /// profile's loudness target.
     #[serde(rename = "audio.loudness")]
@@ -500,6 +523,24 @@ pub enum Command {
     },
     #[serde(rename = "captions.download_cancel")]
     CaptionsDownloadCancel {},
+    /// The face tracking models, whether each is installed, and the download or install that runs.
+    #[serde(rename = "avatar.models")]
+    AvatarModels {},
+    /// Download a face tracking model into the models folder.
+    #[serde(rename = "avatar.model_download")]
+    AvatarModelDownload {
+        #[serde(default)]
+        model: Option<String>,
+    },
+    #[serde(rename = "avatar.model_download_cancel")]
+    AvatarModelDownloadCancel {},
+    /// Copy a face tracking model file the user has into the models folder, after checking it.
+    #[serde(rename = "avatar.model_install")]
+    AvatarModelInstall {
+        path: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
     /// Open the session of the last take in the audio editor, or its folder when the editor
     /// cannot be started.
     #[serde(rename = "audio_tracks.open_last")]
@@ -740,6 +781,9 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::VirtualCameraStart {} => "vcam.start",
+            Command::VirtualCameraStop {} => "vcam.stop",
+            Command::VirtualCameraToggle {} => "vcam.toggle",
             Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
@@ -749,6 +793,10 @@ impl Command {
             Command::CaptionsStatus {} => "captions.status",
             Command::CaptionsDownload { .. } => "captions.download",
             Command::CaptionsDownloadCancel {} => "captions.download_cancel",
+            Command::AvatarModels {} => "avatar.models",
+            Command::AvatarModelDownload { .. } => "avatar.model_download",
+            Command::AvatarModelDownloadCancel {} => "avatar.model_download_cancel",
+            Command::AvatarModelInstall { .. } => "avatar.model_install",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
             Command::MarkerAdd { .. } => "marker.add",
@@ -883,6 +931,9 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("vcam.start", "Start Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.stop", "Stop Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.toggle", "Start or Stop Virtual Camera", "", Undo::NotUndoable),
     spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
@@ -892,6 +943,10 @@ const SPECS: &[CommandSpec] = &[
     spec("captions.status", "Live Captions Status", "", Undo::NotUndoable),
     spec("captions.download", "Download Speech Model", "model?: speech model id", Undo::NotUndoable),
     spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
+    spec("avatar.models", "Face Tracking Models", "", Undo::NotUndoable),
+    spec("avatar.model_download", "Download Face Tracking Model", "model?: face tracking model id", Undo::NotUndoable),
+    spec("avatar.model_download_cancel", "Cancel Face Tracking Model Download", "", Undo::NotUndoable),
+    spec("avatar.model_install", "Install Face Tracking Model from File", "path: the model file, model?: face tracking model id", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
@@ -967,6 +1022,11 @@ mod tests {
             Command::AudioLoudness {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
+            Command::AvatarModels {},
+            Command::AvatarModelDownload { model: None },
+            Command::AvatarModelDownload { model: Some("face-landmarker".into()) },
+            Command::AvatarModelDownloadCancel {},
+            Command::AvatarModelInstall { path: "face_landmarker.task".into(), model: None },
             Command::AppAudioLanes {},
             Command::AppAudioRoute { app: "player.exe".into(), routed: true },
             Command::PauseStart {

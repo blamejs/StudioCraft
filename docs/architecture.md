@@ -4,8 +4,8 @@ This page describes how StudioCraft's code is organized: its crates and layers, 
 how data moves between them, and where new features plug in. It is for contributors.
 
 StudioCraft is a Cargo workspace. The desktop app is the root package (`src/`). The libraries are
-in `crates/`, the command-line tool is in `apps/studiocraft-cli`, and the workspace tooling is in
-`xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
+in `crates/`, the command-line tool is in `apps/studiocraft-cli`, the browser editor for scene
+collections is in `apps/studiocraft-web`, and the workspace tooling is in `xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
 
 ## Layers
 
@@ -18,6 +18,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-model` | Scenes, sources, scene items, transforms, profiles, settings schemas, and the versioned file format with its migrations. |
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
+| L0 | `craft-rtp` | RTP and RTCP for receiving media: packets, sender and receiver reports, BYE, the generic NACK and the picture loss indication, read and written; a jitter buffer that takes the time as an argument, lists missing packets for a NACK once and holds at most 2 s or 8 MiB; the mapping from RTP timestamps to the sender's wall clock; and depacketizers that rebuild H.264, VP8, Opus and AAC frames, dropping a video frame with a lost part and waiting for the next key frame. It opens no sockets, starts no threads and depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
@@ -28,23 +29,25 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-interop` | Display pictures handed from the capture to the compositor on the GPU: on Windows, DXGI desktop duplication into a ring of Direct3D 11 textures shared through NT handles with two shared fences, opened on a wgpu Direct3D 12 device (`wgpu` feature), with the reason recorded on the ring when the compositor cannot open it. Its private `dxgi_ffi` and `d3d12_ffi` modules are the only code that calls Direct3D. It depends on no StudioCraft crate. |
 | L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
 | L0 | `craft-closed-captions` | Closed captions in a live H.264 or HEVC stream: phrases of text to CEA-608 roll-up byte pairs paced at the field 1 rate, ATSC A/53 `cc_data` in a `user_data_registered_itu_t_t35` SEI NAL unit put before an access unit's first picture, and the reader of the same SEI. It uses the 608 character sets of `craft-captions` and depends on no StudioCraft crate. |
-| L0 | `craft-face-track` | Face tracking from a camera picture: a TensorFlow Lite reader and interpreter with every buffer sized at load, the Face Landmarker bundle's face detector and 478-point face mesh with depth, head pose by a weighted rigid fit to the bundle's canonical face, 25 of the 52 common expression weights measured from the mesh and the tongue weight the mesh model reports, One Euro smoothing, and a tracker that runs one mesh per followed picture without allocating. Trackers share a thread pool of 1 to 8 threads. It depends on no StudioCraft crate. |
+| L0 | `craft-face-track` | Face tracking from a camera picture: a TensorFlow Lite reader and interpreter with every buffer sized at load, the Face Landmarker bundle's face detector and 478-point face mesh with depth, head pose by a weighted rigid fit to the bundle's canonical face, 25 of the 52 common expression weights measured from the mesh and the tongue weight the mesh model reports, One Euro smoothing, and a tracker that runs one mesh per followed picture without allocating. Trackers share a thread pool of 1 to 8 threads. Its model catalog pins the bundle's URL, size and SHA-256, and it checks a model file and installs one the user has. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L1 | `craft-transitions` | The Cut, Fade, Fade through color and Swipe transitions: each one's WGSL blend, the values its shader reads, its ease from `craft-ease`, the gains of the old and new audio, and the same blend on the CPU, with typed parameters that carry a version for apps that save them. It depends on no StudioCraft crate. |
+| L1 | `craft-avatar` | Avatars: the rigged model (humanoid bones, meshes with morph targets, expressions with their override rules, look-at maps and spring bones), the 52 face-tracking shapes and their mapping to expressions, neutral-pose calibration, the hold and fade when the face is lost, idle blinks, breathing and sway, and the spring step. The per-frame step does not allocate. It uses the eases of `craft-ease` and depends on no StudioCraft crate. |
 | L1 | `craft-packet` | Encoded packets shared by reference through a pool, fanned out to bounded per-subscriber rings with packet and byte caps. A full ring drops packets up to the next keyframe, its receiver skips stale packets to a keyframe, and each subscriber keeps its own counters. When the pool is full, the ring holding the most bytes is emptied, so a stalled destination loses only its own packets. It converts the `craft-video` H.264 encoder's packets and the `craft-hwenc-native` encoders' packets to its packet info. It depends on no StudioCraft crate. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
-| L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
+| L2 | `studiocraft-platform` | Display, window, camera and audio capture, the virtual camera device, locating ffmpeg, and opening folders and links. |
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
 | L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, the repair of takes cut short, and the listing of the takes in a folder. |
-| L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, and the video encoders. |
+| L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, the virtual camera, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions, outputs and live captions behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
 | app | `studiocraft` | The desktop binary, its control channel and the screenshot and self-test harness. |
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
+| app | `studiocraft-web` | The browser editor for scene collection files: an `Editor` that runs the engine's scene and source commands on an opened file, and the page in `index.html` that draws it, reads the picked file and offers the edited collection as a download. |
 | tool | `xtask` | `cargo xtask` checks. |
 
 These crates have no operating-system or GPU dependency, and `cargo xtask wasm` checks that they
@@ -53,10 +56,17 @@ build for `wasm32-unknown-unknown`:
 - `studiocraft-model`
 - `studiocraft-plugin`
 - `craft-flv`
+- `craft-rtp`
 - `craft-scopes`
 - `craft-ease`
 - `craft-transitions`
 - `craft-closed-captions`
+- `craft-avatar`
+
+`cargo xtask wasm` also checks the browser editor, `studiocraft-web`, and with it
+`studiocraft-engine`. The editor uses only the engine's commands and undo history. The engine's
+source threads, mixer and frame scheduler do not run in the browser. On `wasm32-unknown-unknown`
+the undo history reads no clock, so each change is its own undo step there.
 
 ## Threads and data flow
 
@@ -206,8 +216,31 @@ first into a reused buffer.
 capture. A panic inside the camera library is caught and reported as an error. A missing or busy
 camera, a format the camera does not offer, a failed stream, or no new frame for 5 s (the first
 frame included) clears the picture and is reported to the source. The source opens the camera
-again after 2 s while the rest of the app keeps running. A camera source whose camera is unplugged
-keeps opening it every 2 seconds and resumes when it returns.
+again after 2 s while the rest of the app keeps running. On macOS a camera source whose camera is
+unplugged keeps opening it every 2 seconds and resumes when it returns.
+
+**Plugged in and out.** On Windows and Linux, `platform::camera::watch` starts one thread, the
+first time a camera source or its Properties window asks for it, that waits for the system's
+notices: a Windows Runtime device watcher for
+video capture devices (its added, removed and updated events), and inotify on `/dev` for V4L2 nodes
+named `video…` that are created, removed or given new permissions. After each notice the thread
+lists the cameras again; notices that arrive together give one listing. When the list changed, it
+replaces the published list and adds one to a generation counter. A camera source reads that
+counter, an atomic, at every frame, and reads the list only when the counter changed. The list is
+held in an `ArcSwapOption`, so reading it does not wait for the thread. When the list
+no longer holds the camera its capture opened, the source drops the capture and clears the picture,
+even when another camera with the same name is still listed. The source then opens a listed camera
+that matches its setting at the next frame. When no listed camera matches, it reports "the camera is
+not connected" and does not try to open one until a matching camera is plugged in, which it opens at
+the next frame. A camera unplugged and plugged in again before the thread lists the cameras
+leaves the list unchanged, so the thread also counts the notices that can mean a camera was
+unplugged: a removed device on Windows, and on Linux a removed `video…` node or notices lost to a
+full queue. When that count changed since just before the source last opened its camera, a source whose
+capture failed opens the camera again at the next frame instead of after 2 s, once for each change.
+The Properties window's device stamp
+hashes the published list instead of listing the cameras. When the notices cannot be set up or
+stop, the watch publishes no list, and the sources and the Properties window list and reopen
+cameras on their timers as on macOS.
 
 **Sharing a camera.** One capture thread streams each camera, and every `CameraCapture` of that
 camera is a reader of it with a `FrameSlot` of its own. The thread converts each frame once into a

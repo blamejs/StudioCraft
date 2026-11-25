@@ -320,6 +320,7 @@
 	the audio stream failed	der Audiostream ist fehlgeschlagen
 	the camera capture could not start	die Kameraaufnahme konnte nicht starten
 	the camera is already open in another format	die Kamera ist bereits in einem anderen Format geöffnet
+	the camera is not connected	die Kamera ist nicht angeschlossen
 	the camera is still closing	die Kamera wird noch geschlossen
 	the camera offers no format StudioCraft reads	die Kamera bietet kein Format an, das StudioCraft lesen kann
 	the camera sends frames that cannot be read	die Kamera sendet Bilder, die nicht gelesen werden können
@@ -354,7 +355,7 @@
 	Video	Video
 	Video bitrate	Video-Bitrate
 	Video encoder	Video-Encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Während einer Aufnahme, eines Streams oder des Replay-Puffers lassen sich die Videoeinstellungen nicht ändern.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Während einer Aufnahme, eines Streams, des Replay-Puffers oder der virtuellen Kamera lassen sich die Videoeinstellungen nicht ändern.
 	View	Ansicht
 	waiting for a choice in the system picker	wartet auf eine Auswahl in der Systemauswahl
 	waiting for the camera	wartet auf die Kamera

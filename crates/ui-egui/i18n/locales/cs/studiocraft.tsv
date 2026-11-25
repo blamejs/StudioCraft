@@ -333,6 +333,7 @@
 	the audio stream failed	zvukový stream selhal
 	the camera capture could not start	zachytávání z kamery nelze spustit
 	the camera is already open in another format	kamera je už otevřená v jiném formátu
+	the camera is not connected	kamera není připojená
 	the camera is still closing	kamera se stále zavírá
 	the camera offers no format StudioCraft reads	kamera nenabízí žádný formát, který StudioCraft umí číst
 	the camera sends frames that cannot be read	kamera posílá snímky, které nelze přečíst
@@ -370,7 +371,7 @@
 	Video	Video
 	Video bitrate	Datový tok videa
 	Video encoder	Kodér videa
-	Video settings can't change while recording, streaming or running the replay buffer.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu či virtuální kamery.
 	View	Zobrazení
 	waiting for a choice in the system picker	čekání na výběr v systémovém dialogu
 	waiting for the camera	čekání na kameru

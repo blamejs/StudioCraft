@@ -1617,6 +1617,39 @@ fn speech_models_are_held_to_the_roots() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn face_tracking_models_are_held_to_the_roots() {
+    let dir = root_folders("face-model-roots");
+    std::fs::write(dir.join("in").join("mine.task"), b"abc").unwrap();
+    std::fs::write(dir.join("outside").join("mine.task"), b"abc").unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots.clone()) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("outside"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "avatar.model_download", "params": {}})));
+    assert!(text.contains("outside the write roots"), "{text}");
+    assert!(!dir.join("outside").join("face-landmarker").exists(), "nothing was downloaded");
+    let install =
+        |s: &mut Server, file: &std::path::Path| call(s, "command_run", json!({"id": "avatar.model_install", "params": {"path": text_of(file)}}));
+    let text = error_text(&install(&mut s, &dir.join("outside").join("mine.task")));
+    assert!(text.contains("outside the read roots"), "{text}");
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("outside the write roots"), "{text}");
+    // The status does not look at model files outside the read roots.
+    let status = ok_json(&call(&mut s, "command_run", json!({"id": "avatar.models", "params": {}})));
+    let rows = status["models"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.iter().all(|m| m["installed"].is_null()), "{status}");
+    // With the models folder inside the write roots, the file inside the read roots reaches the
+    // studio, which checks its size.
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("out").join("models"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("is 3 bytes"), "{text}");
+    assert!(!dir.join("out").join("models").join("face-landmarker").exists(), "nothing was installed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_linked_speech_model_folder_is_held_to_the_roots() {

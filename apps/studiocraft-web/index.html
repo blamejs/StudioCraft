@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StudioCraft scene collection editor</title>
+  <link data-trunk rel="rust" data-bin="studiocraft-web" data-wasm-opt="z" />
+  <style>
+    :root { color-scheme: light dark; --line: #8884; --muted: #888; --accent: #3b82f6; --error: #d33; }
+    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+    header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+    header h1 { font-size: 16px; margin: 0 12px 0 0; }
+    #changed { color: var(--muted); }
+    main { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; padding: 12px; }
+    section h2 { font-size: 14px; margin: 0 0 8px; }
+    ul { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--line); border-radius: 4px; min-height: 2em; }
+    li { display: flex; gap: 4px; align-items: center; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+    li:last-child { border-bottom: 0; }
+    li.listed { background: #3b82f622; }
+    li .name { flex: 1; text-align: start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    li button.name { border: 0; background: none; font: inherit; color: inherit; padding: 2px; cursor: pointer; }
+    li .hidden { opacity: 0.5; }
+    .kind, .badge { color: var(--muted); font-size: 12px; }
+    .badge { border: 1px solid var(--accent); color: var(--accent); border-radius: 3px; padding: 0 4px; }
+    .row { display: flex; gap: 4px; }
+    .row input, .row select { flex: 1; min-width: 0; }
+    .status { padding: 4px 12px; min-height: 1.4em; }
+    .status.error { color: var(--error); }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="collection-name"></h1>
+    <!-- The page puts each label in the browser's language when it starts. -->
+    <button type="button" data-action="new">New</button>
+    <button type="button" data-action="open">Open&hellip;</button>
+    <button type="button" data-action="save">Save</button>
+    <button type="button" id="undo" data-action="undo" disabled>Undo</button>
+    <button type="button" id="redo" data-action="redo" disabled>Redo</button>
+    <span id="changed"></span>
+    <input type="file" id="file" accept=".json,application/json" hidden>
+  </header>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <main>
+    <section aria-labelledby="scenes-title">
+      <h2 id="scenes-title">Scenes</h2>
+      <ul id="scenes"></ul>
+      <div class="row">
+        <input id="scene-name" type="text" maxlength="256" placeholder="New scene name" aria-label="New scene name">
+        <button type="button" data-action="add-scene">Add Scene</button>
+      </div>
+    </section>
+    <section aria-labelledby="sources-title">
+      <h2 id="sources-title">Sources</h2>
+      <ul id="items"></ul>
+      <div class="row">
+        <select id="place" aria-label="Source to place in this scene"></select>
+        <button type="button" id="place-source" data-action="place-source">Add to Scene</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

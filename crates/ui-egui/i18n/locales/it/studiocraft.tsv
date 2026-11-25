@@ -330,6 +330,7 @@
 	the audio stream failed	il flusso audio non è riuscito
 	the camera capture could not start	impossibile avviare la cattura della fotocamera
 	the camera is already open in another format	la fotocamera è già aperta in un altro formato
+	the camera is not connected	la fotocamera non è collegata
 	the camera is still closing	la fotocamera si sta ancora chiudendo
 	the camera offers no format StudioCraft reads	la fotocamera non offre nessun formato che StudioCraft sa leggere
 	the camera sends frames that cannot be read	la fotocamera invia fotogrammi illeggibili
@@ -366,7 +367,7 @@
 	Vertical speed (px/s)	Velocità verticale (px/s)
 	Video bitrate	Bitrate video
 	Video encoder	Encoder video
-	Video settings can't change while recording, streaming or running the replay buffer.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay attivo.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay o la videocamera virtuale attivi.
 	View	Visualizza
 	Waiting for the program picture…	In attesa dell'immagine del programma…
 	waiting for a choice in the system picker	in attesa di una scelta nel selettore di sistema

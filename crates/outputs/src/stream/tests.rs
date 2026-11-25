@@ -277,7 +277,7 @@ fn until(out: &Streaming, id: &str, f: impl Fn(&DestinationState) -> bool) -> De
     let Ok(dest) = out.hub.find(id) else { panic!("no destination `{id}`") };
     loop {
         let seen = *lock(&dest.changes);
-        let d = dest.state();
+        let d = dest.state(&out.hub);
         if f(&d) {
             return d;
         }
@@ -1455,6 +1455,158 @@ fn a_restart_while_waiting_for_the_network_tries_at_once() {
     let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
     assert_eq!(d.reconnects, 0);
     assert!(lock(&out.hub.net.state).0.is_empty(), "it no longer waits for the network");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn try_now_ends_the_wait_before_a_try_again() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The wait before a try again outlasts the test.
+    let long = GUARD * 10;
+    let timing = Timing { first: long, longest: long, max_tries: 5, ..quick() };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], timing).unwrap();
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!((d.next_try, d.max_tries), (None, 5), "{d:?}");
+    assert!(!out.retry_destination("a").unwrap(), "a live destination does not wait to try again");
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    // The lost connection lasted less than 30 s, so the next try is the second.
+    let d = until(&out, "a", |d| d.next_try.is_some());
+    assert!(matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }), "{d:?}");
+    let left = d.next_try.unwrap_or_default();
+    assert!(left > long - GUARD && left <= long, "{left:?}");
+    assert!(out.retry_destination("a").unwrap());
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
+    assert_eq!(d.next_try, None, "{d:?}");
+    assert!(out.retry_destination("nope").is_err(), "an unknown destination is an error");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    assert!(out.retry_destination("a").is_err(), "a stream that ended has nothing to try");
+}
+
+#[test]
+fn the_next_try_and_try_now_are_one_atomic_word() {
+    let d = Dest::new(named("a"), Arc::default());
+    // The window reads it without waiting on the destination's thread (AGENTS.md › Performance).
+    let _: &AtomicU64 = &d.next;
+    assert!(!d.try_now(), "a destination that does not wait has nothing to end");
+    let at = Instant::now() + Duration::from_secs(3);
+    d.wait_until(NextTry::At(at));
+    assert_eq!(d.next_try(), NextTry::At(at));
+    assert!(d.try_now());
+    // A new deadline after the wait for the network keeps the request, so that wait ends at once too.
+    let later = at + Duration::from_secs(1);
+    d.wait_until(NextTry::At(later));
+    assert!(d.trying_now());
+    assert_eq!(d.next_try(), NextTry::At(later));
+    // A non-waiting status takes the next try away and keeps the request until the try starts.
+    d.set(DestinationStatus::Connecting);
+    assert_eq!(d.next_try(), NextTry::None);
+    assert!(d.trying_now());
+    d.begin_try();
+    assert!(!d.trying_now());
+    // A time of the stream's clock from before the destination was made reads back the same.
+    if let Some(early) = Instant::now().checked_sub(Duration::from_secs(5)) {
+        d.wait_until(NextTry::Clocked(early));
+        assert_eq!(d.next_try(), NextTry::Clocked(early));
+    }
+    d.wait_until(NextTry::Route);
+    assert_eq!(d.next_try(), NextTry::Route);
+    d.begin_try();
+    assert_eq!(d.next_try(), NextTry::None);
+    assert!(!d.try_now());
+}
+
+#[test]
+fn a_try_started_by_try_now_counts_toward_the_tries() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let long = GUARD * 10;
+    let timing = Timing { first: long, longest: long, max_tries: 2, ..quick() };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], timing).unwrap();
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }) && d.next_try.is_some());
+    // The second refused connection is the last of the two tries, as it would be at the usual time.
+    assert!(out.retry_destination("a").unwrap());
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert!(f.cause == Cause::Refused && f.detail.contains("gave up after 2 tries"), "{f:?}");
+    assert_eq!(d.next_try, None);
+    assert!(!out.retry_destination("a").unwrap(), "a destination that gave up does not wait");
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn try_now_during_a_try_returns_at_once_and_changes_nothing() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no answer"))), Answer::After(hold, vec![addr(&url)])]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route: routed() };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }) && d.next_try.is_some());
+    assert!(out.retry_destination("a").unwrap());
+    // The try's lookup does not answer yet: the try runs, with no next try, and a second Try Now
+    // returns without waiting for it.
+    assert_eq!(heard(&asked), "asked");
+    let d = until(&out, "a", |d| d.next_try.is_none());
+    assert!(matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }), "{d:?}");
+    assert!(!out.retry_destination("a").unwrap());
+    drop(release);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn try_now_while_waiting_for_the_network_tries_without_a_route() {
+    // A server given as an IP address waits for a route with no time set.
+    let (url, seen) = server(vec![Plan::DropAfter(5), Plan::Accept]);
+    let (route, set) = switch(Route::Selected);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve: Arc::new(system_resolve), route };
+    let mut out = Streaming::start_with(&job, vec![target("a", &url, "k")], network_timing(), seams).unwrap();
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    *lock(&set) = Route::None;
+    let feed = Feed::new(&out);
+    let d = until(&out, "a", |d| waiting(d).is_some());
+    assert_eq!((d.next_try, d.max_tries), (None, 3), "it tries when a route returns: {d:?}");
+    until_closed(&seen);
+    assert!(out.retry_destination("a").unwrap());
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
+    assert_eq!(d.next_try, None);
+    assert!(lock(&out.hub.net.state).0.is_empty(), "it no longer waits for the network");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+
+    // A named server with no default route waits the usual time, on the stream's clock.
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no network"))), Answer::Now(Ok(vec![addr(&url)]))]);
+    let (route, _set) = switch(Route::None);
+    let clock = TestClock::new();
+    let seams = Seams { clock: Arc::clone(&clock) as Arc<dyn Clock>, resolve, route };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    let d = until(&out, "a", |d| waiting(d).is_some() && d.next_try.is_some());
+    assert_eq!(d.next_try, Some(GUARD), "{d:?}");
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(until(&out, "a", |_| true).next_try, Some(GUARD - Duration::from_secs(1)));
+    assert!(out.retry_destination("a").unwrap());
+    assert_eq!(heard(&asked), "asked");
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
