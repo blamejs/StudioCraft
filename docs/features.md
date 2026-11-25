@@ -739,8 +739,8 @@ into CPU memory. This needs a compositor on Vulkan with `VK_KHR_external_memory_
 semaphores. The compositor reads the frames back through CPU memory instead when it draws with
 another backend, when its Vulkan driver lacks any of those, when the driver has no memory layout in
 which it can export an NV12 image of the output size, when VA-API cannot open an encoder on the
-render node of the compositor's GPU, when the VA-API driver cannot import a buffer, and when the
-encoder fails on a frame. Recordings and streams do not use these buffers yet; they read the frames
+render node of the compositor's GPU, when the VA-API driver cannot import a buffer, when the
+encoder fails on a frame, and when the encoder stops while a picture it took is not finished. Recordings and streams do not use these buffers yet; they read the frames
 back.
 
 On Windows, a Display capture source captures with desktop duplication into textures that the

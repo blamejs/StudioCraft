@@ -88,7 +88,7 @@ impl VaApi {
             };
             let cfg = hardware::config(self.codec, params, "VA-API (built in)")?;
             let core = Core::on_render_node(&cfg, dev).map_err(|e| self.error(e))?;
-            Ok(VaSession { core, name: self.name(), shared: Some(Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default() }) })
+            Ok(VaSession { core, name: self.name(), shared: Some(Shared::new(ring)) })
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -185,6 +185,15 @@ pub struct VaSession {
 struct Shared {
     ring: std::sync::Arc<ExportRing>,
     feed: Feed,
+    /// The encoder stopped before its pictures were coded and may still read their buffers: none
+    /// of them is handed back.
+    held: bool,
+}
+
+impl Shared {
+    fn new(ring: &std::sync::Arc<ExportRing>) -> Shared {
+        Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default(), held: false }
+    }
 }
 
 /// What [`encode_ready`] needs of an encoder: the input surfaces it imported from DMA-BUFs and
@@ -192,8 +201,14 @@ struct Shared {
 trait Surfaces {
     fn imported(&self, key: usize) -> bool;
     fn import(&mut self, key: usize, fd: i32, frame: &PrimeFrame) -> Result<(), Error>;
+    /// Whether [`Surfaces::encode_surface`] takes a picture without waiting for the GPU.
+    fn surface_ready(&mut self) -> bool;
     fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<craft_hwenc_native::Packet>, Error>;
     fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error>;
+    /// The packets that came out during a call that then failed.
+    fn take_kept(&mut self) -> Vec<craft_hwenc_native::Packet>;
+    /// Wait for the pictures in flight; `false` when one did not finish.
+    fn wait_idle(&mut self) -> bool;
 }
 
 impl Surfaces for Core {
@@ -203,11 +218,40 @@ impl Surfaces for Core {
     fn import(&mut self, key: usize, fd: i32, frame: &PrimeFrame) -> Result<(), Error> {
         Core::import(self, key, fd, frame)
     }
+    fn surface_ready(&mut self) -> bool {
+        Core::surface_ready(self)
+    }
     fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
         Core::encode_surface(self, key, pts)
     }
     fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
         Core::flush(self)
+    }
+    fn take_kept(&mut self) -> Vec<craft_hwenc_native::Packet> {
+        Core::take_kept(self)
+    }
+    fn wait_idle(&mut self) -> bool {
+        Core::wait_idle(self)
+    }
+}
+
+/// Add the packets `core` kept from a call that failed to `out`, and hand back the buffers of
+/// their pictures, for a session that stops after the error.
+fn rescue<C: Surfaces>(core: &mut C, feed: Option<&mut Feed>, out: &mut Vec<Packet>) {
+    let kept = core.take_kept();
+    if let Some(feed) = feed {
+        feed.out(kept.len());
+    }
+    packets(out, kept);
+}
+
+/// For a session on the GPU that stops: wait for the encoder's pictures. When one does not
+/// finish, the encoder may still read the ring's buffers, so none is handed back and the ring
+/// records [`Fallback::NoEncoder`].
+fn stop<C: Surfaces>(core: &mut C, shared: &mut Shared) {
+    if !core.wait_idle() {
+        shared.ring.refuse(Fallback::NoEncoder);
+        shared.held = true;
     }
 }
 
@@ -239,18 +283,23 @@ fn ring_buffer(_ring: &ExportRing, _slot: usize) -> Option<(i32, PrimeFrame)> {
 /// Encode the frames of `shared` whose copies have finished, oldest first, on `core`, importing
 /// each ring buffer the first time a frame uses it (`buffer` gives its descriptor and layout), and
 /// hand back the buffers whose packets came out. It returns at the first frame whose copy is still
-/// running, without waiting. A buffer the driver cannot import records [`Fallback::ImportFailed`]
-/// on the ring, and the packets of the pictures the encoder already took are added to `out` before
-/// the error returns; a frame outside the ring's buffers or an encoder that stops records
-/// [`Fallback::NoEncoder`].
+/// running, without waiting, and unless `wait` is set, also while the encoder could take the next
+/// picture only after waiting for an earlier one to be coded: that frame stays queued. A buffer the
+/// driver cannot import records [`Fallback::ImportFailed`] on the ring, and the packets of the
+/// pictures the encoder already took are added to `out` before the error returns, also when
+/// reading them fails part way; a frame outside the ring's buffers or an encoder that stops
+/// records [`Fallback::NoEncoder`], and the packets that came out before the error are added to
+/// `out`.
 fn encode_ready<C: Surfaces>(
     core: &mut C,
     shared: &mut Shared,
     name: &str,
     buffer: impl Fn(&ExportRing, usize) -> Option<(i32, PrimeFrame)>,
     out: &mut Vec<Packet>,
+    wait: bool,
 ) -> Result<(), PluginError> {
-    while let Some((frame, pts)) = shared.feed.take_ready() {
+    while wait || core.surface_ready() {
+        let Some((frame, pts)) = shared.feed.take_ready() else { break };
         let slot = frame.slot();
         if !core.imported(slot) {
             let Some((fd, layout)) = buffer(&shared.ring, slot) else {
@@ -262,7 +311,13 @@ fn encode_ready<C: Surfaces>(
                 shared.ring.refuse(Fallback::ImportFailed);
                 // The pictures the encoder already took still come out, ahead of the frames read
                 // back through memory.
-                let taken = core.flush().map_err(|lost| PluginError::Failed(format!("{name} lost its last frames: {lost}")))?;
+                let taken = match core.flush() {
+                    Ok(taken) => taken,
+                    Err(lost) => {
+                        rescue(core, Some(&mut shared.feed), out);
+                        return Err(PluginError::Failed(format!("{name} lost its last frames: {lost}")));
+                    }
+                };
                 shared.feed.out(taken.len());
                 packets(out, taken);
                 return Err(PluginError::Unavailable(format!("{name} cannot read the graphics ring's buffers: {e}")));
@@ -272,6 +327,7 @@ fn encode_ready<C: Surfaces>(
             Ok(ps) => ps,
             Err(e) => {
                 shared.ring.refuse(Fallback::NoEncoder);
+                rescue(core, Some(&mut shared.feed), out);
                 return Err(PluginError::Failed(format!("{name} stopped: {e}")));
             }
         };
@@ -288,9 +344,9 @@ impl VaSession {
         self.core.config()
     }
 
-    fn encode_ready(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+    fn encode_ready(&mut self, out: &mut Vec<Packet>, wait: bool) -> Result<(), PluginError> {
         let Some(shared) = &mut self.shared else { return Ok(()) };
-        encode_ready(&mut self.core, shared, self.name, ring_buffer, out)
+        encode_ready(&mut self.core, shared, self.name, ring_buffer, out, wait)
     }
 }
 
@@ -305,7 +361,13 @@ impl VideoSession for VaSession {
             // `VaApi::session` for the frames the compositor reads back.
             return Err(PluginError::Unavailable(format!("{} takes its frames on the GPU; frames in memory need a new session", self.name)));
         }
-        let ps = self.core.encode(nv12, pts).map_err(|e| PluginError::Failed(format!("{} stopped: {e}", self.name)))?;
+        let ps = match self.core.encode(nv12, pts) {
+            Ok(ps) => ps,
+            Err(e) => {
+                rescue(&mut self.core, None, out);
+                return Err(PluginError::Failed(format!("{} stopped: {e}", self.name)));
+            }
+        };
         packets(out, ps);
         Ok(())
     }
@@ -323,7 +385,7 @@ impl VideoSession for VaSession {
     }
 
     fn poll_shared(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
-        self.encode_ready(out)?;
+        self.encode_ready(out, false)?;
         if let Some(shared) = &self.shared
             && shared.feed.stalled()
         {
@@ -335,15 +397,22 @@ impl VideoSession for VaSession {
     }
 
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
-        self.encode_ready(out)?;
+        // The stream ends here, so the encoder may wait for its earlier pictures.
+        self.encode_ready(out, true)?;
         // The last frames' copies are usually still running on the compositor's queue when the
         // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded.
         let until = std::time::Instant::now() + FLUSH_WAIT;
         while self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(1));
-            self.encode_ready(out)?;
+            self.encode_ready(out, true)?;
         }
-        let ps = self.core.flush().map_err(|e| PluginError::Failed(format!("{} lost its last frames: {e}", self.name)))?;
+        let ps = match self.core.flush() {
+            Ok(ps) => ps,
+            Err(e) => {
+                rescue(&mut self.core, None, out);
+                return Err(PluginError::Failed(format!("{} lost its last frames: {e}", self.name)));
+            }
+        };
         packets(out, ps);
         // The packets of every frame read are out, so their buffers go back.
         let lost = self.shared.as_mut().map_or(0, |s| s.feed.drain());
@@ -354,11 +423,22 @@ impl VideoSession for VaSession {
     }
 }
 
+impl Drop for VaSession {
+    fn drop(&mut self) {
+        if let Some(shared) = &mut self.shared {
+            stop(&mut self.core, shared);
+        }
+    }
+}
+
 // `VaSession::shared` is declared after `core`, so the buffers go back only once the encoder has
-// been torn down and no longer reads them.
+// been torn down. An encoder that stopped before its pictures were coded is left open and may
+// still read them, so then none goes back.
 impl Drop for Shared {
     fn drop(&mut self) {
-        self.feed.drain();
+        if !self.held {
+            self.feed.drain();
+        }
     }
 }
 
@@ -433,6 +513,13 @@ mod tests {
         /// A slot whose buffer the driver refuses; the others import.
         refuse_slot: Option<usize>,
         fail_encode: bool,
+        /// The oldest picture is still being coded: the next one waits for it.
+        coding: bool,
+        /// A flush reads this many pictures and then fails on the next one.
+        flush_fails_after: Option<usize>,
+        /// A picture in flight never finishes.
+        hung: bool,
+        kept: Vec<craft_hwenc_native::Packet>,
     }
 
     impl Surfaces for FakeCore {
@@ -445,6 +532,16 @@ mod tests {
             }
             self.imported.push(key);
             Ok(())
+        }
+        fn surface_ready(&mut self) -> bool {
+            !self.coding || self.in_flight.len() < craft_hwenc_native::vaapi::SURFACE_DEPTH
+        }
+        fn take_kept(&mut self) -> Vec<craft_hwenc_native::Packet> {
+            std::mem::take(&mut self.kept)
+        }
+        fn wait_idle(&mut self) -> bool {
+            self.in_flight.clear();
+            !self.hung
         }
         fn encode_surface(&mut self, _key: usize, pts: i64) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
             if self.fail_encode {
@@ -459,7 +556,18 @@ mod tests {
             Ok(out)
         }
         fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
-            Ok(self.in_flight.drain(..).map(|pts| craft_hwenc_native::Packet { data: vec![1], pts, keyframe: false }).collect())
+            let packet = |pts| craft_hwenc_native::Packet { data: vec![1], pts, keyframe: false };
+            if let Some(read) = self.flush_fails_after {
+                // As the VA-API encoder does: the packets read before the failure are kept for
+                // the next call, and the picture that failed is gone.
+                let mut kept: Vec<_> = self.in_flight.drain(..read.min(self.in_flight.len())).map(packet).collect();
+                self.in_flight.pop_front();
+                self.kept.append(&mut kept);
+                return Err(Error::Failed("the coded buffer reported an error".into()));
+            }
+            let mut out = std::mem::take(&mut self.kept);
+            out.extend(self.in_flight.drain(..).map(packet));
+            Ok(out)
         }
     }
 
@@ -471,7 +579,7 @@ mod tests {
     }
 
     fn shared(ring: &std::sync::Arc<ExportRing>) -> Shared {
-        Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default() }
+        Shared::new(ring)
     }
 
     #[test]
@@ -480,16 +588,16 @@ mod tests {
         let (mut core, mut s, mut out) = (FakeCore::default(), shared(&ring), Vec::new());
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
         // The copy has not finished: the call returns at once with nothing encoded or imported.
-        encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap();
+        encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
         assert!(out.is_empty() && core.imported.is_empty() && core.in_flight.is_empty());
         assert_eq!(s.feed.waiting(), 1);
         ring.set_ready(1);
-        encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap();
+        encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
         assert_eq!((core.imported.clone(), s.feed.reading()), (vec![0], 1));
         for (slot, ready) in [(1, 2), (2, 3), (0, 4)] {
             ring.set_ready(ready);
             s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), slot, ready).unwrap(), i64::try_from(ready).unwrap() - 1);
-            encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap();
+            encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
         }
         // Each buffer is imported once; the encoder holds two pictures, so the first two packets
         // are out and their buffers went back.
@@ -506,7 +614,7 @@ mod tests {
         let (mut core, mut s, mut out) = (FakeCore { refuse_import: true, ..FakeCore::default() }, shared(&ring), Vec::new());
         ring.set_ready(1);
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
-        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap_err();
+        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap_err();
         assert!(matches!(e, PluginError::Unavailable(ref why) if why.contains("invalid parameter")), "{e}");
         assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
     }
@@ -519,11 +627,11 @@ mod tests {
         let (mut core, mut s, mut out) = (FakeCore { refuse_slot: Some(1), ..FakeCore::default() }, shared(&ring), Vec::new());
         ring.set_ready(1);
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
-        encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap();
+        encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
         assert!(out.is_empty(), "the encoder holds the first picture");
         ring.set_ready(2);
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 1, 2).unwrap(), 1);
-        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap_err();
+        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap_err();
         assert!(matches!(e, PluginError::Unavailable(_)), "{e}");
         assert_eq!(out.iter().map(|p| p.pts).collect::<Vec<_>>(), vec![0], "the first picture's packet");
         assert_eq!(ring.released(), 1, "its buffer went back");
@@ -536,13 +644,77 @@ mod tests {
         let (mut core, mut s, mut out) = (FakeCore::default(), shared(&ring), Vec::new());
         ring.set_ready(1);
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
-        assert!(encode_ready(&mut core, &mut s, "test", |_, _| None, &mut out).is_err());
+        assert!(encode_ready(&mut core, &mut s, "test", |_, _| None, &mut out, false).is_err());
         assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
         let ring = ExportRing::detached(256, 144);
         let (mut core, mut s) = (FakeCore { fail_encode: true, ..FakeCore::default() }, shared(&ring));
         ring.set_ready(1);
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
-        assert!(matches!(encode_ready(&mut core, &mut s, "test", layout, &mut out), Err(PluginError::Failed(_))));
+        assert!(matches!(encode_ready(&mut core, &mut s, "test", layout, &mut out, false), Err(PluginError::Failed(_))));
         assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
+    }
+
+    /// When a refused import makes the encoder give out its pictures and reading the second one
+    /// fails, the first one's packet still comes out with the error, and its buffer goes back.
+    #[test]
+    fn a_refused_import_whose_flush_fails_part_way_still_gives_the_packets_read() {
+        let ring = ExportRing::detached(256, 144);
+        let core = FakeCore { refuse_slot: Some(2), flush_fails_after: Some(1), ..FakeCore::default() };
+        let (mut core, mut s, mut out) = (core, shared(&ring), Vec::new());
+        for (slot, ready) in [(0, 1), (1, 2)] {
+            ring.set_ready(ready);
+            s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), slot, ready).unwrap(), i64::try_from(ready).unwrap() - 1);
+            encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
+        }
+        assert!(out.is_empty(), "the encoder holds both pictures");
+        ring.set_ready(3);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 2, 3).unwrap(), 2);
+        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap_err();
+        assert!(matches!(e, PluginError::Failed(ref why) if why.contains("lost its last frames")), "{e}");
+        assert_eq!(out.iter().map(|p| p.pts).collect::<Vec<_>>(), vec![0], "the first picture's packet");
+        assert_eq!(ring.released(), 1, "its buffer went back");
+        assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
+    }
+
+    /// While the encoder still codes the oldest of the two pictures it holds, a ready frame stays
+    /// queued instead of waiting for it; it goes in once that picture is coded, and a flush may wait.
+    #[test]
+    fn a_ready_frame_waits_in_the_queue_while_the_encoder_is_busy() {
+        let ring = ExportRing::detached(256, 144);
+        let (mut core, mut s, mut out) = (FakeCore { coding: true, ..FakeCore::default() }, shared(&ring), Vec::new());
+        for (slot, ready) in [(0, 1), (1, 2), (2, 3)] {
+            ring.set_ready(ready);
+            s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), slot, ready).unwrap(), i64::try_from(ready).unwrap() - 1);
+            encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
+        }
+        assert_eq!((core.in_flight.len(), s.feed.waiting(), out.len()), (2, 1, 0), "the third frame waits");
+        core.coding = false;
+        encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
+        assert_eq!((s.feed.waiting(), out.iter().map(|p| p.pts).collect::<Vec<_>>()), (0, vec![0]));
+        core.coding = true;
+        ring.set_ready(4);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 4).unwrap(), 3);
+        encode_ready(&mut core, &mut s, "test", layout, &mut out, true).unwrap();
+        assert_eq!(s.feed.waiting(), 0, "a flush takes the frame though the encoder is busy");
+    }
+
+    /// An encoder that stops while a picture never finishes may still read the ring's buffers: none
+    /// goes back, and the ring records why its frames return to memory. One whose pictures finish
+    /// hands the buffers back.
+    #[test]
+    fn a_stopped_encoder_whose_picture_never_finishes_hands_back_no_buffer() {
+        for (hung, released, fallback) in [(true, 1, Some(Fallback::NoEncoder)), (false, 3, None)] {
+            let ring = ExportRing::detached(256, 144);
+            let (mut core, mut s, mut out) = (FakeCore { hung, ..FakeCore::default() }, shared(&ring), Vec::new());
+            for (slot, ready) in [(0, 1), (1, 2), (2, 3)] {
+                ring.set_ready(ready);
+                s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), slot, ready).unwrap(), i64::try_from(ready).unwrap() - 1);
+                encode_ready(&mut core, &mut s, "test", layout, &mut out, false).unwrap();
+            }
+            assert_eq!(ring.released(), 1, "the first packet is out");
+            stop(&mut core, &mut s);
+            drop(s);
+            assert_eq!((ring.released(), ring.fallback()), (released, fallback), "hung: {hung}");
+        }
     }
 }

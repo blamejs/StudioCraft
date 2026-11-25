@@ -916,6 +916,42 @@ impl Session {
         self.display.check(st, "vaUnmapBuffer")?;
         Ok(Some(tag))
     }
+
+    /// Whether the oldest frame in flight has been coded, without waiting: `Some(true)` when it
+    /// has or no frame is in flight, `Some(false)` while the GPU still codes it, and `None` when
+    /// the session cannot tell without waiting: a driver without `vaSyncSurface2`, a stalled
+    /// session, or a check that failed, whose error the next read reports.
+    pub(crate) fn oldest_coded(&mut self) -> Option<bool> {
+        let Some(slot) = self.slots.oldest() else { return Some(true) };
+        if self.slots.stalled() {
+            return None;
+        }
+        let (api, dpy) = (self.display.api, self.display.dpy);
+        let sync2 = api.sync_surface2.filter(|_| self.bounded)?;
+        // SAFETY: the surface is one of this session's render targets; a timeout of 0 does not wait.
+        let st = unsafe { sync2(dpy, self.inputs[slot], 0) };
+        match waited(st) {
+            Waited::Done => Some(true),
+            Waited::TimedOut => Some(false),
+            Waited::Unbounded => {
+                self.bounded = false;
+                None
+            }
+            Waited::Failed => None,
+        }
+    }
+
+    /// Wait for every frame in flight without reading its coded data. `false` when one did not
+    /// finish: the session is then stalled and, when dropped, left open, since the GPU may still
+    /// read its surfaces.
+    pub(crate) fn wait_all(&mut self) -> bool {
+        while let Some((slot, _)) = self.slots.pop() {
+            if self.wait(self.inputs[slot]).is_err() {
+                return false;
+            }
+        }
+        !self.slots.stalled()
+    }
 }
 
 impl Drop for Session {

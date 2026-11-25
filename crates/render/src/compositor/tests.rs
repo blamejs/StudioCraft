@@ -759,6 +759,17 @@ fn another_output_size_drops_the_gpu_queue_of_the_old_ring() {
     assert!(c.export_sink.is_some());
 }
 
+/// A submission counts as taken only while the device reports no new error and no fault: a device
+/// lost during it reaches the device-lost callback, not the error count.
+#[test]
+fn a_submission_on_a_lost_device_is_not_taken_though_no_error_was_counted() {
+    let health = craft_gpu_device::DeviceHealth::new();
+    assert!(submission_accepted(&health, health.errors()));
+    health.mark(craft_gpu_device::Fault::Lost("lost by the driver".into()));
+    assert_eq!(health.errors(), 0, "a loss is not an uncaptured error");
+    assert!(!submission_accepted(&health, 0));
+}
+
 #[test]
 fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     let Some(mut c) = compositor(32, 16) else { return };

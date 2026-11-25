@@ -104,7 +104,7 @@ pub(crate) fn dmabuf_in_memory(len: u64) -> std::io::Result<OwnedFd> {
 #[cfg(feature = "wgpu")]
 pub(crate) use export::{Exported, export, export_backend};
 #[cfg(all(feature = "wgpu", test))]
-pub(crate) use export::{export_barriers, padding_regions};
+pub(crate) use export::{export_barriers, nv12_plane_formats, padding_regions};
 #[cfg(feature = "wgpu")]
 pub(crate) use vulkan::{Imported, caps, open};
 
@@ -647,6 +647,14 @@ mod export {
         ))
     }
 
+    /// Whether `luma` and `chroma` are formats a copy into an NV12 image's planes can read: one
+    /// byte per texel for the luma plane and two for the chroma plane, as the plane formats
+    /// `R8_UNORM` and `R8G8_UNORM` have.
+    pub(crate) fn nv12_plane_formats(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
+        use wgpu::TextureFormat as F;
+        matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
+    }
+
     /// The copies that fill the padding of a plane of `dst` texels from a source plane of `src`
     /// texels at its top left: the source's last column into each column past it, its last row into
     /// each row past it, and its corner texel into each texel of the corner. The padding then
@@ -725,7 +733,8 @@ mod export {
     impl Exported {
         /// The commands that copy `planes`, the luma (R8) and chroma (RG8) textures of one frame,
         /// into image `slot`'s two planes. The planes must be in `TRANSFER_SRC_OPTIMAL`: the
-        /// caller's last use of them, already recorded, is a copy from them.
+        /// caller's last use of them, already recorded, is a copy from them. Planes of another
+        /// size or of formats with another texel size are [`Fallback::ImportFailed`].
         pub(crate) fn copy(&self, planes: &[wgpu::Texture], slot: usize) -> Result<wgpu::CommandBuffer, Fallback> {
             let dst = self.images.get(slot).ok_or(Fallback::ImportFailed)?.image;
             let (Some(luma), Some(chroma)) = (planes.first(), planes.get(1)) else { return Err(Fallback::ImportFailed) };
@@ -742,7 +751,10 @@ mod export {
                 extent: vk::Extent3D { width: texture.width(), height: texture.height(), depth: 1 },
             };
             let (w, h) = self.size;
-            if (luma.width(), luma.height()) != (w, h) || (chroma.width(), chroma.height()) != (w / 2, h / 2) {
+            if (luma.width(), luma.height()) != (w, h)
+                || (chroma.width(), chroma.height()) != (w / 2, h / 2)
+                || !nv12_plane_formats(luma.format(), chroma.format())
+            {
                 return Err(Fallback::ImportFailed);
             }
             let (luma_region, chroma_region) = (region(vk::ImageAspectFlags::PLANE_0, luma), region(vk::ImageAspectFlags::PLANE_1, chroma));
@@ -752,8 +764,9 @@ mod export {
             // SAFETY: the encoder belongs to `wgpu_device` and records nothing but these commands,
             // and the command buffer handle is only used while the closure runs. The plane images
             // are images of the device in `TRANSFER_SRC_OPTIMAL`, `dst` is an NV12 image of the
-            // device, and each region lies inside both images: the planes have the ring's size
-            // (checked above), which the NV12 image's padded planes hold, and the padding regions,
+            // device, each plane image has the texel size of the NV12 plane it is copied into
+            // (checked above), and each region lies inside both images: the planes have the
+            // ring's size (checked above), which the NV12 image's padded planes hold, and the padding regions,
             // made for that size when the ring opened, read only texels of the planes and write
             // only texels of the padded planes. The barriers move
             // `dst` from the encoder side to this queue and back around the copies. wgpu does not let an

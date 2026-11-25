@@ -143,7 +143,9 @@ work, without waiting.
   descriptor cannot be made. wgpu enables the three extensions whenever the adapter has them,
   whether or not the device asked for `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`. A VA-API encoder that cannot import a buffer records
   `Fallback::ImportFailed` on the ring, and one that cannot open on the ring's render node records
-  `Fallback::NoEncoder`. When the compositor's device stops before the last copy into a frame is
+  `Fallback::NoEncoder`. A VA-API encoder that stops while a picture it took is not finished also
+  records `Fallback::NoEncoder` and hands back none of the ring's buffers. A copy from planes
+  that are not one and two bytes per texel (R8 and RG8 formats) is `Fallback::ImportFailed`. When the compositor's device stops before the last copy into a frame is
   seen to finish, the ring records `Fallback::DeviceLost`, and the frames after the last finished
   copy never become ready.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with

@@ -1474,6 +1474,22 @@ mod gpu {
         assert!(crate::dmabuf_ffi::padding_regions((0, 0), (16, 16), vk::ImageAspectFlags::PLANE_0).is_empty());
     }
 
+    /// The raw copy into a Linux export image reads planes of one byte per texel for luma and two
+    /// for chroma: the converter's R8 and RG8 formats. A four-byte texture of the right size is
+    /// refused.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_export_copy_reads_only_planes_of_the_nv12_texel_sizes() {
+        use crate::dmabuf_ffi::nv12_plane_formats;
+        use wgpu::TextureFormat as F;
+        assert!(nv12_plane_formats(F::R8Uint, F::Rg8Uint), "the converter's planes");
+        assert!(nv12_plane_formats(F::R8Unorm, F::Rg8Unorm));
+        assert!(!nv12_plane_formats(F::Rgba8Unorm, F::Rg8Unorm), "a four-byte luma texture");
+        assert!(!nv12_plane_formats(F::R8Unorm, F::Rgba8Unorm), "a four-byte chroma texture");
+        assert!(!nv12_plane_formats(F::Rg8Unorm, F::R8Unorm), "the planes swapped");
+        assert!(!nv12_plane_formats(F::Stencil8, F::Rg8Unorm), "a stencil texture");
+    }
+
     /// The Linux export image is one non-disjoint NV12 image too, so its barriers name the color
     /// aspect and cover both planes.
     #[cfg(target_os = "linux")]

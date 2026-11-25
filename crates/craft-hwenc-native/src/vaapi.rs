@@ -443,6 +443,30 @@ impl Encoder {
         self.gop.submit(|pic| session.submit_imported(key, pic, (pts, pic.idr))).map_err(Error::Failed)
     }
 
+    /// Whether [`Encoder::encode_surface`] takes a picture now without waiting for the GPU: fewer
+    /// than [`SURFACE_DEPTH`] pictures are in flight, or the oldest one has been coded. With a
+    /// driver that has no `vaSyncSurface2` the encoder cannot tell without waiting, and this is
+    /// `true`.
+    pub fn surface_ready(&mut self) -> bool {
+        if self.session.in_flight() < SURFACE_DEPTH && !self.session.full() {
+            return true;
+        }
+        self.session.oldest_coded() != Some(false)
+    }
+
+    /// The packets kept from a call that failed, which the next call would return first, for a
+    /// caller that stops after the error.
+    pub fn take_kept(&mut self) -> Vec<Packet> {
+        std::mem::take(&mut self.kept)
+    }
+
+    /// Wait for every picture in flight without returning its packet, for an encoder that stops.
+    /// `false` when one did not finish: the encoder may then still read the buffers of its
+    /// pictures, and it is left open when dropped.
+    pub fn wait_idle(&mut self) -> bool {
+        self.session.wait_all()
+    }
+
     /// End the stream: every frame still inside comes out, after the packets kept from a call that
     /// failed. A frame that cannot be read is an error; the packets before it are kept for the next
     /// call, and the frames after it stay inside, each with its own timestamp.

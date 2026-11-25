@@ -950,10 +950,15 @@ impl Compositor {
         // textures), submitted right after the passes it copies from.
         let export = self.nv12.as_mut().and_then(Nv12::export_commands);
         // wgpu reports a submission it rejects to the device's error handler before `submit`
-        // returns; the export's frame is then not handed on.
+        // returns, and a device lost during it to the device-lost callback, which a poll runs;
+        // the export's frame is then not handed on.
+        let exporting = export.is_some();
         let errors = self.gpu.health().errors();
         self.gpu.queue.submit(std::iter::once(enc.finish()).chain(export));
-        let accepted = self.gpu.health().errors() == errors;
+        if exporting {
+            self.gpu.health().probe(&device);
+        }
+        let accepted = submission_accepted(self.gpu.health(), errors);
         if let Some(n) = &mut self.nv12 {
             n.exported(accepted);
             n.poll_export();
@@ -1255,6 +1260,12 @@ fn convert(
         return false;
     }
     true
+}
+
+/// Whether the device took the submission made while it had seen `errors` uncaptured errors: no
+/// error was reported since, and no fault, a device loss included, has been recorded.
+fn submission_accepted(health: &craft_gpu_device::DeviceHealth, errors: u64) -> bool {
+    health.is_ok() && health.errors() == errors
 }
 
 /// Record a copy of `texture` into `buffer`, `row` bytes per row.

@@ -128,6 +128,12 @@ impl Slots {
         Ok(slot)
     }
 
+    /// The slot of the oldest frame, left in place.
+    #[cfg_attr(not(all(target_os = "linux", target_pointer_width = "64")), allow(dead_code))]
+    pub(crate) fn oldest(&self) -> Option<usize> {
+        (self.count > 0).then_some(self.head)
+    }
+
     /// Take the oldest frame out: its slot and tag.
     pub(crate) fn pop(&mut self) -> Option<(usize, Tag)> {
         if self.count == 0 {
@@ -946,6 +952,12 @@ mod none {
             match *self {}
         }
         pub(crate) fn collect(&mut self, _: &mut Vec<u8>) -> Result<Option<Tag>, String> {
+            match *self {}
+        }
+        pub(crate) fn oldest_coded(&mut self) -> Option<bool> {
+            match *self {}
+        }
+        pub(crate) fn wait_all(&mut self) -> bool {
             match *self {}
         }
     }
