@@ -85,13 +85,13 @@ impl PortalCapture {
     /// Ask for the display's pictures as DMA-BUFs that the compositor opens on the GPU, when the
     /// compositor has published what its device can import. It takes effect when the stream
     /// negotiates its format, so it is called before a choice is made in the picker. Returns
-    /// whether it was asked for; a window capture always copies through memory.
+    /// whether it was asked for; a window capture always copies through memory, and so does a
+    /// stream that started offering its formats before the call.
     pub fn share_on_gpu(&mut self) -> bool {
         if self.kind != Kind::Display || craft_gpu_interop::dmabuf_caps().is_none() {
             return false;
         }
-        self.slot.request_gpu();
-        true
+        self.slot.request_gpu()
     }
 
     /// The newest picture on the GPU, without waiting. [`SharedGrab::Memory`] while the stream's
@@ -453,7 +453,7 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
     let stream = pw::stream::StreamRc::new(core.clone(), "StudioCraft screen capture", props)?;
     let stopping = Rc::new(Cell::new(false));
     let failed = Rc::new(Cell::new(false));
-    let caps = if slot.gpu_requested() { craft_gpu_interop::dmabuf_caps() } else { None };
+    let caps = if slot.take_gpu_request() { craft_gpu_interop::dmabuf_caps() } else { None };
     let params = offered_params(caps.as_deref()).map_err(|_| pw::Error::CreationFailed)?;
     let held = Rc::new(RefCell::new(HeldBuffers::new()));
     let left_gpu = Rc::new(Cell::new(false));

@@ -98,13 +98,24 @@ pub struct FrameSlot {
     spare: ArrayQueue<VideoFrame>,
     state: AtomicU8,
     shared: ArrayQueue<SharedFrame>,
-    /// Whether the source asked for pictures on the GPU, read when the stream negotiates.
-    share: AtomicBool,
+    /// Whether the source asked for pictures on the GPU, and whether the stream thread has read
+    /// the request ([`FrameSlot::take_gpu_request`]): one of the `SHARE_` values.
+    share: AtomicU8,
     /// Whether the stream's buffers are on the GPU now.
     on_gpu: AtomicBool,
     /// The pipe that wakes the stream thread's loop to leave the GPU ([`FrameSlot::wake_stream`]).
     wake: OnceLock<PipeWriter>,
 }
+
+/// The states of [`FrameSlot`]'s GPU request: not asked for, asked for, and read by the stream
+/// thread with or without the request.
+const SHARE_NONE: u8 = 0;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const SHARE_ASKED: u8 = 1;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const SHARE_READ: u8 = 2;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const SHARE_READ_ASKED: u8 = 3;
 
 /// Frames a capture keeps for reuse besides the newest one and the one on screen.
 pub const SPARE_FRAMES: usize = 2;
@@ -116,7 +127,7 @@ impl Default for FrameSlot {
             spare: ArrayQueue::new(SPARE_FRAMES),
             state: AtomicU8::new(0),
             shared: ArrayQueue::new(1),
-            share: AtomicBool::new(false),
+            share: AtomicU8::new(SHARE_NONE),
             on_gpu: AtomicBool::new(false),
             wake: OnceLock::new(),
         }
@@ -178,13 +189,32 @@ impl FrameSlot {
 /// The pictures on the GPU, which only a Linux screen capture publishes.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl FrameSlot {
-    /// Ask for the stream's pictures on the GPU, when the stream has not negotiated yet.
-    pub fn request_gpu(&self) {
-        self.share.store(true, Ordering::Release);
+    /// Ask for the stream's pictures on the GPU. Returns `false` when the stream thread has already
+    /// read the request without it, so the stream offers memory formats only.
+    pub fn request_gpu(&self) -> bool {
+        match self.share.compare_exchange(SHARE_NONE, SHARE_ASKED, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => true,
+            Err(now) => now == SHARE_ASKED || now == SHARE_READ_ASKED,
+        }
     }
 
+    #[cfg(test)]
     pub fn gpu_requested(&self) -> bool {
-        self.share.load(Ordering::Acquire)
+        matches!(self.share.load(Ordering::Acquire), SHARE_ASKED | SHARE_READ_ASKED)
+    }
+
+    /// Read the request for the stream thread, once, before the stream offers its formats. A
+    /// request made after this is refused ([`FrameSlot::request_gpu`]).
+    pub fn take_gpu_request(&self) -> bool {
+        // Once the request is asked for, only this call changes it again.
+        match self.share.compare_exchange(SHARE_NONE, SHARE_READ, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => false,
+            Err(SHARE_ASKED) => {
+                self.share.store(SHARE_READ_ASKED, Ordering::Release);
+                true
+            }
+            Err(now) => now == SHARE_READ_ASKED,
+        }
     }
 
     /// Record whether the stream's buffers are on the GPU. Turning it off drops a shared frame not
@@ -345,6 +375,20 @@ mod tests {
             slot.set_state(State::Waiting);
             assert_eq!(slot.state(), end);
         }
+    }
+
+    #[test]
+    fn a_gpu_request_counts_only_before_the_stream_thread_reads_it() {
+        let early = FrameSlot::default();
+        assert!(early.request_gpu());
+        assert!(early.take_gpu_request());
+        assert!(early.request_gpu(), "asking again changes nothing");
+        assert!(early.gpu_requested());
+        let late = FrameSlot::default();
+        assert!(!late.take_gpu_request());
+        assert!(!late.request_gpu(), "the stream already offers memory formats only");
+        assert!(!late.gpu_requested());
+        assert!(!late.take_gpu_request());
     }
 
     #[test]
