@@ -118,8 +118,10 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
-  `replay.save`. With audio tracks on for the stream, the recording folder is also checked for
-  `stream_start`, `stream.start` and a `stream.toggle` that would start the stream.
+  `replay.save`. With audio tracks on for the stream, or with a copy of the stream saved
+  (Settings › Stream › Copy of the stream on, and a keyframe interval of 2 seconds or less), the
+  recording folder is also checked for `stream_start`, `stream.start` and a `stream.toggle` that
+  would start the stream.
   `captions.download` writes a speech model into the models folder, so that folder, the model's
   folder and its files must lie inside a write root. `captions.start`, and a `captions.toggle` that
   would start captions, read a model from that folder, so they must lie inside a read root. The
