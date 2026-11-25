@@ -72,6 +72,11 @@ pub(crate) struct Wiring {
     /// The audio filters the mixer runs on each source, in its order, with the sample frames each
     /// one delays the audio by; replaced with the inputs.
     running: HashMap<SourceId, Vec<(FilterId, usize)>>,
+    /// The settings each running audio filter was last built with, by source and filter, with the
+    /// source's audio queue and the filter's kind: a new input list builds a filter that refused
+    /// its newer settings from these, while the source runs on the same queue and the filter is of
+    /// the same kind.
+    accepted: HashMap<(SourceId, FilterId), (SameQueue, String, Settings)>,
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
@@ -274,6 +279,7 @@ impl Wiring {
                 // Settings the filter refuses leave the running instance as it is.
                 match registry.filter(kind).and_then(|p| p.create(settings)) {
                     Ok(f) => {
+                        self.accepted.insert((s.id, *id), (k.queue.clone(), kind.clone(), settings.clone()));
                         match f.meter() {
                             Some(m) => self.meters.insert((s.id, *id), m),
                             None => self.meters.remove(&(s.id, *id)),
@@ -316,24 +322,30 @@ impl Wiring {
         let mut meters = HashMap::new();
         let mut latencies = HashMap::new();
         let mut running = HashMap::new();
+        let mut accepted = HashMap::new();
         for (k, (s, audio)) in key.iter().zip(&audio_sources) {
             let mut filters = Vec::new();
             let mut ids = Vec::new();
             for (id, kind, settings) in &k.filters {
-                match registry.filter(kind).and_then(|p| p.create(settings)) {
-                    Ok(f) => {
-                        if let Some(m) = f.meter() {
-                            meters.insert((s.id, *id), m);
-                        }
-                        if f.latency_frames() > 0 {
-                            let total: &mut usize = latencies.entry(s.id).or_default();
-                            *total = total.saturating_add(f.latency_frames());
-                        }
-                        ids.push((*id, f.latency_frames()));
-                        filters.push(f);
-                    }
-                    Err(e) => notices.push(problem(&s.name, &e)),
+                let create = |settings: &Settings| registry.filter(kind).and_then(|p| p.create(settings));
+                // A running filter that refused its new settings keeps running with the last ones it
+                // took.
+                let built = create(settings).map(|f| (f, settings)).or_else(|e| {
+                    notices.push(problem(&s.name, &e));
+                    let last = self.accepted.get(&(s.id, *id)).filter(|(queue, was, _)| *queue == k.queue && was == kind);
+                    last.ok_or(e).and_then(|(_, _, last)| create(last).map(|f| (f, last)))
+                });
+                let Ok((f, settings)) = built else { continue };
+                accepted.insert((s.id, *id), (k.queue.clone(), kind.clone(), settings.clone()));
+                if let Some(m) = f.meter() {
+                    meters.insert((s.id, *id), m);
                 }
+                if f.latency_frames() > 0 {
+                    let total: &mut usize = latencies.entry(s.id).or_default();
+                    *total = total.saturating_add(f.latency_frames());
+                }
+                ids.push((*id, f.latency_frames()));
+                filters.push(f);
             }
             running.insert(s.id, ids);
             let lv = Arc::clone(levels.entry(s.id).or_default());
@@ -353,6 +365,7 @@ impl Wiring {
         self.meters = meters;
         self.latencies = latencies;
         self.running = running;
+        self.accepted = accepted;
         self.gains = gains;
         self.offsets = offsets;
         self.modes = modes;
@@ -679,18 +692,19 @@ mod tests {
         c.source_mut(mic).unwrap().filters[1].settings = Settings::new().with("frames", -1);
         assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none());
         assert_eq!((notices.len(), wiring.filter_latency(mic)), (2, 300));
-        // The limiter starts with settings it takes, through a new input list.
+        // The limiter starts with settings it takes, through a new input list, and the lag that
+        // refuses -1 frames keeps running with its last settings.
         c.source_mut(mic).unwrap().filters[0].settings = Settings::new();
         let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
         let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
-        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.filters.len()), Some(3), "the lag refuses -1 frames");
-        assert_eq!(wiring.filter_latency(mic), 248);
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.filters.len()), Some(4));
+        assert_eq!(wiring.filter_latency(mic), 248 + 300);
         // A volume change beside new settings comes with the replacement.
         c.source_mut(mic).unwrap().filters[3].settings = Settings::new().with("db", 3.0);
         c.source_mut(mic).unwrap().audio.gain = 0.5;
         let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
         assert!(
-            matches!(cmds.as_slice(), [MixerCmd::ReplaceFilter { index: 2, .. }, MixerCmd::Gain { gain, .. }] if *gain == 0.5),
+            matches!(cmds.as_slice(), [MixerCmd::ReplaceFilter { index: 3, .. }, MixerCmd::Gain { gain, .. }] if *gain == 0.5),
             "{} commands",
             cmds.len()
         );
