@@ -2337,6 +2337,15 @@ fn live_chosen_again_after_studio_mode_went_off_and_on_keeps_the_mode_it_is_chos
     run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
     run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
     assert!(!on(&a), "Studio Mode was off before the first Live");
+    // Off before Live, turned off and on again on Live, and Live chosen again while it is still in
+    // force: Set up leaves it on.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    let again = run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert_eq!(again["changed"], json!(false));
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was chosen again while in force");
 }
 
 #[test]

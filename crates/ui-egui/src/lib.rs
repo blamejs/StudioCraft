@@ -1689,7 +1689,9 @@ impl StudioApp {
     /// Set up layout and, after Live, puts Studio Mode back to how it was when Live was chosen.
     /// Both keep the dock sizes when the docks are already arranged that way, and keep Docks ›
     /// Output Controls and Docks › Transition Controls as they are. Choosing the side that is in
-    /// force ([`Self::shown_side`]) changes nothing, and Set up then forgets the mode Live kept.
+    /// force ([`Self::shown_side`]) leaves the docks and Studio Mode as they are. Set up then
+    /// forgets the mode Live kept, and Live saves the mode it is chosen in when Studio Mode was
+    /// turned off since the mode was saved.
     fn set_side(&mut self, side: output_bar::Side) -> Result<Value, Msg> {
         let layout = store::built_in_layout(side.layout()).ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = side.layout()))?;
         let studio_mode = self.studio.engine().studio_mode();
@@ -1697,6 +1699,9 @@ impl StudioApp {
         if shown == Some(side) {
             if side == output_bar::Side::SetUp {
                 self.live_from = None;
+                self.live_mode_broken = false;
+            } else if self.live_mode_broken {
+                self.live_from = Some(studio_mode);
                 self.live_mode_broken = false;
             }
             return Ok(json!({"side": side.name(), "changed": false, "studio_mode": studio_mode}));
