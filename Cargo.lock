@@ -1815,6 +1815,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-rtp"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "craft-scopes"
 version = "0.1.0-alpha.2"
 dependencies = [

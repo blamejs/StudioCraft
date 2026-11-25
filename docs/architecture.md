@@ -18,6 +18,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-model` | Scenes, sources, scene items, transforms, profiles, settings schemas, and the versioned file format with its migrations. |
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
+| L0 | `craft-rtp` | RTP and RTCP for receiving media: packets, sender and receiver reports, BYE, the generic NACK and the picture loss indication, read and written; a jitter buffer that takes the time as an argument, lists missing packets for a NACK once and holds at most 2 s or 8 MiB; the mapping from RTP timestamps to the sender's wall clock; and depacketizers that rebuild H.264, VP8, Opus and AAC frames, dropping a video frame with a lost part and waiting for the next key frame. It opens no sockets, starts no threads and depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
@@ -55,6 +56,7 @@ build for `wasm32-unknown-unknown`:
 - `studiocraft-model`
 - `studiocraft-plugin`
 - `craft-flv`
+- `craft-rtp`
 - `craft-scopes`
 - `craft-ease`
 - `craft-transitions`
