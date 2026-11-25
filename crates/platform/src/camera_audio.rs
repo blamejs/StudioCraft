@@ -69,11 +69,13 @@ fn unique_best<R: Ord + Copy>(ranked: &[(usize, R)]) -> Option<usize> {
 /// the one input whose name names a microphone, then by how well its name matches the camera's
 /// name. When two of them are equally good, none is chosen. Without an input in the container,
 /// the input whose name is the camera's name is chosen, or else the input whose name holds the
-/// camera's name. When two inputs match a name equally well, none is chosen.
+/// camera's name. When two inputs match a name equally well, none is chosen. When the camera's
+/// container id is known, inputs in another container are not matched by name.
 pub fn microphone_index(camera_name: &str, camera_container: Option<&str>, inputs: &[Input]) -> Option<usize> {
     let inputs = inputs.get(..inputs.len().min(MAX_DEVICES)).unwrap_or_default();
     let camera = words(camera_name);
-    if let Some(want) = camera_container.filter(|c| !c.is_empty()) {
+    let want = camera_container.filter(|c| !c.is_empty());
+    if let Some(want) = want {
         let same: Vec<(usize, (bool, u8))> = inputs
             .iter()
             .enumerate()
@@ -84,7 +86,13 @@ pub fn microphone_index(camera_name: &str, camera_container: Option<&str>, input
             return unique_best(&same);
         }
     }
-    let ranked: Vec<(usize, u8)> = inputs.iter().enumerate().filter_map(|(i, input)| Some((i, name_rank(&camera, &input.device.name)?))).collect();
+    // When the camera's device is known, an input of another known device is not its microphone.
+    let ranked: Vec<(usize, u8)> = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| want.is_none() || input.container.as_deref().is_none_or(str::is_empty))
+        .filter_map(|(i, input)| Some((i, name_rank(&camera, &input.device.name)?)))
+        .collect();
     unique_best(&ranked)
 }
 
@@ -383,11 +391,24 @@ mod tests {
     #[test]
     fn without_a_container_match_the_name_decides() {
         let inputs =
-            [input("Microphone Array (Realtek Audio)", None), input("Microphone (HD Pro Webcam C920)", Some("elsewhere")), input("Studio Mic", None)];
+            [input("Microphone Array (Realtek Audio)", None), input("Microphone (HD Pro Webcam C920)", None), input("Studio Mic", Some("elsewhere"))];
         assert_eq!(microphone_index("HD Pro Webcam C920", Some("not listed"), &inputs), Some(1));
         assert_eq!(microphone_index("HD Pro Webcam C920", None, &inputs), Some(1));
+        // A camera whose device is unknown matches an input of a known device by name.
+        let inputs = [input("Microphone (HD Pro Webcam C920)", Some("elsewhere"))];
+        assert_eq!(microphone_index("HD Pro Webcam C920", None, &inputs), Some(0));
         // An empty container id is not a match for inputs without one.
         assert_eq!(microphone_index("HD Pro Webcam C920", Some(""), &[input("Studio Mic", Some(""))]), None);
+    }
+
+    #[test]
+    fn a_known_camera_does_not_take_the_microphone_of_another_known_device() {
+        // Two cameras of the same model; this one's microphone is not listed, the other's is.
+        let inputs = [input("Microphone (HD Webcam)", Some("other camera")), input("Microphone Array (Realtek Audio)", None)];
+        assert_eq!(microphone_index("HD Webcam", Some("this camera"), &inputs), None);
+        // An input whose device is not known still matches by name.
+        let inputs = [input("Microphone (HD Webcam)", Some("other camera")), input("HD Webcam", None)];
+        assert_eq!(microphone_index("HD Webcam", Some("this camera"), &inputs), Some(1));
     }
 
     #[test]

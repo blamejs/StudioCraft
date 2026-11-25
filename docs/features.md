@@ -177,7 +177,8 @@ characters. The input is found as follows:
    `/dev/v4l/by-id`.
 3. Otherwise, the input whose name is the camera's name, or else the one input whose name holds
    the camera's name, for example "Microphone (HD Webcam)" for a camera named "HD Webcam". When
-   two inputs match equally well, none is chosen.
+   two inputs match equally well, none is chosen. When the camera's device container or USB
+   serial is known, an input that belongs to another device is not matched by name.
 
 When the camera's device has several inputs on Windows or Linux, for example a microphone and a
 line input, the one whose name says it is a microphone is chosen, and after that the one whose
