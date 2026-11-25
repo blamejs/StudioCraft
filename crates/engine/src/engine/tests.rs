@@ -849,6 +849,41 @@ fn a_source_is_set_to_record_its_own_track_or_not() {
 }
 
 #[test]
+fn a_source_is_assigned_to_mix_tracks() {
+    let mut e = engine();
+    run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let tracks = |e: &Engine| e.collection().source_by_name("Mic").map(|s| s.audio.mix_tracks.numbers().collect::<Vec<_>>());
+    assert_eq!(tracks(&e), Some(vec![1, 2, 3, 4, 5, 6]), "a new source goes to every track");
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [3, 1]})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "the order given does not matter");
+    assert_eq!(e.undo_label(), Some("Mix Tracks"));
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [1, 3]})).unwrap().changed, "the same tracks are no change");
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": []})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![]), "a source can be on no track");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "one undo step");
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"source": "Mic", "tracks": [0]}),
+        json!({"source": "Mic", "tracks": [7]}),
+        json!({"source": "Mic", "tracks": [2, 2]}),
+        json!({"source": "Mic", "tracks": [1.5]}),
+        json!({"source": "Mic", "tracks": 1}),
+        json!({"source": "Mic", "tracks": null}),
+        json!({"source": "Mic", "tracks": ["1"]}),
+    ] {
+        assert!(run(&mut e, "source.mix_tracks", bad.clone()).is_err(), "{bad}");
+        assert_eq!(tracks(&e), Some(vec![1, 3]), "{bad} changes nothing");
+    }
+    add_color(&mut e, "Video");
+    let silent = run(&mut e, "source.mix_tracks", json!({"source": "Video", "tracks": [1]}));
+    assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
+    assert!(matches!(run(&mut e, "source.mix_tracks", json!({"source": "ghost", "tracks": [1]})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
 fn link_and_info_queries_change_nothing() {
     let mut e = engine();
     run(&mut e, "scene.add", json!({"name": "Second"})).unwrap();
@@ -1717,6 +1752,7 @@ fn every_spec_is_reachable() {
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
+            "source.mix_tracks" => json!({"source": 1, "tracks": [1, 2]}),
             "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),

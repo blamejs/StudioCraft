@@ -90,7 +90,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `source.mix_tracks`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `marker.rename`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -345,6 +345,16 @@ delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in samp
 48 kHz and in milliseconds rounded to 0.1 ms. A source whose filters add no delay, and a source
 the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
 are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
+
+### `source.mix_tracks`
+
+`source.mix_tracks` takes `{"source", "tracks"}` and assigns the source's audio to the mix tracks
+listed in `tracks`, numbers from 1 to 6 in any order; `[]` takes the source off every track. A
+number out of range, a number listed twice, a value that is not a list of whole numbers, or a
+source without audio is an error and changes nothing. Giving the tracks the source already has is
+no change and adds no undo step. The scene collection saves each source's tracks as
+`audio.mix_tracks`, and a new source is on all six. A recording writes the tracks in its profile's
+`output.recording_tracks` ([Recording](features.md#recording)).
 
 ### `filter.meter`
 
