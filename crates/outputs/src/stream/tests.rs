@@ -6,6 +6,8 @@ use std::sync::mpsc;
 use craft_flv::amf0::{self, Value};
 use craft_rtmp::{ChunkReader, ChunkWriter, MAX_MESSAGE, Message, MessageHeader, csid, msg_type, user_control};
 
+use studiocraft_media::pool::Pool;
+use studiocraft_media::video::VideoFrame;
 use studiocraft_model::Settings;
 
 use super::*;
@@ -2387,6 +2389,24 @@ fn a_stream_started_without_a_split_refuses_a_destination_with_its_own_encoder()
     out.stop().unwrap();
     until_closed(&seen);
     until_closed(&seen_b);
+}
+
+#[test]
+fn frames_the_split_drops_count_among_the_streams_dropped_frames() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let off = Target { enabled: false, ..with_own("z", &closed_url(), "kz", own(900, "speed")) };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "ka"), off], quick()).unwrap();
+    assert!(out.split.is_some());
+    let _ = out.stop();
+    // The split's thread has ended, so its queue keeps the newest frames and drops the rest.
+    let queue = out.video();
+    let frames = Pool::new(queue.capacity() + 5, VideoFrame::default);
+    for _ in 0..queue.capacity() + 5 {
+        queue.push(Arc::new(frames.take()));
+    }
+    assert_eq!(queue.dropped(), 5);
+    let _ = out.status();
+    assert_eq!(job.stats.dropped.load(Ordering::Relaxed), out.native.video().dropped() + 5);
 }
 
 #[test]

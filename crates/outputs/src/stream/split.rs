@@ -131,6 +131,11 @@ impl Split {
         Ok(())
     }
 
+    /// Frames the stream's video queue dropped because it was full; every encoder lost them.
+    pub(crate) fn dropped(&self) -> u64 {
+        self.video.dropped()
+    }
+
     /// The presentation time of the newest frame handed on; `None` before the first.
     pub(crate) fn newest(&self) -> Option<Tick> {
         let t = self.newest.load(Ordering::Acquire);

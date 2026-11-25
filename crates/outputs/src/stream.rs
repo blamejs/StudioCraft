@@ -2052,6 +2052,10 @@ impl OutputInstance for Streaming {
         let total = dests.iter().map(|d| d.bytes.load(Ordering::Relaxed)).fold(left, u64::saturating_add);
         self.stats.bytes.store(total, Ordering::Relaxed);
         let s = self.native.status();
+        // Frames the split drops never reach the stream's encoder, so they count with its own.
+        if let Some(split) = &self.split {
+            self.stats.dropped.store(self.native.dropped() + split.dropped(), Ordering::Relaxed);
+        }
         if !matches!(s, OutputStatus::Starting | OutputStatus::Running) {
             return s;
         }

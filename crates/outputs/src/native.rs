@@ -451,11 +451,16 @@ impl Native {
             return s.clone();
         }
         self.stats.queued.store(self.video.len() as u64, Ordering::Relaxed);
-        self.stats.dropped.store(self.video.dropped() + self.shared.late.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.stats.dropped.store(self.dropped(), Ordering::Relaxed);
         if let Some(f) = self.shared.failure() {
             return OutputStatus::Failed(f);
         }
         if self.shared.started.load(Ordering::Relaxed) { OutputStatus::Running } else { OutputStatus::Starting }
+    }
+
+    /// Frames the encoders lost: dropped from the full video queue, or dropped late.
+    pub(crate) fn dropped(&self) -> u64 {
+        self.video.dropped() + self.shared.late.load(Ordering::Relaxed)
     }
 
     /// End the inputs and wait for the file to be finished.
