@@ -2076,6 +2076,19 @@ fn a_copy_leaves_a_file_that_already_holds_data_as_it_is() {
     assert_eq!(kept, b"someone else's file");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_copy_does_not_open_a_link_put_in_place_of_its_file() {
+    let dir = TestDir::new("stream-copy-link");
+    let elsewhere = TestDir::new("stream-copy-link-target");
+    let target = elsewhere.file();
+    std::fs::File::create(&target).unwrap();
+    // The reserved file is replaced by a link to an empty file in another folder.
+    std::os::unix::fs::symlink(&target, dir.file()).unwrap();
+    assert!(copy::create(&dir.file())().is_err());
+    assert!(copy::create(&target)().is_ok());
+}
+
 /// A file whose first flush says it was reached and then waits until its gate's sender is
 /// dropped. Dropping the file drops `dropped`.
 struct FlushGated {

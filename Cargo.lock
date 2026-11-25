@@ -6587,6 +6587,7 @@ dependencies = [
  "craft-rtmp",
  "craft-video",
  "crossbeam-queue",
+ "libc",
  "log",
  "portable-atomic",
  "serde_json",
