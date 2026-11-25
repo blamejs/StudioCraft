@@ -1879,6 +1879,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A table value below 0 or above 1 is blended as it is, and only the result is clipped.
+    #[test]
+    fn apply_lut_blends_table_values_outside_0_to_1_before_clipping() {
+        let dir = scratch("apply-lut-wide");
+        // Red runs from -1 to 1, so a red of 128 / 255 comes out at about 1 / 255.
+        let wide = cube(&dir, "wide.cube", 2, |[r, g, b]| [2.0 * r - 1.0, g, b]);
+        let source = [[128, 100, 50, 255], [255, 100, 50, 255]];
+        let Some(px) = draw_frame(&source, 2, 1, vec![lut(&Settings::new().with("file", wide.as_str()))]) else { return };
+        assert!(near(canvas_pixel(&px, 0, 0), [1, 100, 50, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        assert!(near(canvas_pixel(&px, 1, 0), [255, 100, 50, 255]), "{:?}", canvas_pixel(&px, 1, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn scroll(s: &Settings) -> VideoEffect {
         Scroll.create(s).unwrap().video_effect().unwrap()
     }

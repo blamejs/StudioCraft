@@ -1,9 +1,11 @@
 //! The Apply LUT filter: a color lookup table from a `.cube` or `.png` file.
 //!
-//! A 3D table of `n` x `n` x `n` colors is uploaded as one picture `n * n` pixels wide and `n`
-//! high: the slice for blue index `b` starts at x = `b * n`, red runs along x within the slice
-//! and green along y. The shader blends the four nearest colors in each of the two nearest
-//! slices, so it never reads across a slice's edge.
+//! A 3D table of `n` x `n` x `n` colors is uploaded as one picture `n * n` pixels wide and
+//! `2 * n` high: the slice for blue index `b` starts at x = `b * n`, red runs along x within the
+//! slice and green along y. Each value is stored as 16 bits, its high byte in the top `n` rows
+//! and its low byte in the same place in the bottom `n` rows. The shader blends the four nearest
+//! colors in each of the two nearest slices in both halves, so it never reads across a slice's
+//! edge, and joins the two blends into one value.
 
 use std::io::Read;
 use std::path::Path;
@@ -12,7 +14,7 @@ use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
 use studiocraft_plugin::{EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, VIDEO_EFFECT_PARAMS, VideoEffect};
 
 use super::{Params, checked, checked_text, float_field};
-use crate::image::load_within;
+use crate::image::{load_within, open_file};
 
 /// The largest 3D table, in colors along each side: its picture is `n * n` pixels wide, which
 /// must fit in [`MAX_EFFECT_SIDE`].
@@ -47,25 +49,44 @@ impl Lut {
         self.colors.get(i).copied().unwrap_or([0.0; 3])
     }
 
-    /// The table as the picture the shader reads (see the module comment), each channel clamped
-    /// to 0..1 and rounded to 8 bits; `None` when the size is outside 2 to [`LUT_MAX_SIZE`] or
-    /// the table does not hold `size`³ colors.
+    /// The range the table's picture stores for each channel, as its minimum and its width:
+    /// from the channel's lowest value to its highest, widened to take in 0 to 1. A width is not
+    /// a number when the channel's values span more than the largest `f32`.
+    pub fn output_range(&self) -> ([f32; 3], [f32; 3]) {
+        let (mut lo, mut hi) = ([0.0f32; 3], [1.0f32; 3]);
+        for color in &self.colors {
+            for c in 0..3 {
+                (lo[c], hi[c]) = (lo[c].min(color[c]), hi[c].max(color[c]));
+            }
+        }
+        (lo, [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]])
+    }
+
+    /// The table as the picture the shader reads (see the module comment), each value stored
+    /// as its place in [`Lut::output_range`] rounded to 16 bits; `None` when the size is outside
+    /// 2 to [`LUT_MAX_SIZE`], the table does not hold `size`³ colors, or the output range's
+    /// width is not a finite number.
     pub fn picture(&self) -> Option<EffectImage> {
         let n = self.size;
-        if !(2..=LUT_MAX_SIZE).contains(&n) || self.colors.len() != (n * n * n) as usize {
+        let (lo, span) = self.output_range();
+        if !(2..=LUT_MAX_SIZE).contains(&n) || self.colors.len() != (n * n * n) as usize || !span.iter().all(|w| w.is_finite()) {
             return None;
         }
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let mut rgba = Vec::with_capacity((n * n * n * 4) as usize);
+        let word = |c: usize, v: f32| (((v - lo[c]) / span[c]).clamp(0.0, 1.0) * 65535.0).round() as u16;
+        let half = (n * n * n * 4) as usize;
+        let (mut high, mut low) = (Vec::with_capacity(half * 2), Vec::with_capacity(half));
         for g in 0..n {
             for b in 0..n {
                 for r in 0..n {
-                    let [cr, cg, cb] = self.at(r, g, b);
-                    rgba.extend_from_slice(&[byte(cr), byte(cg), byte(cb), 255]);
+                    let [vr, vg, vb] = self.at(r, g, b);
+                    let [cr, cg, cb] = [word(0, vr), word(1, vg), word(2, vb)];
+                    high.extend_from_slice(&[(cr >> 8) as u8, (cg >> 8) as u8, (cb >> 8) as u8, 255]);
+                    low.extend_from_slice(&[cr as u8, cg as u8, cb as u8, 255]);
                 }
             }
         }
-        EffectImage::new(n * n, n, rgba)
+        high.append(&mut low);
+        EffectImage::new(n * n, 2 * n, high)
     }
 }
 
@@ -92,10 +113,14 @@ fn size_of(words: &[&str], line: usize, max: u32) -> Result<u32, String> {
 /// Read a `.cube` table: `LUT_3D_SIZE` or `LUT_1D_SIZE`, optional `DOMAIN_MIN` and
 /// `DOMAIN_MAX` (or `LUT_3D_INPUT_RANGE` and `LUT_1D_INPUT_RANGE`), then one red, green, blue
 /// line per entry. Lines starting with `#` and other keywords, `TITLE` among them, are skipped.
-/// A 1D table becomes a 3D table of up to [`LUT_1D_LATTICE`] colors a side.
+/// A keyword that sets the size or the input range may appear only once. A 1D table becomes a
+/// 3D table of up to [`LUT_1D_LATTICE`] colors a side.
 pub fn parse_cube(text: &str) -> Result<Lut, String> {
+    const CHANNELS: [&str; 3] = ["red", "green", "blue"];
     let (mut size3, mut size1) = (None, None);
     let (mut lo, mut hi) = ([0.0f32; 3], [1.0f32; 3]);
+    // The lines that set the input range's minimum and maximum.
+    let (mut lo_line, mut hi_line) = (None::<usize>, None::<usize>);
     let mut rows: Vec<[f32; 3]> = Vec::new();
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for (i, raw) in text.lines().enumerate() {
@@ -113,7 +138,9 @@ pub fn parse_cube(text: &str) -> Result<Lut, String> {
         if head.starts_with('#') {
             continue;
         }
-        let numeric = head.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.');
+        // A spelling that reads as a number which is not finite, such as `nan` or `inf`, is a
+        // color line, and `triple` refuses it.
+        let numeric = head.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') || head.parse::<f32>().is_ok();
         if numeric {
             let want = match (size3, size1) {
                 (Some(n), None) => u64::from(n).pow(3),
@@ -129,15 +156,33 @@ pub fn parse_cube(text: &str) -> Result<Lut, String> {
         if !rows.is_empty() {
             return Err(bad(line, format!("`{head}` comes after the table's colors")));
         }
+        let once = |given: bool| if given { Err(bad(line, format!("`{head}` appears more than once"))) } else { Ok(()) };
+        let range_again = |prev: Option<usize>| match prev {
+            Some(p) => Err(bad(line, format!("`{head}` gives the input range again after line {p}"))),
+            None => Ok(()),
+        };
         match head {
-            "LUT_3D_SIZE" => size3 = Some(size_of(rest, line, LUT_MAX_SIZE)?),
-            "LUT_1D_SIZE" => size1 = Some(size_of(rest, line, LUT_MAX_1D_SIZE)?),
-            "DOMAIN_MIN" => lo = triple(rest, line)?,
-            "DOMAIN_MAX" => hi = triple(rest, line)?,
+            "LUT_3D_SIZE" => {
+                once(size3.is_some())?;
+                size3 = Some(size_of(rest, line, LUT_MAX_SIZE)?);
+            }
+            "LUT_1D_SIZE" => {
+                once(size1.is_some())?;
+                size1 = Some(size_of(rest, line, LUT_MAX_1D_SIZE)?);
+            }
+            "DOMAIN_MIN" => {
+                range_again(lo_line)?;
+                (lo, lo_line) = (triple(rest, line)?, Some(line));
+            }
+            "DOMAIN_MAX" => {
+                range_again(hi_line)?;
+                (hi, hi_line) = (triple(rest, line)?, Some(line));
+            }
             "LUT_3D_INPUT_RANGE" | "LUT_1D_INPUT_RANGE" => {
+                range_again(lo_line.or(hi_line))?;
                 let [a, b] = rest else { return Err(bad(line, "expected two numbers")) };
                 let [a, b, _] = triple(&[*a, *b, "0"], line)?;
-                (lo, hi) = ([a; 3], [b; 3]);
+                (lo, hi, lo_line, hi_line) = ([a; 3], [b; 3], Some(line), Some(line));
             }
             _ => {}
         }
@@ -145,15 +190,20 @@ pub fn parse_cube(text: &str) -> Result<Lut, String> {
             return Err(bad(line, "the file holds both a 1D and a 3D table; only one is supported"));
         }
     }
+    // A fault in the input range is reported at the later of the lines that set it; the
+    // default range of 0 to 1 has none.
+    let at = lo_line.max(hi_line).map_or_else(String::new, |l| format!("line {l}: "));
     if let Some(c) = (0..3).find(|&c| hi[c] <= lo[c]) {
-        return Err(format!("the input range's maximum ({}) must be above its minimum ({})", hi[c], lo[c]));
+        let channel = CHANNELS[c];
+        return Err(format!("{at}the input range's {channel} maximum ({}) must be above its minimum ({})", hi[c], lo[c]));
     }
     // The shader scales each channel by 1 over the range's width, which must be a number.
     if let Some(c) = (0..3).find(|&c| {
         let width = hi[c] - lo[c];
         !width.is_finite() || !(1.0 / width).is_finite()
     }) {
-        return Err(format!("the input range from {} to {} is too narrow or too wide", lo[c], hi[c]));
+        let channel = CHANNELS[c];
+        return Err(format!("{at}the {channel} input range from {} to {} is too narrow or too wide", lo[c], hi[c]));
     }
     let (want, n) = match (size3, size1) {
         (Some(n), None) => (u64::from(n).pow(3), n),
@@ -163,24 +213,31 @@ pub fn parse_cube(text: &str) -> Result<Lut, String> {
     if rows.len() as u64 != want {
         return Err(format!("the table has {} of its {want} entries", rows.len()));
     }
-    if size3.is_some() {
-        return Ok(Lut { size: n, colors: rows, domain_min: lo, domain_max: hi });
+    let lut = if size3.is_some() { Lut { size: n, colors: rows, domain_min: lo, domain_max: hi } } else { lattice_from_1d(&rows, lo, hi) };
+    // The shader reads each value back as its place in its channel's output range, whose width
+    // must be a number.
+    let (out_lo, span) = lut.output_range();
+    if let Some(c) = (0..3).find(|&c| !span[c].is_finite()) {
+        let out_hi = lut.colors.iter().fold(1.0f32, |hi, v| hi.max(v[c]));
+        let channel = CHANNELS[c];
+        return Err(format!("the table's {channel} values from {} to {out_hi} span too wide a range", out_lo[c]));
     }
-    Ok(lattice_from_1d(&rows, lo, hi))
+    Ok(lut)
 }
 
 /// The 3D table that applies the 1D table `rows` to each channel on its own.
 fn lattice_from_1d(rows: &[[f32; 3]], lo: [f32; 3], hi: [f32; 3]) -> Lut {
     let len = rows.len().max(1);
     let size = (len as u32).clamp(2, LUT_1D_LATTICE);
-    // The 1D table's value for channel `c` at lattice index `k`, read between its entries.
+    // The 1D table's value for channel `c` at lattice index `k`, read between its entries in
+    // `f64`, where the difference of two finite `f32` values is finite.
     let curve = |c: usize, k: u32| {
         let pos = f64::from(k) / f64::from(size - 1) * (len - 1) as f64;
         let i = (pos.floor() as usize).min(len - 1);
         let j = (i + 1).min(len - 1);
-        let f = (pos - i as f64) as f32;
-        let (a, b) = (rows.get(i).map_or(0.0, |r| r[c]), rows.get(j).map_or(0.0, |r| r[c]));
-        a + (b - a) * f
+        let f = pos - i as f64;
+        let (a, b) = (rows.get(i).map_or(0.0, |r| f64::from(r[c])), rows.get(j).map_or(0.0, |r| f64::from(r[c])));
+        (a + (b - a) * f) as f32
     };
     let mut colors = Vec::with_capacity((size * size * size) as usize);
     for b in 0..size {
@@ -230,8 +287,9 @@ pub fn lut_from_picture(width: u32, height: u32, rgba: &[u8]) -> Result<Lut, Str
 }
 
 /// Read the table in `path`: a picture for a `.png` file, otherwise a `.cube` table. Either is
-/// refused before it is read when the file is larger than [`LUT_MAX_FILE`], and a picture with
-/// more pixels than the largest table's (`LUT_MAX_SIZE`³) is refused before it is decoded.
+/// refused before it is read when the path is not a file (a named pipe among them) or the file
+/// is larger than [`LUT_MAX_FILE`], and a picture with more pixels than the largest table's
+/// (`LUT_MAX_SIZE`³) is refused before it is decoded.
 pub fn load_lut(path: &str) -> Result<Lut, PluginError> {
     let p = Path::new(path);
     let failed = |e: String| PluginError::Failed(format!("{path}: {e}"));
@@ -241,7 +299,7 @@ pub fn load_lut(path: &str) -> Result<Lut, PluginError> {
         return lut_from_picture(w, h, &rgba).map_err(failed);
     }
     let io = |e: std::io::Error| failed(e.to_string());
-    let file = std::fs::File::open(p).map_err(io)?;
+    let file = open_file(p).map_err(io)?;
     let too_large = || failed(format!("the file is larger than {} MB", LUT_MAX_FILE / (1024 * 1024)));
     if file.metadata().map_err(io)?.len() > LUT_MAX_FILE {
         return Err(too_large());
@@ -259,7 +317,8 @@ pub fn load_lut(path: &str) -> Result<Lut, PluginError> {
 const APPLY_LUT: &str = r"
 fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
     // p0.x: colors along each side of the table, p0.y: the amount from 0 to 1. p1.xyz: the
-    // input range's minimum, extra_params()[0].xyz: 1 over its width.
+    // input range's minimum, extra_params()[0].xyz: 1 over its width. extra_params()[1].xyz and
+    // extra_params()[2].xyz: each channel's minimum and width of the range the picture stores.
     let a = color.a;
     if a <= 0.0 {
         return color;
@@ -269,11 +328,16 @@ fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: v
     let c = clamp((rgb - p1.xyz) * extra_params()[0].xyz, vec3<f32>(0.0), vec3<f32>(1.0)) * (n - 1.0);
     let b0 = floor(c.b);
     let b1 = min(b0 + 1.0, n - 1.0);
-    let y = (c.g + 0.5) / n;
+    // The high bytes are in the picture's top half and the low bytes in its bottom half.
+    let y = (c.g + 0.5) / (2.0 * n);
     let x0 = (b0 * n + c.r + 0.5) / (n * n);
     let x1 = (b1 * n + c.r + 0.5) / (n * n);
-    let looked = mix(image_at(vec2<f32>(x0, y)).rgb, image_at(vec2<f32>(x1, y)).rgb, c.b - b0);
-    return vec4<f32>(mix(rgb, looked, p0.y) * a, a);
+    let high = mix(image_at(vec2<f32>(x0, y)).rgb, image_at(vec2<f32>(x1, y)).rgb, c.b - b0);
+    let low = mix(image_at(vec2<f32>(x0, y + 0.5)).rgb, image_at(vec2<f32>(x1, y + 0.5)).rgb, c.b - b0);
+    let stored = (high * 65280.0 + low * 255.0) / 65535.0;
+    // The table's values are read back and blended before the result is clipped to 0..1.
+    let looked = stored * extra_params()[2].xyz + extra_params()[1].xyz;
+    return vec4<f32>(clamp(mix(rgb, looked, p0.y), vec3<f32>(0.0), vec3<f32>(1.0)) * a, a);
 }
 ";
 
@@ -311,11 +375,22 @@ impl Filter for ApplyLut {
     }
 }
 
+/// A table as the shader reads it.
+#[derive(Clone)]
+struct Table {
+    image: EffectImage,
+    size: u32,
+    domain_min: [f32; 3],
+    domain_max: [f32; 3],
+    /// Each channel's minimum and width of the range `image` stores.
+    out_min: [f32; 3],
+    out_span: [f32; 3],
+}
+
 struct LutInstance {
     /// The file `table` was read from.
     file: String,
-    /// The table's picture, its size and its input range.
-    table: Option<(EffectImage, u32, [f32; 3], [f32; 3])>,
+    table: Option<Table>,
     params: Params,
 }
 
@@ -331,23 +406,26 @@ impl FilterInstance for LutInstance {
         } else {
             let lut = load_lut(file)?;
             let image = lut.picture().ok_or_else(|| PluginError::Failed(format!("{file}: the table is too large")))?;
-            Some((image, lut.size, lut.domain_min, lut.domain_max))
+            let (out_min, out_span) = lut.output_range();
+            Some(Table { image, size: lut.size, domain_min: lut.domain_min, domain_max: lut.domain_max, out_min, out_span })
         };
         let mut p = [0.0; VIDEO_EFFECT_PARAMS];
         p[1] = (amount / 100.0) as f32;
-        if let Some((_, n, lo, hi)) = &table {
-            p[0] = *n as f32;
-            p[4..7].copy_from_slice(lo);
+        if let Some(t) = &table {
+            p[0] = t.size as f32;
+            p[4..7].copy_from_slice(&t.domain_min);
             for c in 0..3 {
-                p[8 + c] = 1.0 / (hi[c] - lo[c]);
+                p[8 + c] = 1.0 / (t.domain_max[c] - t.domain_min[c]);
             }
+            p[12..15].copy_from_slice(&t.out_min);
+            p[16..19].copy_from_slice(&t.out_span);
         }
         (self.file, self.table, self.params) = (file.to_string(), table, p);
         Ok(())
     }
     fn video_effect(&self) -> Option<VideoEffect> {
-        let (image, ..) = self.table.as_ref()?;
-        Some(VideoEffect { image: Some(image.clone()), ..VideoEffect::new("apply_lut", APPLY_LUT, self.params) })
+        let table = self.table.as_ref()?;
+        Some(VideoEffect { image: Some(table.image.clone()), ..VideoEffect::new("apply_lut", APPLY_LUT, self.params) })
     }
 }
 
@@ -436,7 +514,7 @@ mod tests {
             ("LUT_3D_SIZE 2\n0 0\n".into(), "line 2: expected three numbers"),
             ("LUT_3D_SIZE 2\n0 nan 0\n".into(), "line 2: `nan` is not a number"),
             ("LUT_3D_SIZE 2\n0 1e999 0\n".into(), "line 2: `1e999` is not a number"),
-            (format!("LUT_3D_SIZE 2\nDOMAIN_MAX 1 0 1\n{eight}"), "maximum (0) must be above its minimum (0)"),
+            (format!("LUT_3D_SIZE 2\nDOMAIN_MAX 1 0 1\n{eight}"), "line 2: the input range's green maximum (0) must be above its minimum (0)"),
             ("LUT_3D_SIZE 2\nLUT_1D_SIZE 2\n".into(), "line 2: the file holds both"),
         ];
         for (text, want) in cases {
@@ -458,22 +536,44 @@ mod tests {
     fn the_table_picture_puts_each_blue_slice_beside_the_last() {
         let lut = parse_cube(&identity_cube(3)).unwrap();
         let image = lut.picture().unwrap();
-        assert_eq!((image.width(), image.height()), (9, 3));
+        assert_eq!((image.width(), image.height()), (9, 6));
         let px = |x: usize, y: usize| {
             let i = (y * 9 + x) * 4;
             image.rgba()[i..i + 4].to_vec()
         };
-        // x = b * 3 + r, y = g.
+        // x = b * 3 + r, y = g for the high bytes and 3 + g for the low bytes.
         assert_eq!(px(0, 0), [0, 0, 0, 255]);
         assert_eq!(px(2, 0), [255, 0, 0, 255]);
         assert_eq!(px(0, 2), [0, 255, 0, 255]);
         assert_eq!(px(3, 0), [0, 0, 128, 255]);
         assert_eq!(px(8, 2), [255, 255, 255, 255]);
-        // Colors outside 0..1 are clamped.
+        assert_eq!((px(3, 3), px(8, 5)), (vec![0, 0, 0, 255], vec![255, 255, 255, 255]));
+        // 0.1 is stored as 6554 of 65535: a high byte of 25 and a low byte of 154.
+        let tenth = Lut { size: 2, colors: vec![[0.1; 3]; 8], domain_min: [0.0; 3], domain_max: [1.0; 3] }.picture().unwrap();
+        assert_eq!((&tenth.rgba()[..4], &tenth.rgba()[32..36]), (&[25, 25, 25, 255][..], &[154, 154, 154, 255][..]));
+        // One large value leaves the others close: 0.5 in a range of 0 to 100 reads back within
+        // 0.001.
+        let mut colors = vec![[0.5; 3]; 8];
+        colors[7] = [100.0; 3];
+        let outlier = Lut { size: 2, colors, domain_min: [0.0; 3], domain_max: [1.0; 3] };
+        let (lo, span) = outlier.output_range();
+        let rgba = outlier.picture().unwrap().rgba().to_vec();
+        let back = (f32::from(rgba[0]) * 256.0 + f32::from(rgba[32])) / 65535.0 * span[0] + lo[0];
+        assert!((back - 0.5).abs() < 0.001, "{back}");
+        // Each channel has its own range: a large blue value leaves a red ramp of 0 to 1 whole.
+        let mut colors: Vec<[f32; 3]> = (0..8).map(|i| [(i % 2) as f32, 0.0, 0.0]).collect();
+        colors[7][2] = 1e6;
+        let blue = Lut { size: 2, colors, domain_min: [0.0; 3], domain_max: [1.0; 3] };
+        assert_eq!(blue.output_range(), ([0.0; 3], [1.0, 1.0, 1e6]));
+        assert_eq!(blue.picture().unwrap().rgba()[4..8], [255, 0, 0, 255]);
+        // Colors outside 0..1 are stored as their place in their channel's output range, here
+        // -1 to 1 for red and 0 to 2 for green.
         let wide = Lut { size: 2, colors: vec![[-1.0, 2.0, 0.5]; 8], domain_min: [0.0; 3], domain_max: [1.0; 3] };
+        assert_eq!(wide.output_range(), ([-1.0, 0.0, 0.0], [2.0, 2.0, 1.0]));
         assert_eq!(wide.picture().unwrap().rgba()[..4], [0, 255, 128, 255]);
+        assert_eq!(lut.output_range(), ([0.0; 3], [1.0; 3]));
         let largest = parse_cube(&identity_cube(LUT_MAX_SIZE)).unwrap().picture().unwrap();
-        assert_eq!((largest.width(), largest.height()), (LUT_MAX_SIZE * LUT_MAX_SIZE, LUT_MAX_SIZE));
+        assert_eq!((largest.width(), largest.height()), (LUT_MAX_SIZE * LUT_MAX_SIZE, 2 * LUT_MAX_SIZE));
     }
 
     /// The identity table of `t * t` colors a side, as a square grid of tiles.
@@ -504,10 +604,12 @@ mod tests {
         assert_eq!(lut.at(0, 15, 0), [0.0, 1.0, 0.0]);
         assert_eq!(lut.at(0, 0, 15), [0.0, 0.0, 1.0]);
         assert_eq!(lut.at(5, 10, 6), [85.0 / 255.0, 170.0 / 255.0, 102.0 / 255.0]);
-        // The row layout is the picture the shader reads, so it reads back unchanged.
+        // The row layout is the top half of the picture the shader reads, so it reads back
+        // unchanged.
         let row = parse_cube(&identity_cube(5)).unwrap().picture().unwrap();
-        let back = lut_from_picture(row.width(), row.height(), row.rgba()).unwrap();
-        assert_eq!(back.picture().unwrap().rgba(), row.rgba());
+        let top = &row.rgba()[..row.rgba().len() / 2];
+        let back = lut_from_picture(row.width(), row.height() / 2, top).unwrap();
+        assert_eq!(&back.picture().unwrap().rgba()[..top.len()], top);
         for (w, h) in [(10, 3), (65, 65), (1, 1), (0, 0), (512 * 512, 512)] {
             assert!(lut_from_picture(w, h, &[0; 16]).is_err(), "{w} x {h}");
         }
@@ -528,10 +630,11 @@ mod tests {
         let mut f = ApplyLut.create(&s).unwrap();
         let e = f.video_effect().unwrap();
         assert_eq!(e.params[..2], [3.0, 0.25]);
+        assert_eq!((&e.params[12..15], &e.params[16..19]), (&[0.0; 3][..], &[1.0; 3][..]));
         assert_eq!(e.params[4..7], [0.1, 0.2, 0.3]);
         assert_eq!(e.params[8..11], [1.0 / (0.9f32 - 0.1), 1.0 / (0.8f32 - 0.2), 1.0 / (0.7f32 - 0.3)]);
         let image = e.image.clone().unwrap();
-        assert_eq!((image.width(), image.height()), (9, 3));
+        assert_eq!((image.width(), image.height()), (9, 6));
         // Amount changes without reading the file again, even after it is gone.
         std::fs::remove_file(&file).unwrap();
         f.update(&s.clone().with("amount", 50.0)).unwrap();
@@ -595,10 +698,116 @@ mod tests {
         let big = dir.join("big.png");
         ::image::RgbaImage::new(1000, 1000).save(&big).unwrap();
         let err = load_lut(&big.to_string_lossy()).unwrap_err().to_string();
-        assert!(!err.contains("not a color table"), "{err}");
+        assert!(err.contains("1000000 pixels exceed max 729000"), "{err}");
         let fits = dir.join("fits.png");
         ::image::RgbaImage::new(729, 729).save(&fits).unwrap();
         assert_eq!(load_lut(&fits.to_string_lossy()).unwrap().size, 81);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_finite_first_number_is_refused_with_its_line() {
+        let seven = "0 0 0\n".repeat(7);
+        for first in ["nan", "NaN", "inf", "-inf", "+Infinity"] {
+            let err = parse_cube(&format!("LUT_3D_SIZE 2\n{first} 0 0\n{seven}0 0 0\n")).unwrap_err();
+            assert!(err.contains(&format!("line 2: `{first}` is not a number")), "{first}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_keyword_is_refused_with_its_line() {
+        let eight = "0 0 0\n".repeat(8);
+        let cases = [
+            ("LUT_3D_SIZE 2\nLUT_3D_SIZE 2\n", "line 2: `LUT_3D_SIZE` appears more than once"),
+            ("LUT_1D_SIZE 2\nLUT_1D_SIZE 2\n", "line 2: `LUT_1D_SIZE` appears more than once"),
+            ("LUT_3D_SIZE 2\nDOMAIN_MAX 1 1 1\nDOMAIN_MAX 0.5 1 1\n", "line 3: `DOMAIN_MAX` gives the input range again after line 2"),
+            ("DOMAIN_MIN 0 0 0\nLUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\n", "line 3: `DOMAIN_MIN` gives the input range again after line 1"),
+            ("LUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nLUT_3D_INPUT_RANGE 0 1\n", "line 3: `LUT_3D_INPUT_RANGE` gives the input range again after line 2"),
+            ("LUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE 0 1\nDOMAIN_MAX 1 1 1\n", "line 3: `DOMAIN_MAX` gives the input range again after line 2"),
+        ];
+        for (head, want) in cases {
+            let text = if head.contains("1D") { format!("{head}0 0 0\n0 0 0\n") } else { format!("{head}{eight}") };
+            let err = parse_cube(&text).unwrap_err();
+            assert!(err.contains(want), "{head:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_range_fault_names_the_line_and_the_channel() {
+        let eight = "0 0 0\n".repeat(8);
+        let err = parse_cube(&format!("LUT_3D_SIZE 2\nDOMAIN_MAX 1 0 1\n{eight}")).unwrap_err();
+        assert!(err.contains("line 2: the input range's green maximum (0) must be above its minimum (0)"), "{err}");
+        let err = parse_cube(&format!("DOMAIN_MIN 0 0 0\nLUT_3D_SIZE 2\nDOMAIN_MAX 1 1 1e-45\n{eight}")).unwrap_err();
+        assert!(err.contains("line 3: the blue input range from 0 to 0.000000000000000000000000000000000000000000001 is too"), "{err}");
+    }
+
+    #[test]
+    fn a_1d_table_with_extreme_values_never_holds_a_value_that_is_not_a_number() {
+        // Values whose span is past the largest number are refused instead of loading a table
+        // that holds a value that is not a number.
+        let err = parse_cube("LUT_1D_SIZE 2\n-3e38 0 0\n3e38 1 1\n").unwrap_err();
+        assert!(err.contains("too wide a range"), "{err}");
+        // Values within reach keep their ends.
+        let lut = parse_cube("LUT_1D_SIZE 2\n-1e30 0 0\n1e30 1 1\n").unwrap();
+        assert_eq!((lut.at(0, 0, 0)[0], lut.at(lut.size - 1, 0, 0)[0]), (-1e30, 1e30));
+    }
+
+    #[test]
+    fn table_values_outside_0_to_1_are_kept_until_after_they_are_blended() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-lut-wide-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Red runs from -1 to 1 along the red index; green and blue are the identity.
+        let file = dir.join("wide.cube");
+        std::fs::write(&file, "LUT_3D_SIZE 2\n-1 0 0\n1 0 0\n-1 1 0\n1 1 0\n-1 0 1\n1 0 1\n-1 1 1\n1 1 1\n").unwrap();
+        let s = Settings::new().with("file", &*file.to_string_lossy());
+        let e = ApplyLut.create(&s).unwrap().video_effect().unwrap();
+        let image = e.image.clone().unwrap();
+        // The value the shader reads back for a stored red byte: its place in the stored range.
+        let red = |x: usize| f32::from(image.rgba()[x * 4]) / 255.0 * e.params[16] + e.params[12];
+        let (low, high) = (red(0), red(1));
+        assert!((low + 1.0).abs() < 0.01 && (high - 1.0).abs() < 0.01, "{low} {high}");
+        assert!(((low + high) / 2.0).abs() < 0.01, "the middle of the red ramp is about 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A named pipe at `path` that a thread writes `data` into once a reader opens it.
+    #[cfg(unix)]
+    fn pipe_with(path: &std::path::Path, data: &'static [u8]) -> std::thread::JoinHandle<()> {
+        let status = std::process::Command::new("mkfifo").arg(path).status().unwrap();
+        assert!(status.success());
+        let path = path.to_path_buf();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            if let Ok(mut w) = std::fs::OpenOptions::new().write(true).open(&path) {
+                let _ = w.write_all(data);
+            }
+        })
+    }
+
+    /// Hold `path` open for reading until `writer` has opened it, written and closed it.
+    #[cfg(unix)]
+    fn release_writer(path: &std::path::Path, writer: std::thread::JoinHandle<()>) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let reader = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).unwrap();
+        writer.join().unwrap();
+        drop(reader);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_refused_without_waiting_for_a_writer() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-lut-pipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["pipe.cube", "pipe.png"] {
+            let path = dir.join(name);
+            let writer = pipe_with(&path, b"LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
+            let result = load_lut(&path.to_string_lossy());
+            release_writer(&path, writer);
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("is not a file"), "{name}: {err}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

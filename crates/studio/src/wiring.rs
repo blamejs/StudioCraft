@@ -157,11 +157,13 @@ impl Wiring {
                 seen.insert(f.id);
                 match self.video_filters.get_mut(&f.id) {
                     Some(v) if v.kind == f.kind => {
+                        // `settings` are the last ones the filter took, so rejected settings
+                        // reach it again at the next sync.
                         if v.settings != f.settings {
-                            if let Err(e) = v.instance.update(&f.settings) {
-                                notices.push(problem(&f.name, &e));
+                            match v.instance.update(&f.settings) {
+                                Ok(()) => v.settings = f.settings.clone(),
+                                Err(e) => notices.push(problem(&f.name, &e)),
                             }
-                            v.settings = f.settings.clone();
                         }
                     }
                     _ => match plugin.create(&f.settings) {
@@ -513,5 +515,43 @@ mod tests {
         wiring.sync_video_filters(&c, &registry, &mut notices);
         assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (0, 0));
         assert_eq!(wiring.filtered_size(&c, SourceId(123_456), (640, 360)), (640, 360));
+    }
+
+    /// Settings a filter rejected reach it again at the next sync, so a file that was missing
+    /// is read once it is there.
+    #[test]
+    fn rejected_filter_settings_are_tried_again_at_the_next_sync() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let table = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+        let identity = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        std::fs::write(table("first.cube"), identity).unwrap();
+        let mut c = default_collection("Test");
+        let id = FilterId(950);
+        c.sources[0].filters = vec![FilterConfig {
+            id,
+            kind: "apply_lut".into(),
+            kind_version: 1,
+            name: "Look".into(),
+            enabled: true,
+            settings: Settings::new().with("file", table("first.cube")),
+        }];
+        let (mut wiring, mut notices) = (Wiring::default(), Vec::new());
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert!(notices.is_empty());
+        let image = |w: &Wiring| w.video_filters.get(&id).and_then(|v| v.instance.video_effect()).and_then(|e| e.image);
+        let first = image(&wiring);
+        assert!(first.is_some());
+        // The second file is missing: the filter keeps its table.
+        c.sources[0].filters[0].settings = Settings::new().with("file", table("second.cube"));
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(image(&wiring), first);
+        // Once the file is there, the same settings load it.
+        std::fs::write(table("second.cube"), identity.replace("1 1 1\n", "0.5 0.5 0.5\n")).unwrap();
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(notices.len(), 1);
+        assert_ne!(image(&wiring), first);
     }
 }

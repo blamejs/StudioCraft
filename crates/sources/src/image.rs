@@ -53,12 +53,31 @@ pub(crate) fn load(path: &Path) -> Result<(u32, u32, Vec<u8>), PluginError> {
     load_within(path, MAX_FILE, MAX_PIXELS)
 }
 
-/// Decode `path` to straight-alpha RGBA, refusing a file larger than `max_file` bytes or a
-/// picture with more than `max_pixels` pixels before reading or decoding it.
+/// Open `path` for reading, refusing anything that is not a file, such as a folder, a device or
+/// a named pipe. On Unix the file is opened without waiting, so a named pipe with no writer is
+/// refused at once instead of holding the caller.
+pub(crate) fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "it is not a file"));
+    }
+    Ok(file)
+}
+
+/// Decode `path` to straight-alpha RGBA, refusing anything that is not a file, a file larger
+/// than `max_file` bytes or a picture with more than `max_pixels` pixels before reading or
+/// decoding it.
 pub(crate) fn load_within(path: &Path, max_file: u64, max_pixels: u64) -> Result<(u32, u32, Vec<u8>), PluginError> {
     let failed = |e: std::io::Error| PluginError::Failed(format!("{}: {e}", path.display()));
     let too_large = || PluginError::Failed(format!("{} is too large", path.display()));
-    let file = std::fs::File::open(path).map_err(failed)?;
+    let file = open_file(path).map_err(failed)?;
     if file.metadata().map_err(failed)?.len() > max_file {
         return Err(too_large());
     }
