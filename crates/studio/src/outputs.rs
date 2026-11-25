@@ -302,9 +302,10 @@ pub(crate) struct Outputs {
     copy_path: Option<PathBuf>,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
-    /// The last [`MAX_UNFINISHED`] copies of streams that ended, each file, whether it was
-    /// finished and its [`StreamCopyState::start_ns`], oldest first, for [`Outputs::copy_ended`]
-    /// and [`Outputs::copy_start`].
+    /// The copies of streams that ended, each file, whether it was finished and its
+    /// [`StreamCopyState::start_ns`], oldest first, for [`Outputs::copy_ended`] and
+    /// [`Outputs::copy_start`]: the last [`MAX_UNFINISHED`], and every copy that ended since the
+    /// last poll began, however many there are, until the next poll.
     ended_copies: Vec<(PathBuf, bool, u64)>,
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
@@ -582,6 +583,10 @@ impl Outputs {
     /// Finished stops and failed outputs.
     pub(crate) fn poll(&mut self) -> Events {
         let mut ev = Events::default();
+        // The tick has written the timelines of the copies that ended in the last poll, so only
+        // the last ones are kept.
+        let forgotten = self.ended_copies.len().saturating_sub(MAX_UNFINISHED);
+        self.ended_copies.drain(..forgotten);
         let failed: Vec<(OutputKind, String, Option<HardwareRun>)> = self
             .active
             .iter()
@@ -660,9 +665,6 @@ impl Outputs {
     /// Keep `state`, the copy of a stream that ended, among the ended copies, and as the last
     /// stream's copy when `latest`, that stream being the last one that started.
     fn note_copy_ended(&mut self, state: StreamCopyState, latest: bool) {
-        if self.ended_copies.len() >= MAX_UNFINISHED {
-            self.ended_copies.remove(0);
-        }
         self.ended_copies.push((state.path.clone(), state.finished, state.start_ns));
         if latest {
             self.last_copy = Some(state);
@@ -670,9 +672,9 @@ impl Outputs {
     }
 
     /// [`StreamCopyState::start_ns`] of the copy of a stream at `path` that ended, the latest one
-    /// with that file name; 0 when no such copy is known.
-    pub(crate) fn copy_start(&self, path: &Path) -> u64 {
-        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map_or(0, |(.., start)| *start)
+    /// with that file name; `None` when no such copy is known.
+    pub(crate) fn copy_start(&self, path: &Path) -> Option<u64> {
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map(|(.., start)| *start)
     }
 
     /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
@@ -2619,6 +2621,11 @@ pub(crate) mod tests {
         stream_with_copy_gated(o, start, stats, ended, None)
     }
 
+    /// Note that the copy of a stream that a newer stream followed ended as `state`.
+    pub(crate) fn earlier_copy_ended(o: &mut Outputs, state: StreamCopyState) {
+        o.note_copy_ended(state, false);
+    }
+
     /// [`stream_with_copy`], with a stop that waits on `gate` when one is given.
     fn stream_with_copy_gated(
         o: &mut Outputs,
@@ -2733,7 +2740,25 @@ pub(crate) mod tests {
                 true,
             );
         }
+        // Every copy that ended since the last poll is known until the next one.
+        assert_eq!(o.copy_ended(&path), Some(false));
+        assert_eq!(o.copy_ended(Path::new("/videos/0.mkv")), Some(true), "ended since the last poll");
+        let _ = o.poll();
+        assert_eq!(o.copy_ended(Path::new("/videos/0.mkv")), Some(true));
         assert_eq!(o.copy_ended(&path), Some(false), "forgotten");
+        assert_eq!(o.ended_copies.len(), MAX_UNFINISHED);
+    }
+
+    #[test]
+    fn copies_that_end_in_one_poll_are_all_known_until_the_next() {
+        let mut o = Outputs::default();
+        let path = |n: usize| PathBuf::from(format!("/videos/{n}.mkv"));
+        for n in 0..=MAX_UNFINISHED {
+            o.note_copy_ended(StreamCopyState { path: path(n), finished: true, ..StreamCopyState::default() }, n == MAX_UNFINISHED);
+        }
+        assert_eq!(o.copy_ended(&path(0)), Some(true), "the first one is still known");
+        let _ = o.poll();
+        assert_eq!((o.copy_ended(&path(0)), o.copy_ended(&path(1))), (Some(false), Some(true)), "the poll after keeps the last ones");
         assert_eq!(o.ended_copies.len(), MAX_UNFINISHED);
     }
 

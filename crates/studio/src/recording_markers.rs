@@ -115,6 +115,9 @@ struct Watched {
     recording: PathBuf,
     rate: FrameRate,
     written: Option<Written>,
+    /// The part of the output before its file's start, as far as it is known: see
+    /// [`Ended::opening`].
+    opening: Tick,
     markers: Vec<Marker>,
 }
 
@@ -154,7 +157,9 @@ impl MarkerWatch {
             && self.passed != Some(start)
         {
             match target() {
-                Some((recording, rate, written)) => self.recording = Some(Watched { start, recording, rate, written, markers: Vec::new() }),
+                Some((recording, rate, written)) => {
+                    self.recording = Some(Watched { start, recording, rate, written, opening: Tick(0), markers: Vec::new() });
+                }
                 None => self.passed = Some(start),
             }
         }
@@ -171,7 +176,8 @@ impl MarkerWatch {
     }
 
     /// Mark the watched recording at `now`: named `name`, or "Marker N" for its Nth marker.
-    /// Returns the marker, and where it lies in the recording as far as the encoder has written.
+    /// Returns the marker, and where it lies in the recording as far as the encoder has written:
+    /// in a file that starts after the output's opening, from the file's first frame.
     pub(crate) fn add(&mut self, now: Tick, name: Option<String>) -> Result<(Marker, Tick), String> {
         let Some(w) = &mut self.recording else {
             return Err(if self.copy { "no stream with a copy is running" } else { "no recording is running" }.into());
@@ -186,8 +192,22 @@ impl MarkerWatch {
         let name = name.unwrap_or_else(|| format!("Marker {}", w.markers.len() + 1));
         let marker = Marker { at: Tick(now.0.saturating_sub(w.start.0).max(0)), name };
         w.markers.push(marker.clone());
-        let placed = in_recording(w.written.as_ref(), marker.at);
+        let placed = Tick(in_recording(w.written.as_ref(), marker.at).0.saturating_sub(w.opening.0).max(0));
         Ok((marker, placed))
+    }
+
+    /// Note that the file at `recording` starts `opening` after its output's first frame, as a
+    /// stream's copy that lost the stream's first packets does: when that file is watched,
+    /// [`MarkerWatch::add`] then gives a marker's place in the file.
+    pub(crate) fn set_opening(&mut self, recording: &Path, opening: Tick) {
+        if let Some(w) = self.recording.as_mut().filter(|w| w.recording == recording) {
+            w.opening = opening;
+        }
+    }
+
+    /// The opening [`MarkerWatch::set_opening`] gave the watched output; 0 without one.
+    fn opening(&self) -> Tick {
+        self.recording.as_ref().map_or(Tick(0), |w| w.opening)
     }
 
     /// The start of the watched recording on the studio clock.
@@ -349,6 +369,9 @@ pub(crate) struct SessionMarker {
     pub in_recording: Option<InRecording>,
     pub in_copy: Option<InRecording>,
     pub in_take: Option<InTake>,
+    /// The part of the stream before the copy's file, in seconds, as far as it was known when
+    /// `stream_copy` was last placed; [`MarkerSession::copy_opened`] places it again.
+    pub copy_opening: f64,
 }
 
 impl SessionMarker {
@@ -435,15 +458,15 @@ impl MarkerSession {
     }
 
     /// Keep the marker [`MarkerSession::next`] numbered, set at `now`, with what each output did
-    /// with it and where each output that kept it holds it. Returns the marker's number, name,
-    /// time from the session's start and each output's result. When no output kept it, nothing is
-    /// kept and the error names each cause.
+    /// with it and where each output that kept it holds it, the copy with the opening its time
+    /// leaves out. Returns the marker's number, name, time from the session's start and each
+    /// output's result. When no output kept it, nothing is kept and the error names each cause.
     pub(crate) fn push(
         &mut self,
         (index, name): (usize, String),
         now: Tick,
         results: Results,
-        (in_recording, in_copy, in_take): (Option<InRecording>, Option<InRecording>, Option<InTake>),
+        (in_recording, in_copy, in_take): (Option<InRecording>, Option<(InRecording, f64)>, Option<InTake>),
     ) -> Result<Value, String> {
         let Some(start) = self.start else {
             return Err(NO_SESSION.into());
@@ -460,7 +483,8 @@ impl MarkerSession {
             stream_copy: kept(&results.stream_copy),
             audio_tracks: kept(&results.audio_tracks),
             in_recording: in_recording.filter(|_| kept(&results.recording).is_some()),
-            in_copy: in_copy.filter(|_| kept(&results.stream_copy).is_some()),
+            copy_opening: in_copy.as_ref().map_or(0.0, |(_, opening)| *opening),
+            in_copy: in_copy.map(|(r, _)| r).filter(|_| kept(&results.stream_copy).is_some()),
             in_take: in_take.filter(|_| kept(&results.audio_tracks).is_some()),
         };
         if marker.recording.is_none() && marker.stream_copy.is_none() && marker.audio_tracks.is_none() {
@@ -469,6 +493,29 @@ impl MarkerSession {
         let v = results.into_json(marker.json());
         self.markers.push(marker);
         Ok(v)
+    }
+
+    /// Note that the file of the stream's copy at `copy` starts `opening` seconds into the stream:
+    /// each marker the copy holds gets its time in the file, at 0 for one from before the file's
+    /// start.
+    pub(crate) fn copy_opened(&mut self, copy: &Path, opening: f64) {
+        for m in self.markers.iter_mut().filter(|m| m.in_copy.as_ref().is_some_and(|r| r.recording == copy)) {
+            if let Some(s) = m.stream_copy.as_mut() {
+                *s = (*s + m.copy_opening - opening).max(0.0);
+            }
+            m.copy_opening = opening;
+        }
+    }
+
+    /// The files of the streams' copies that hold the session's markers, each once.
+    pub(crate) fn copy_files(&self) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = Vec::new();
+        for r in self.markers.iter().filter_map(|m| m.in_copy.as_ref()) {
+            if !files.contains(&r.recording) {
+                files.push(r.recording.clone());
+            }
+        }
+        files
     }
 
     /// The session's marker numbered `index` (from 1).
@@ -829,6 +876,10 @@ impl Studio {
             self.write_marker_file(ended, false);
         }
         for ended in copies {
+            // In the tick that sees the copy end, while its start is still known.
+            if let Some(start_ns) = self.outputs.copy_start(&ended.recording) {
+                self.recording_markers.session.copy_opened(&ended.recording, tick_of(Duration::from_nanos(start_ns)).seconds());
+            }
             self.write_marker_file(ended, true);
         }
     }
@@ -848,7 +899,7 @@ impl Studio {
             return;
         }
         if copy {
-            ended.opening = tick_of(Duration::from_nanos(self.outputs.copy_start(&ended.recording)));
+            ended.opening = tick_of(Duration::from_nanos(self.outputs.copy_start(&ended.recording).unwrap_or(0)));
         }
         let recording = ended.recording.clone();
         match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended).map(|p| (p, marker_ranges(&ended)))) {
@@ -862,9 +913,26 @@ impl Studio {
     /// time in the recording, or in the copy without a recording, and what each output did.
     pub(crate) fn add_recording_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
+        self.note_copy_opening();
         let now = self.clock.now();
         let rm = &mut self.recording_markers;
         mark_recording_and_copy(&mut rm.watch, &mut rm.stream, now, name.as_deref()).map_err(StudioError::Output)
+    }
+
+    /// Give the watch of the running stream's copy, and the session's markers in the copies of
+    /// streams that ran and that run, the part of the stream before each copy's file starts, so
+    /// each marker reports its time in the file. It reads the stream's state, so it runs for a
+    /// marker command, not each frame.
+    fn note_copy_opening(&mut self) {
+        for copy in self.recording_markers.session.copy_files() {
+            if let Some(start_ns) = self.outputs.copy_start(&copy) {
+                self.recording_markers.session.copy_opened(&copy, tick_of(Duration::from_nanos(start_ns)).seconds());
+            }
+        }
+        let Some(c) = self.outputs.stream_copy() else { return };
+        let opening = tick_of(Duration::from_nanos(c.start_ns));
+        self.recording_markers.stream.set_opening(&c.path, opening);
+        self.recording_markers.session.copy_opened(&c.path, opening.seconds());
     }
 
     /// Whether File › Add Recording Marker has an output to mark: a running recording, or a
@@ -878,10 +946,12 @@ impl Studio {
     /// marker. An output that does not keep it is reported, and the others keep it.
     pub(crate) fn add_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
+        self.note_copy_opening();
         let now = self.clock.now();
         let next = self.recording_markers.session.next(name).map_err(StudioError::Output)?;
         let (recording, in_recording) = self.recording_markers.watch.mark(now, &next.1);
         let (stream_copy, in_copy) = self.recording_markers.stream.mark(now, &next.1);
+        let in_copy = in_copy.map(|r| (r, self.recording_markers.stream.opening().seconds()));
         let take = self.mark_audio_tracks(now, &next.1);
         let audio_tracks = Placed::of(take.as_ref().map(|r| r.as_ref().map(InTake::seconds).map_err(String::clone)));
         let in_take = take.and_then(Result::ok);
@@ -894,6 +964,7 @@ impl Studio {
     /// new name. An output that already gives the marker that name is not written again.
     pub(crate) fn rename_marker(&mut self, index: usize, name: String) -> Result<Value, StudioError> {
         self.sync_recording_markers();
+        self.note_copy_opening();
         let m = self.recording_markers.session.get(index).map_err(StudioError::Output)?.clone();
         let mut rename_in = |held: &Option<InRecording>, kept: Option<f64>| match (held, kept) {
             (Some(r), Some(seconds)) => match self.rename_recording_marker(r, &name) {
@@ -950,6 +1021,7 @@ impl Studio {
     /// `marker.list`.
     pub(crate) fn marker_list(&mut self) -> Value {
         self.sync_recording_markers();
+        self.note_copy_opening();
         self.recording_markers.session.json()
     }
 
@@ -1687,6 +1759,49 @@ mod tests {
     }
 
     #[test]
+    fn a_marker_in_an_earlier_streams_copy_lists_its_time_in_that_copys_file() {
+        let mut studio = crate::tests::headless();
+        let copy = PathBuf::from("Stream 2026-11-23 10-00-00.mkv");
+        let s = &mut studio.recording_markers.session;
+        s.observe(Some(t(0)), false, t(0));
+        let held = InRecording { recording: copy.clone(), index: 0, name: "Goal".into(), copy: true };
+        let results = Results { recording: Placed::Off, stream_copy: Placed::Kept(1.5), audio_tracks: Placed::Off };
+        // Set before the copy got its first packet.
+        s.push(s.next(None).unwrap(), t(1500), results, (None, Some((held, 0.0)), None)).unwrap();
+        // That stream's copy ends after a newer stream started; its file starts 1 s into the stream.
+        let ended = studiocraft_plugin::StreamCopyState { path: copy, finished: true, start_ns: 1_000_000_000, ..Default::default() };
+        crate::outputs::tests::earlier_copy_ended(&mut studio.outputs, ended);
+        assert_eq!(studio.marker_list()["markers"][0]["stream_copy"], json!({"seconds": 0.5}));
+    }
+
+    #[test]
+    fn a_marker_in_a_copy_gets_its_time_in_the_file_in_the_tick_that_sees_the_copy_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("Stream 2026-11-23 10-00-00.mkv");
+        let mut studio = crate::tests::headless();
+        let s = &mut studio.recording_markers.session;
+        s.observe(Some(t(0)), false, t(0));
+        let held = InRecording { recording: copy.clone(), index: 0, name: "Goal".into(), copy: true };
+        let results = Results { recording: Placed::Off, stream_copy: Placed::Kept(1.5), audio_tracks: Placed::Off };
+        s.push(s.next(None).unwrap(), t(1500), results, (None, Some((held, 0.0)), None)).unwrap();
+        let markers = vec![Marker { at: t(1500), name: "Goal".into() }];
+        let finishing =
+            Ended { recording: copy.clone(), rate: FrameRate::new(30, 1), length: t(3000), written: None, opening: Tick(0), markers, failed: None };
+        studio.recording_markers.copies_finishing.push(finishing);
+        let ended = studiocraft_plugin::StreamCopyState { path: copy, finished: true, start_ns: 1_000_000_000, ..Default::default() };
+        crate::outputs::tests::earlier_copy_ended(&mut studio.outputs, ended);
+        studio.sync_recording_markers();
+        // Many more copies end before the next marker command: the first copy's start is forgotten.
+        for n in 0..20 {
+            let other = studiocraft_plugin::StreamCopyState { path: dir.path().join(format!("{n}.mkv")), finished: true, ..Default::default() };
+            crate::outputs::tests::earlier_copy_ended(&mut studio.outputs, other);
+        }
+        let _ = studio.outputs.poll();
+        assert_eq!(studio.marker_list()["markers"][0]["stream_copy"], json!({"seconds": 0.5}));
+        studio.finish_recording_markers_blocking(t(3000));
+    }
+
+    #[test]
     fn a_streams_copy_that_was_not_finished_gets_no_timeline() {
         let dir = tempfile::tempdir().unwrap();
         let copy = dir.path().join("Stream 2026-11-23 10-00-00.mkv");
@@ -1769,6 +1884,26 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_that_lost_the_streams_opening_reports_each_markers_time_in_its_file() {
+        let mut copy = MarkerWatch::of_stream_copy();
+        copy.set_opening(Path::new("Stream a.mkv"), t(1000));
+        copy.observe(Some(t(0)), || rec("Stream a.mkv"), t(0));
+        // A new copy knows nothing yet of where its file starts.
+        assert_eq!(copy.add(t(500), None).unwrap().1, t(500));
+        // Another file's opening is not this copy's.
+        copy.set_opening(Path::new("Stream b.mkv"), t(1000));
+        assert_eq!(copy.add(t(600), None).unwrap().1, t(600));
+        copy.set_opening(Path::new("Stream a.mkv"), t(1000));
+        let (marker, placed) = copy.add(t(1500), None).unwrap();
+        // The marker keeps its time in the stream, for the timeline, and reports its time in the file.
+        assert_eq!((marker.at, placed), (t(1500), t(500)));
+        // A marker from before the file's start is at its first frame.
+        assert_eq!(copy.add(t(800), None).unwrap().1, t(0));
+        let v = mark_recording_and_copy(&mut MarkerWatch::default(), &mut copy, t(2500), None).unwrap();
+        assert_eq!(v["stream_copy"]["seconds"], json!(1.5));
+    }
+
+    #[test]
     fn a_session_starts_with_the_copy_and_reports_each_output() {
         let mut s = MarkerSession::default();
         // A stream with a copy started at 1 s and a recording at 3 s: the session starts with the copy.
@@ -1786,5 +1921,25 @@ mod tests {
         let v = s.renamed(1, "Goal".into(), results).unwrap();
         assert_eq!((v["name"].clone(), v["recording"].clone(), v["stream_copy"].clone()), (json!("Goal"), Value::Null, json!({"seconds": 5.0})));
         assert_eq!(s.json()["markers"][0]["stream_copy"], Value::Null, "the copy did not keep the marker when it was set");
+    }
+
+    #[test]
+    fn a_sessions_markers_in_a_copy_move_into_its_file_once_its_start_is_known() {
+        let mut s = MarkerSession::default();
+        s.observe(Some(t(0)), false, t(0));
+        let held = |index| InRecording { recording: PathBuf::from("Stream a.mkv"), index, name: "Marker".into(), copy: true };
+        let copy = |seconds| Results { recording: Placed::Off, stream_copy: Placed::Kept(seconds), audio_tracks: Placed::Off };
+        // Set before the copy got its first packet, and once its file was known to start at 1 s.
+        s.push(s.next(None).unwrap(), t(500), copy(0.5), (None, Some((held(0), 0.0)), None)).unwrap();
+        s.push(s.next(None).unwrap(), t(1500), copy(1.5), (None, Some((held(1), 0.0)), None)).unwrap();
+        s.push(s.next(None).unwrap(), t(2500), copy(1.5), (None, Some((held(2), 1.0)), None)).unwrap();
+        s.copy_opened(Path::new("Stream b.mkv"), 2.0);
+        s.copy_opened(Path::new("Stream a.mkv"), 1.0);
+        let seconds =
+            |s: &MarkerSession| s.json()["markers"].as_array().unwrap().iter().map(|m| m["stream_copy"]["seconds"].clone()).collect::<Vec<_>>();
+        assert_eq!(seconds(&s), [json!(0.0), json!(0.5), json!(1.5)]);
+        // Looking again changes nothing.
+        s.copy_opened(Path::new("Stream a.mkv"), 1.0);
+        assert_eq!(seconds(&s), [json!(0.0), json!(0.5), json!(1.5)]);
     }
 }
