@@ -21,7 +21,9 @@ pub enum Fallback {
     /// The compositor's Vulkan device was opened without `VK_KHR_external_memory_win32`, which
     /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2). On Linux: it was
     /// opened without `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`
-    /// (wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`).
+    /// (an import also needs wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`; an export needs
+    /// `VK_KHR_external_memory_fd` as well, and wgpu enables the three whenever the adapter has
+    /// them).
     MissingExtension,
     /// The hardware encoder cannot open a session on the compositor's graphics adapter, so the
     /// program frames it encodes go through CPU memory.
@@ -139,8 +141,12 @@ pub fn check_export(backend: Backend, compositor: Option<AdapterId>) -> Result<A
 /// `compositor` is made on. The checks of [`check_export`] come first, with `external_memory`
 /// meaning `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`; then
 /// `modifiers`, the DRM format modifiers the device can export an NV12 image of the ring's size
-/// with, must not be empty ([`Fallback::Modifier`]).
+/// with, must not be empty ([`Fallback::Modifier`]). DMA-BUFs are shared through Vulkan only, so
+/// Direct3D 12 is [`Fallback::UnsupportedBackend`].
 pub fn check_dmabuf_export(backend: Backend, compositor: Option<AdapterId>, modifiers: &[u64]) -> Result<AdapterId, Fallback> {
+    if backend == Backend::Dx12 {
+        return Err(Fallback::UnsupportedBackend);
+    }
     let adapter = check_export(backend, compositor)?;
     if modifiers.is_empty() {
         return Err(Fallback::Modifier);

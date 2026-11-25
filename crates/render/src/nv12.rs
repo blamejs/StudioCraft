@@ -228,13 +228,14 @@ impl Nv12 {
     }
 
     /// Hand the frame whose copy was submitted to the GPU queues; the ring's ready fence is set
-    /// after the copy. A failure stops the export.
-    pub(crate) fn exported(&mut self) {
+    /// after the copy. `accepted` is whether wgpu took the submission: a submission it rejected
+    /// reported an error, and its copy never runs. A failure stops the export.
+    pub(crate) fn exported(&mut self, accepted: bool) {
         let Some(export) = &mut self.export else { return };
         let Some((ticket, pts)) = export.ticket.take() else { return };
-        if export.commands.take().is_some() {
-            // The copy was never submitted: its texture is free again once the encoder releases a
-            // later frame, since the released fence only grows.
+        if export.commands.take().is_some() || !accepted {
+            // The copy was never submitted, or wgpu rejected it: its texture is free again once
+            // the encoder releases a later frame, since the released fence only grows.
             return;
         }
         match export.exporter.submitted(ticket) {

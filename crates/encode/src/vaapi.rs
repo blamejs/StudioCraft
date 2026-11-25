@@ -193,6 +193,7 @@ trait Surfaces {
     fn imported(&self, key: usize) -> bool;
     fn import(&mut self, key: usize, fd: i32, frame: &PrimeFrame) -> Result<(), Error>;
     fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<craft_hwenc_native::Packet>, Error>;
+    fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error>;
 }
 
 impl Surfaces for Core {
@@ -205,6 +206,9 @@ impl Surfaces for Core {
     fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
         Core::encode_surface(self, key, pts)
     }
+    fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
+        Core::flush(self)
+    }
 }
 
 /// The descriptor and layout of the buffer of `slot` in `ring`, for an import.
@@ -213,7 +217,18 @@ fn ring_buffer(ring: &ExportRing, slot: usize) -> Option<(i32, PrimeFrame)> {
     use std::os::fd::AsRawFd;
     let b = ring.buffer(slot)?;
     let (width, height) = b.image_size();
-    Some((b.fd().as_raw_fd(), PrimeFrame { width, height, size: b.size(), modifier: b.modifier(), offsets: b.offsets(), pitches: b.pitches() }))
+    Some((
+        b.fd().as_raw_fd(),
+        PrimeFrame {
+            width,
+            height,
+            size: b.size(),
+            modifier: b.modifier(),
+            offsets: b.offsets(),
+            pitches: b.pitches(),
+            plane_sizes: b.plane_sizes(),
+        },
+    ))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -225,7 +240,8 @@ fn ring_buffer(_ring: &ExportRing, _slot: usize) -> Option<(i32, PrimeFrame)> {
 /// each ring buffer the first time a frame uses it (`buffer` gives its descriptor and layout), and
 /// hand back the buffers whose packets came out. It returns at the first frame whose copy is still
 /// running, without waiting. A buffer the driver cannot import records [`Fallback::ImportFailed`]
-/// on the ring; a frame outside the ring's buffers or an encoder that stops records
+/// on the ring, and the packets of the pictures the encoder already took are added to `out` before
+/// the error returns; a frame outside the ring's buffers or an encoder that stops records
 /// [`Fallback::NoEncoder`].
 fn encode_ready<C: Surfaces>(
     core: &mut C,
@@ -244,6 +260,11 @@ fn encode_ready<C: Surfaces>(
             if let Err(e) = core.import(slot, fd, &layout) {
                 // The compositor reads its frames back through memory again.
                 shared.ring.refuse(Fallback::ImportFailed);
+                // The pictures the encoder already took still come out, ahead of the frames read
+                // back through memory.
+                let taken = core.flush().map_err(|lost| PluginError::Failed(format!("{name} lost its last frames: {lost}")))?;
+                shared.feed.out(taken.len());
+                packets(out, taken);
                 return Err(PluginError::Unavailable(format!("{name} cannot read the graphics ring's buffers: {e}")));
             }
         }
@@ -409,6 +430,8 @@ mod tests {
         imported: Vec<usize>,
         in_flight: std::collections::VecDeque<i64>,
         refuse_import: bool,
+        /// A slot whose buffer the driver refuses; the others import.
+        refuse_slot: Option<usize>,
         fail_encode: bool,
     }
 
@@ -417,7 +440,7 @@ mod tests {
             self.imported.contains(&key)
         }
         fn import(&mut self, key: usize, _fd: i32, _frame: &PrimeFrame) -> Result<(), Error> {
-            if self.refuse_import {
+            if self.refuse_import || self.refuse_slot == Some(key) {
                 return Err(Error::Failed("vaCreateSurfaces (DMA-BUF): invalid parameter".into()));
             }
             self.imported.push(key);
@@ -435,11 +458,16 @@ mod tests {
             self.in_flight.push_back(pts);
             Ok(out)
         }
+        fn flush(&mut self) -> Result<Vec<craft_hwenc_native::Packet>, Error> {
+            Ok(self.in_flight.drain(..).map(|pts| craft_hwenc_native::Packet { data: vec![1], pts, keyframe: false }).collect())
+        }
     }
 
     fn layout(_ring: &ExportRing, slot: usize) -> Option<(i32, PrimeFrame)> {
-        (slot < 3)
-            .then_some((10 + slot as i32, PrimeFrame { width: 256, height: 144, size: 55296, modifier: 0, offsets: [0, 36864], pitches: [256, 256] }))
+        (slot < 3).then_some((
+            10 + slot as i32,
+            PrimeFrame { width: 256, height: 144, size: 55296, modifier: 0, offsets: [0, 36864], pitches: [256, 256], plane_sizes: [36864, 18432] },
+        ))
     }
 
     fn shared(ring: &std::sync::Arc<ExportRing>) -> Shared {
@@ -480,6 +508,25 @@ mod tests {
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
         let e = encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap_err();
         assert!(matches!(e, PluginError::Unavailable(ref why) if why.contains("invalid parameter")), "{e}");
+        assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
+    }
+
+    /// When the buffer of a later frame cannot be imported, the packets of the pictures the encoder
+    /// already took come out before the error, and their buffers go back.
+    #[test]
+    fn a_refused_import_still_gives_the_packets_of_the_pictures_already_taken() {
+        let ring = ExportRing::detached(256, 144);
+        let (mut core, mut s, mut out) = (FakeCore { refuse_slot: Some(1), ..FakeCore::default() }, shared(&ring), Vec::new());
+        ring.set_ready(1);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
+        encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap();
+        assert!(out.is_empty(), "the encoder holds the first picture");
+        ring.set_ready(2);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 1, 2).unwrap(), 1);
+        let e = encode_ready(&mut core, &mut s, "test", layout, &mut out).unwrap_err();
+        assert!(matches!(e, PluginError::Unavailable(_)), "{e}");
+        assert_eq!(out.iter().map(|p| p.pts).collect::<Vec<_>>(), vec![0], "the first picture's packet");
+        assert_eq!(ring.released(), 1, "its buffer went back");
         assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
     }
 

@@ -743,6 +743,9 @@ fn a_dmabuf_export_needs_vulkan_the_extensions_timeline_semaphores_and_a_modifie
     assert_eq!(check_dmabuf_export(with, None, &linear), Err(Fallback::OtherAdapter), "a driver that does not report its device");
     assert_eq!(check_dmabuf_export(with, Some(a), &[]), Err(Fallback::Modifier), "no modifier the device can export the picture in");
     assert_eq!(check_dmabuf_export(Backend::Other, Some(a), &[]), Err(Fallback::UnsupportedBackend), "the backend is checked first");
+    // A Windows export runs on Direct3D 12; DMA-BUFs are shared through Vulkan only.
+    assert_eq!(check_dmabuf_export(Backend::Dx12, Some(a), &linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_export(Backend::Dx12, Some(a)), Ok(a), "the Windows check is unchanged");
 }
 
 #[test]
@@ -757,7 +760,11 @@ fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
     assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], [128, 64], true));
     assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], [128, 64], true));
     assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], [128, 64], true), "a chroma plane past the end");
-    assert!(nv12_planes_fit(u32::MAX, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [1, 1], true), "the largest values do not overflow");
+    assert!(nv12_planes_fit(u32::MAX - 1, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [1, 1], true), "the largest values do not overflow");
+    // A 3-pixel row has two chroma pairs: 4 bytes, past a 3-byte pitch.
+    assert!(!nv12_planes_fit(3, 2, 9, [0, 6], [3, 3], [6, 3], true), "an odd width needs a whole chroma pair");
+    assert!(nv12_planes_fit(3, 2, 10, [0, 6], [3, 4], [6, 4], true));
+    assert!(!nv12_planes_fit(u32::MAX, 2, u64::MAX, [0, 0], [u32::MAX; 2], [1, 1], true), "the chroma row of the widest odd picture");
     assert!(nv12_planes_fit(4, 3, 64, [0, 32], [4, 4], [12, 8], true), "an odd height rounds the chroma rows up");
     assert!(!nv12_planes_fit(4, 3, 39, [0, 32], [4, 4], [12, 7], true));
     assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [0, 64], true), "a plane of no bytes");
@@ -772,6 +779,42 @@ fn a_tiled_nv12_picture_fits_by_the_plane_sizes_the_driver_reports() {
     // Pitches that read as fitting, with reported planes that end past the buffer.
     assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [128, 4096], false), "the reported chroma plane ends past the buffer");
     assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [256, 64], false), "the reported luma plane ends past the buffer");
+}
+
+/// The planes of a texture's copy stay kept until that texture is written again, and all of them
+/// are handed over when the exporter goes.
+#[test]
+fn the_planes_of_an_export_copy_are_kept_until_their_texture_is_written_again() {
+    let plane = |n: u8| std::sync::Arc::new(n);
+    let (luma, chroma, next) = (plane(1), plane(2), plane(3));
+    let count = std::sync::Arc::strong_count;
+    let mut held = crate::export::Held::default();
+    assert!(held.is_empty());
+    held.keep(0, &[std::sync::Arc::clone(&luma), std::sync::Arc::clone(&chroma)]);
+    assert_eq!((count(&luma), count(&chroma)), (2, 2), "kept after the caller's copies are gone");
+    held.keep(1, &[std::sync::Arc::clone(&next), std::sync::Arc::clone(&chroma)]);
+    assert_eq!((count(&luma), count(&chroma), count(&next)), (2, 3, 2), "another texture keeps its own planes");
+    held.keep(0, &[std::sync::Arc::clone(&next)]);
+    assert_eq!((count(&luma), count(&chroma), count(&next)), (1, 2, 3), "writing texture 0 again lets its old planes go");
+    held.keep(SLOTS, &[std::sync::Arc::clone(&luma)]);
+    assert_eq!(count(&luma), 1, "a slot outside the ring keeps nothing");
+    let all = held.take();
+    assert!(held.is_empty() && !all.is_empty());
+    drop(all);
+    assert_eq!((count(&chroma), count(&next)), (1, 1));
+}
+
+/// Tickets are signaled in the order they were handed out; one never submitted may be skipped,
+/// and an older one after a newer one is refused.
+#[test]
+fn export_tickets_are_signaled_in_the_order_they_were_handed_out() {
+    let mut signaled = 0;
+    assert!(crate::export::in_order(&mut signaled, 1));
+    assert!(crate::export::in_order(&mut signaled, 3), "ticket 2 was never submitted");
+    assert!(!crate::export::in_order(&mut signaled, 2), "ticket 3's signal went out first");
+    assert!(!crate::export::in_order(&mut signaled, 3), "a ticket handed in twice");
+    assert_eq!(signaled, 3);
+    assert!(crate::export::in_order(&mut signaled, 4));
 }
 
 #[test]
@@ -1324,8 +1367,9 @@ mod gpu {
         assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
     }
 
-    /// On a Vulkan device opened without the DMA-BUF feature the reason is the extension. With it,
-    /// the ring opens with three DMA-BUFs whose planes hold the picture, a copy goes into a free
+    /// A Vulkan device opened without the DMA-BUF feature still has the extensions when the adapter
+    /// has them, since wgpu enables them anyway; one without them gives the extension as the reason.
+    /// With the feature, the ring opens with three DMA-BUFs whose planes hold the picture, a copy goes into a free
     /// image and its frame becomes ready once the queue has finished, without the compositor
     /// polling; or the reason the driver cannot export comes back.
     #[cfg(target_os = "linux")]

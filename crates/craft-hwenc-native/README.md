@@ -92,7 +92,7 @@ encoder opened on:
 
 ```rust
 let mut enc = vaapi::Encoder::on_render_node(&cfg, render_node)?;
-enc.import(0, fd, &PrimeFrame { width, height, size, modifier, offsets, pitches })?;
+enc.import(0, fd, &PrimeFrame { width, height, size, modifier, offsets, pitches, plane_sizes })?;
 for packet in enc.encode_surface(0, pts)? {
     write(packet);
 }
@@ -101,8 +101,10 @@ for packet in enc.encode_surface(0, pts)? {
 libva holds its own reference to an imported buffer, so the caller may close the descriptor.
 `width` and `height` are the size of the image in the buffer, with the picture at its top left.
 For H.264 the image must be at least the configured size rounded up to multiples of 16, and for
-HEVC at least the configured size. A smaller image, or a buffer whose planes do not fit its size,
-is refused before libva is called. Keep the picture in a
+HEVC at least the configured size. `plane_sizes` holds each plane's bytes as the exporting driver
+reports them. A smaller image, or a buffer whose planes do not fit its size by those plane sizes,
+is refused before libva is called. A linear buffer is also refused when a row is shorter than the
+picture or a row ends past the buffer. Keep the picture in a
 buffer unchanged until the packet with its timestamp has come out.
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.

@@ -231,8 +231,9 @@ pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) 
 }
 
 /// How an NV12 picture lies in a DMA-BUF that [`Encoder::import`] takes: the width and height of
-/// the image in it, the buffer's size, the DRM format modifier of its layout, and the offset and
-/// row pitch of its luma and chroma planes.
+/// the image in it, the buffer's size, the DRM format modifier of its layout, the offset and row
+/// pitch of its luma and chroma planes, and the bytes of each plane as the exporting driver
+/// reports them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrimeFrame {
     pub width: u32,
@@ -241,6 +242,7 @@ pub struct PrimeFrame {
     pub modifier: u64,
     pub offsets: [u32; 2],
     pub pitches: [u32; 2],
+    pub plane_sizes: [u64; 2],
 }
 
 /// Pictures in DMA-BUFs ([`Encoder::encode_surface`]) in flight at a time. The caller's buffers
@@ -268,15 +270,17 @@ fn av1_stream(data: &[u8], ours: &[u8]) -> Result<av1::Stream, Error> {
 }
 
 /// The packet of the AV1 temporal unit `data` of `stream` that went in with `pts` as a key frame
-/// when `idr` is set. The unit must hold coded tiles: a frame OBU or a tile group OBU. A key
-/// frame packet starts with the stream's sequence header OBU when the driver wrote none.
+/// when `idr` is set. The unit must hold coded tiles: a frame OBU or a tile group OBU that is not
+/// empty. A key frame packet starts with the stream's sequence header OBU when the driver wrote
+/// none.
 fn av1_packet(stream: &av1::Stream, data: &[u8], pts: i64, idr: bool) -> Result<Packet, Error> {
     let (data, keyframe) = stream.sample(data).map_err(Error::Failed)?;
     if idr && !keyframe {
         return Err(Error::Failed("the encoder wrote no key frame where one was asked for".into()));
     }
     let (tiles, sequence) = av1::obus(&data).map_err(Error::Failed)?.iter().fold((false, false), |(tiles, sequence), o| {
-        (tiles || matches!(o.kind, av1::OBU_FRAME | av1::OBU_TILE_GROUP), sequence || o.kind == av1::OBU_SEQUENCE_HEADER)
+        let coded = matches!(o.kind, av1::OBU_FRAME | av1::OBU_TILE_GROUP) && !o.payload.is_empty();
+        (tiles || coded, sequence || o.kind == av1::OBU_SEQUENCE_HEADER)
     });
     if !tiles {
         return Err(Error::Failed("the encoder wrote a frame header without its coded tiles".into()));
@@ -301,6 +305,20 @@ pub struct Encoder {
     gop: Gop,
     /// The coded data of the frame being read, kept between frames so reading allocates nothing.
     coded: Vec<u8>,
+    /// Packets that came out during a call that then failed, returned first by the next call.
+    kept: Vec<Packet>,
+}
+
+/// The packets of a call, `packets`, once it has run (`done`): returned on success, else kept in
+/// `kept` for the next call, so a packet that came out before the error is not lost.
+fn settle(kept: &mut Vec<Packet>, packets: Vec<Packet>, done: Result<(), Error>) -> Result<Vec<Packet>, Error> {
+    match done {
+        Ok(()) => Ok(packets),
+        Err(e) => {
+            *kept = packets;
+            Err(e)
+        }
+    }
 }
 
 impl Encoder {
@@ -345,7 +363,7 @@ impl Encoder {
             (record_of(cfg, &sets)?, sets, None)
         };
         gop.restart();
-        Ok(Encoder { session, cfg: *cfg, record, sets, av1, gop, coded })
+        Ok(Encoder { session, cfg: *cfg, record, sets, av1, gop, coded, kept: Vec::new() })
     }
 
     /// The `avcC` (H.264), `hvcC` (HEVC) or `av1C` (AV1) record a container stores with the track.
@@ -359,7 +377,8 @@ impl Encoder {
     }
 
     /// Encode `frame` (NV12 of the configured size) with the timestamp `pts`, which must not be
-    /// negative. Returns the packets that came out, oldest first.
+    /// negative. Returns the packets that came out, oldest first. Packets that came out during a
+    /// call that then failed are returned first by the next call that succeeds.
     pub fn encode(&mut self, frame: &[u8], pts: i64) -> Result<Vec<Packet>, Error> {
         let expected = Input::Nv12.frame_bytes(self.cfg.width, self.cfg.height);
         if frame.len() != expected {
@@ -368,13 +387,17 @@ impl Encoder {
         if pts < 0 {
             return Err(Error::Failed(format!("the timestamp {pts} is negative")));
         }
-        let mut packets = Vec::new();
+        let mut packets = std::mem::take(&mut self.kept);
+        let done = self.encode_into(frame, pts, &mut packets);
+        settle(&mut self.kept, packets, done)
+    }
+
+    fn encode_into(&mut self, frame: &[u8], pts: i64, packets: &mut Vec<Packet>) -> Result<(), Error> {
         if self.session.full() {
-            self.take(&mut packets)?;
+            self.take(packets)?;
         }
         let session = &mut self.session;
-        self.gop.submit(|pic| session.submit(frame, pic, (pts, pic.idr))).map_err(Error::Failed)?;
-        Ok(packets)
+        self.gop.submit(|pic| session.submit(frame, pic, (pts, pic.idr))).map_err(Error::Failed)
     }
 
     /// Import the NV12 picture in the DMA-BUF `fd`, laid out as `frame` says, under `key` (below
@@ -396,7 +419,8 @@ impl Encoder {
     /// Encode the picture in the buffer imported under `key` with the timestamp `pts`, which must
     /// not be negative, without copying it. Returns the packets that came out, oldest first, one per
     /// picture in the order they went in. At most [`SURFACE_DEPTH`] pictures are in flight: once a
-    /// picture's packet has come out, the encoder no longer reads its buffer.
+    /// picture's packet has come out, the encoder no longer reads its buffer. Packets that came out
+    /// during a call that then failed are returned first by the next call that succeeds.
     pub fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<Packet>, Error> {
         if pts < 0 {
             return Err(Error::Failed(format!("the timestamp {pts} is negative")));
@@ -404,23 +428,35 @@ impl Encoder {
         if !self.session.imported(key) {
             return Err(Error::Failed(format!("nothing was imported under {key}")));
         }
-        let mut packets = Vec::new();
+        let mut packets = std::mem::take(&mut self.kept);
+        let done = self.encode_surface_into(key, pts, &mut packets);
+        settle(&mut self.kept, packets, done)
+    }
+
+    fn encode_surface_into(&mut self, key: usize, pts: i64, packets: &mut Vec<Packet>) -> Result<(), Error> {
         while self.session.in_flight() >= SURFACE_DEPTH || self.session.full() {
-            if !self.take(&mut packets)? {
+            if !self.take(packets)? {
                 break;
             }
         }
         let session = &mut self.session;
-        self.gop.submit(|pic| session.submit_imported(key, pic, (pts, pic.idr))).map_err(Error::Failed)?;
-        Ok(packets)
+        self.gop.submit(|pic| session.submit_imported(key, pic, (pts, pic.idr))).map_err(Error::Failed)
     }
 
-    /// End the stream: every frame still inside comes out. A frame that cannot be read is an
-    /// error; the frames after it stay inside, each with its own timestamp, for the next call.
+    /// End the stream: every frame still inside comes out, after the packets kept from a call that
+    /// failed. A frame that cannot be read is an error; the packets before it are kept for the next
+    /// call, and the frames after it stay inside, each with its own timestamp.
     pub fn flush(&mut self) -> Result<Vec<Packet>, Error> {
-        let mut packets = Vec::with_capacity(vaapi_ffi::DEPTH);
-        while self.take(&mut packets)? {}
-        Ok(packets)
+        let mut packets = std::mem::take(&mut self.kept);
+        packets.reserve(vaapi_ffi::DEPTH);
+        let done = loop {
+            match self.take(&mut packets) {
+                Ok(true) => {}
+                Ok(false) => break Ok(()),
+                Err(e) => break Err(e),
+            }
+        };
+        settle(&mut self.kept, packets, done)
     }
 
     /// Read the oldest frame in flight into `packets`; `false` when none is in flight. The
@@ -520,7 +556,7 @@ mod tests {
     #[test]
     fn av1_packets_carry_the_sizes_and_keep_the_sequence_header_in_the_record() {
         let ours = vaapi_ffi::av1::sequence_header(256, 144, 0);
-        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1)).unwrap();
+        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1), u32::MAX).unwrap();
         let tools = vaapi_ffi::av1::tools(VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED).unwrap();
         let key = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23)).obu;
         let inter = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: false, order: 1, idr_id: 0 }, Control::Cqp(23)).obu;
@@ -557,15 +593,21 @@ mod tests {
         assert!(av1_packet(&stream, &[&ours[..], &key[..]].concat(), 13, true).is_err(), "a key frame header alone");
         assert!(av1_packet(&stream, &key, 13, true).is_err(), "a key frame header alone, without the sequence header");
         assert!(av1_packet(&stream, &inter, 13, false).is_err(), "an inter frame header alone");
-        let combined = [&ours[..], &[(6 << 3) | 0x02, 3][..], &key[5..8]].concat();
+        // A frame OBU: the key frame header's payload followed by the three bytes of tile data.
+        let frame_payload = [&key[5..], &[0xaa, 0xbb, 0xcc][..]].concat();
+        let combined = [&ours[..], &[(6 << 3) | 0x02, u8::try_from(frame_payload.len()).unwrap()][..], &frame_payload[..]].concat();
         let c = av1_packet(&stream, &combined, 14, true).unwrap();
         assert_eq!((c.keyframe, c.data), (true, combined), "a frame OBU holds its tiles");
+        // A tile group OBU of no bytes holds no tiles.
+        let empty_group = [(4 << 3) | 0x02, 0];
+        assert!(av1_packet(&stream, &[&ours[..], &key[..], &empty_group[..]].concat(), 15, true).is_err(), "an empty tile group");
+        assert!(av1_packet(&stream, &[&ours[..], &[(6 << 3) | 0x02, 0][..]].concat(), 15, true).is_err(), "an empty frame OBU");
     }
 
     #[test]
     fn the_gray_frame_must_be_a_key_frame_with_its_tiles() {
         let ours = vaapi_ffi::av1::sequence_header(256, 144, 0);
-        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1)).unwrap();
+        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1), u32::MAX).unwrap();
         let tools = vaapi_ffi::av1::tools(VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED).unwrap();
         let inter = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: false, order: 1, idr_id: 0 }, Control::Cqp(23)).obu;
         let key = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23)).obu;
@@ -573,7 +615,24 @@ mod tests {
         assert!(av1_stream(&[&ours[..], &inter[..], &tile_group[..]].concat(), &ours).is_err(), "an inter frame");
         assert!(av1_stream(&ours, &ours).is_err(), "a sequence header alone");
         assert!(av1_stream(&[&ours[..], &key[..]].concat(), &ours).is_err(), "a key frame header without its tiles");
+        assert!(av1_stream(&[&ours[..], &key[..], &[(4 << 3) | 0x02, 0][..]].concat(), &ours).is_err(), "a key frame with an empty tile group");
         assert!(av1_stream(&[&key[..], &tile_group[..]].concat(), &ours).is_ok(), "a key frame without the sequence header takes ours");
+    }
+
+    /// With pictures A and B in flight, submitting C reads A's packet first; when C's submission
+    /// then fails, A's packet comes out of the next call, once.
+    #[test]
+    fn a_packet_read_before_a_failed_submission_comes_out_of_the_next_call() {
+        let packet = |pts| Packet { data: vec![1], pts, keyframe: false };
+        let mut kept = Vec::new();
+        let failed = settle(&mut kept, vec![packet(0)], Err(Error::Failed("vaEndPicture failed".into())));
+        assert!(failed.is_err());
+        assert_eq!(kept.iter().map(|p| p.pts).collect::<Vec<_>>(), vec![0], "A's packet is kept");
+        let mut next = std::mem::take(&mut kept);
+        next.push(packet(1));
+        let out = settle(&mut kept, next, Ok(())).unwrap();
+        assert_eq!(out.iter().map(|p| p.pts).collect::<Vec<_>>(), vec![0, 1]);
+        assert!(kept.is_empty(), "nothing is returned twice");
     }
 
     #[test]
@@ -942,7 +1001,15 @@ mod tests {
 
     fn linear(width: u32, height: u32) -> PrimeFrame {
         let luma = width * height;
-        PrimeFrame { width, height, size: u64::from(luma + luma / 2), modifier: 0, offsets: [0, luma], pitches: [width, width] }
+        PrimeFrame {
+            width,
+            height,
+            size: u64::from(luma + luma / 2),
+            modifier: 0,
+            offsets: [0, luma],
+            pitches: [width, width],
+            plane_sizes: [u64::from(luma), u64::from(luma / 2)],
+        }
     }
 
     #[test]
@@ -971,6 +1038,22 @@ mod tests {
         assert!(d(3, 256, 144, PrimeFrame { offsets: [0, u32::MAX], ..ok }).is_err(), "a plane past the end");
         assert!(d(3, 256, 144, PrimeFrame { size: 1 << 32, ..ok }).is_err(), "a buffer libva cannot describe");
         assert!(d(3, u32::MAX, u32::MAX, PrimeFrame { size: u64::from(u32::MAX), pitches: [u32::MAX; 2], ..ok }).is_err(), "no overflow");
+        assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [0, 18432], ..ok }).is_err(), "a plane of no bytes");
+        assert!(d(3, 255, 144, PrimeFrame { pitches: [255, 255], ..ok }).is_err(), "an odd width needs a whole chroma pair");
+    }
+
+    /// A tiled plane's extent is the size the exporting driver reports, not pitch x rows.
+    #[test]
+    fn a_tiled_dmabuf_fits_by_the_plane_sizes_the_driver_reports() {
+        // 256 x 144 in 32-row tile bands: the 72 chroma rows take 96 rows, 24,576 bytes, so the
+        // chroma plane at 40,960 ends at 65,536, past a 61,440-byte buffer.
+        let tiled =
+            PrimeFrame { size: 61_440, modifier: 9, offsets: [0, 40_960], pitches: [256, 256], plane_sizes: [40_960, 24_576], ..linear(256, 144) };
+        let d = |f: PrimeFrame| crate::vaapi_ffi::prime_descriptor(3, 256, 144, &f);
+        assert!(d(tiled).is_err(), "the reported chroma plane ends past the buffer");
+        assert!(d(PrimeFrame { size: 65_536, ..tiled }).is_ok());
+        // A tiled pitch times rows past the buffer, with reported planes inside it.
+        assert!(d(PrimeFrame { size: 65_536, pitches: [4096, 4096], ..tiled }).is_ok(), "pitch x rows is not a tiled plane's extent");
     }
 
     #[test]

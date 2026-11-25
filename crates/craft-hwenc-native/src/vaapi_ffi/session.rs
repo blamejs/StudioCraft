@@ -346,9 +346,13 @@ impl Display {
             return Err("the AV1 encoder takes no packed sequence and frame headers".into());
         }
         let tools = av1::tools(features, ext1, ext2)?;
-        let tiles = av1_tiles(p)?.count();
-        if tiles > tools.max_tiles {
-            return Err(format!("{}x{}: the AV1 encoder codes at most {} tiles and the frame needs {tiles}", p.width, p.height, tools.max_tiles));
+        // Without the driver's limit, the reason is the level's limits.
+        av1_tiles(p, u32::MAX)?;
+        if av1_tiles(p, tools.max_tiles).is_err() {
+            return Err(format!(
+                "{}x{}: the AV1 encoder codes at most {} tiles, and every grid of tiles within the level limits has more",
+                p.width, p.height, tools.max_tiles
+            ));
         }
         Ok(tools)
     }
@@ -377,9 +381,10 @@ struct Choice {
     tools: Option<Tools>,
 }
 
-/// The tiles of an AV1 stream of `p`, or why none keep within the level limits.
-fn av1_tiles(p: &Params) -> Result<Tiles, String> {
-    Tiles::of(p.width, p.height, p.fps).ok_or_else(|| {
+/// The tiles of an AV1 stream of `p` in a grid of at most `max_tiles` tiles, or why none keep
+/// within the level limits.
+fn av1_tiles(p: &Params, max_tiles: u32) -> Result<Tiles, String> {
+    Tiles::of(p.width, p.height, p.fps, max_tiles).ok_or_else(|| {
         format!("{}x{} at {}/{} frames per second: no grid of AV1 tiles keeps within the level limits", p.width, p.height, p.fps.0, p.fps.1)
     })
 }
@@ -481,7 +486,7 @@ impl Session {
         let av1 = match choice.tools {
             Some(tools) => {
                 let level = av1::level(p.width, p.height, p.fps, choice.ctl.bits_per_second());
-                let tiles = av1_tiles(p).map_err(|e| OpenError::Unsupported(format!("{name}: {e}")))?;
+                let tiles = av1_tiles(p, tools.max_tiles).map_err(|e| OpenError::Unsupported(format!("{name}: {e}")))?;
                 Some(Av1 { level, tiles, tools, sequence: av1::sequence_header(p.width, p.height, level) })
             }
             None => None,

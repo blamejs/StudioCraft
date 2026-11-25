@@ -837,23 +837,30 @@ pub(crate) fn copy_nv12(
 pub(crate) const IMPORTS: usize = 8;
 
 /// The descriptor `vaCreateSurfaces` imports `frame`, an NV12 picture of `width` x `height` in the
-/// DMA-BUF `fd`, from: one memory object and one NV12 layer with its two planes. A picture whose
-/// planes do not lie inside the buffer, or whose linear rows are shorter than the picture, is an
-/// error before VA-API is called.
+/// DMA-BUF `fd`, from: one memory object and one NV12 layer with its two planes. Each plane, as
+/// the exporting driver reports its bytes, must lie inside the buffer. In a linear layout each
+/// luma row must also hold the picture's width, each chroma row its whole interleaved pairs, and
+/// every row must lie inside the buffer; a tiled layout's rows are laid out by its modifier, and
+/// the reported plane sizes are its planes' extent. A picture that breaks these is an error before
+/// VA-API is called.
 pub(crate) fn prime_descriptor(fd: std::ffi::c_int, width: u32, height: u32, frame: &PrimeFrame) -> Result<VADRMPRIMESurfaceDescriptor, String> {
     let bad = |why: &str| Err(format!("a DMA-BUF that {why} is not an NV12 picture of {width}x{height}"));
     if fd < 0 {
         return bad("has no descriptor");
     }
     let Ok(size) = u32::try_from(frame.size) else { return bad("is larger than 4 GiB") };
-    if width == 0 || height == 0 || frame.pitches.contains(&0) {
+    if width == 0 || height == 0 || frame.pitches.contains(&0) || frame.plane_sizes.contains(&0) {
         return bad("has an empty plane");
     }
-    if frame.modifier == DRM_FORMAT_MOD_LINEAR && frame.pitches.iter().any(|&p| p < width) {
+    let linear = frame.modifier == DRM_FORMAT_MOD_LINEAR;
+    if linear && (frame.pitches[0] < width || u64::from(frame.pitches[1]) < 2 * u64::from(width.div_ceil(2))) {
         return bad("has rows shorter than the picture");
     }
+    let reported = |plane: usize| u64::from(frame.offsets[plane]).checked_add(frame.plane_sizes[plane]).is_some_and(|end| end <= frame.size);
     let end = |offset: u32, pitch: u32, rows: u32| u64::from(pitch) * u64::from(rows) + u64::from(offset);
-    if end(frame.offsets[0], frame.pitches[0], height) > frame.size || end(frame.offsets[1], frame.pitches[1], height.div_ceil(2)) > frame.size {
+    let rows_fit =
+        || end(frame.offsets[0], frame.pitches[0], height) <= frame.size && end(frame.offsets[1], frame.pitches[1], height.div_ceil(2)) <= frame.size;
+    if !reported(0) || !reported(1) || (linear && !rows_fit()) {
         return bad("ends before its planes do");
     }
     let mut desc = VADRMPRIMESurfaceDescriptor { fourcc: VA_FOURCC_NV12, width, height, num_objects: 1, num_layers: 1, ..Default::default() };

@@ -136,10 +136,12 @@ work, without waiting.
   the frames back through CPU memory instead. `ExportRing::release` also records
   `Fallback::NoEncoder` when the released fence's signal cannot be queued.
 - On Linux `Exporter::open` returns `Fallback::UnsupportedBackend` for a device not on Vulkan,
-  `Fallback::MissingExtension` for a device created without wgpu's
-  `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` or without timeline semaphores, `Fallback::Modifier`
+  `Fallback::MissingExtension` for a Vulkan device without timeline semaphores or without the
+  extensions `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
+  `VK_EXT_image_drm_format_modifier` enabled, `Fallback::Modifier`
   when no format modifier fits, and `Fallback::ImportFailed` when an image, its memory or its
-  descriptor cannot be made. A VA-API encoder that cannot import a buffer records
+  descriptor cannot be made. wgpu enables the three extensions whenever the adapter has them,
+  whether or not the device asked for `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`. A VA-API encoder that cannot import a buffer records
   `Fallback::ImportFailed` on the ring, and one that cannot open on the ring's render node records
   `Fallback::NoEncoder`. When the compositor's device stops before the last copy into a frame is
   seen to finish, the ring records `Fallback::DeviceLost`, and the frames after the last finished

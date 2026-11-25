@@ -949,9 +949,13 @@ impl Compositor {
         // The copy into the export ring is a command buffer of its own (wgpu cannot write NV12
         // textures), submitted right after the passes it copies from.
         let export = self.nv12.as_mut().and_then(Nv12::export_commands);
+        // wgpu reports a submission it rejects to the device's error handler before `submit`
+        // returns; the export's frame is then not handed on.
+        let errors = self.gpu.health().errors();
         self.gpu.queue.submit(std::iter::once(enc.finish()).chain(export));
+        let accepted = self.gpu.health().errors() == errors;
         if let Some(n) = &mut self.nv12 {
-            n.exported();
+            n.exported(accepted);
             n.poll_export();
         }
         self.views.program.publish(pi);

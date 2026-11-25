@@ -146,10 +146,17 @@ pub(crate) fn dev_number(major: u32, minor: u32) -> u64 {
 /// and its chroma plane (half as many rows of the same width) at `offsets[1]`, rows `pitches`
 /// bytes apart and `plane_sizes` bytes long as the driver reports them, without the sizes
 /// overflowing. Each plane's reported bytes must lie inside `size`. In a linear layout (`linear`)
-/// each row must also hold the picture's width and every row must lie inside `size`; in a tiled
-/// one the driver lays the rows out, and its plane sizes are the planes' extent.
+/// each luma row must also hold the picture's width, each chroma row its whole interleaved pairs
+/// (two bytes for every two pixels, an odd last pixel included), and every row must lie inside
+/// `size`; in a tiled one the driver lays the rows out, and its plane sizes are the planes' extent.
 pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], plane_sizes: [u64; 2], linear: bool) -> bool {
-    if width == 0 || height == 0 || pitches.contains(&0) || plane_sizes.contains(&0) || (linear && pitches.iter().any(|&p| p < width)) {
+    let chroma_row = 2 * u64::from(width.div_ceil(2));
+    if width == 0
+        || height == 0
+        || pitches.contains(&0)
+        || plane_sizes.contains(&0)
+        || (linear && (pitches[0] < width || u64::from(pitches[1]) < chroma_row))
+    {
         return false;
     }
     let reported = |plane: usize| u64::from(offsets[plane]).checked_add(plane_sizes[plane]).is_some_and(|end| end <= size);
@@ -534,6 +541,14 @@ pub struct Exporter {
     slots: crate::ring::SlotTable,
     /// One-texel textures of the planes' formats that [`Exporter::prepare`] copies into.
     scratch: Option<Vec<wgpu::Texture>>,
+    /// The planes each texture of the ring was last copied from. The copy's commands name the
+    /// planes' images without wgpu tracking them, so the planes are kept until the texture is
+    /// written again, which happens only after the copy has finished, and when the exporter is
+    /// dropped, until the queue has finished the work submitted so far.
+    held: Held<wgpu::Texture>,
+    /// The ready value of the newest ticket handed to [`Exporter::submitted`].
+    signaled: u64,
+    queue: wgpu::Queue,
     #[cfg(windows)]
     raw: Raw,
     /// Boxed: it holds the device's function tables.
@@ -585,6 +600,58 @@ pub struct Ticket {
     ready: u64,
 }
 
+/// The two planes a texture of a ring was last copied from, for each texture.
+#[derive(Debug)]
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) struct Held<T> {
+    slots: [[Option<T>; 2]; SLOTS],
+}
+
+impl<T> Default for Held<T> {
+    fn default() -> Self {
+        Held { slots: std::array::from_fn(|_| [None, None]) }
+    }
+}
+
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+impl<T: Clone + PartialEq> Held<T> {
+    /// Keep the first two of `planes` for texture `slot`, in place of the planes kept for it
+    /// before. A plane already kept is not cloned again. A slot outside the ring keeps nothing.
+    pub(crate) fn keep(&mut self, slot: usize, planes: &[T]) {
+        let Some(held) = self.slots.get_mut(slot) else { return };
+        for (i, kept) in held.iter_mut().enumerate() {
+            let plane = planes.get(i);
+            if kept.as_ref() != plane {
+                *kept = plane.cloned();
+            }
+        }
+    }
+
+    /// Every plane kept, which the caller drops once the copies from them have finished.
+    pub(crate) fn take(&mut self) -> Held<T> {
+        std::mem::take(self)
+    }
+
+    /// Whether any plane is kept.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slots.iter().flatten().all(Option::is_none)
+    }
+}
+
+/// Whether a ticket whose ready value is `ready` may be signaled after the newest one signaled,
+/// `signaled`, which then becomes `ready`. Tickets are signaled in the order `Exporter::copy`
+/// handed them out; a ticket that was never submitted may be skipped. An older ticket is refused:
+/// the newer ticket's signal went out before its copy, so its ready value could be reached while
+/// the copy still runs.
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) fn in_order(signaled: &mut u64, ready: u64) -> bool {
+    if ready <= *signaled {
+        return false;
+    }
+    *signaled = ready;
+    true
+}
+
 /// The graphics API and adapter of `device`, as [`check_export`](crate::check_export) takes them.
 #[cfg(feature = "wgpu")]
 pub fn device_backend(device: &wgpu::Device) -> (crate::Backend, Option<AdapterId>) {
@@ -612,7 +679,8 @@ impl Exporter {
     /// Windows the device must run on Direct3D 12, or on Vulkan with
     /// `VK_KHR_external_memory_win32` and timeline semaphores. On Linux it must run on Vulkan 1.2
     /// with timeline semaphores, `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
-    /// `VK_EXT_image_drm_format_modifier` (wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`), and
+    /// `VK_EXT_image_drm_format_modifier` enabled (wgpu enables them whenever the adapter has
+    /// them), and
     /// export an NV12 image of that size in a memory layout of two planes
     /// ([`check_dmabuf_export`](crate::check_dmabuf_export)). The reason is returned otherwise.
     /// Elsewhere it returns [`Fallback::Unsupported`].
@@ -626,7 +694,15 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw })
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                held: Held::default(),
+                signaled: 0,
+                queue: queue.clone(),
+                raw,
+            })
         }
         #[cfg(target_os = "linux")]
         {
@@ -635,12 +711,27 @@ impl Exporter {
             }
             crate::fallback::check_export(backend, compositor)?;
             let (ring, raw) = crate::dmabuf_ffi::export(device, queue, width, height)?;
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw: Box::new(raw) })
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                held: Held::default(),
+                signaled: 0,
+                queue: queue.clone(),
+                raw: Box::new(raw),
+            })
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
-            let _ = (backend, compositor, queue);
-            ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None })
+            let _ = (backend, compositor);
+            ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                held: Held::default(),
+                signaled: 0,
+                queue: queue.clone(),
+            })
         }
     }
 
@@ -711,12 +802,20 @@ impl Exporter {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
+        self.held.keep(slot, planes);
         Ok(Some((commands, Ticket { slot, ready })))
     }
 
     /// The frame of `ticket`, once its command buffer has been submitted: the ready fence is set
-    /// after the copy, and the frame is what an encoder session takes.
+    /// after the copy, and the frame is what an encoder session takes. Tickets are handed in in the
+    /// order [`Exporter::copy`] returned them, and one whose command buffer was not submitted is
+    /// left out. A ticket older than one already handed in is refused with
+    /// [`Fallback::ImportFailed`], which stops the export.
     pub fn submitted(&mut self, ticket: Ticket) -> Result<ExportFrame, Fallback> {
+        if !in_order(&mut self.signaled, ticket.ready) {
+            self.ring.refuse(Fallback::ImportFailed);
+            return Err(Fallback::ImportFailed);
+        }
         #[cfg(windows)]
         let signaled = match &self.raw {
             Raw::Dx12(r) => r.signal(ticket.ready),
@@ -746,5 +845,17 @@ impl Exporter {
         }
         #[cfg(target_os = "linux")]
         self.raw.poll();
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl Drop for Exporter {
+    fn drop(&mut self) {
+        // A copy from the planes may still run: they are dropped once the queue has finished the
+        // work submitted so far, without waiting here.
+        if !self.held.is_empty() {
+            let held = self.held.take();
+            self.queue.on_submitted_work_done(move || drop(held));
+        }
     }
 }
