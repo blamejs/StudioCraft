@@ -561,6 +561,51 @@ fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
 }
 
 #[test]
+fn a_removed_device_counts_no_frame_as_done_and_records_why() {
+    let ring = ExportRing::detached(64, 2);
+    assert_eq!(ring.completed(7), 7);
+    assert_eq!(ring.fallback(), None, "an ordinary fence value is kept");
+    assert_eq!(ring.completed(export::REMOVED), 0);
+    assert_eq!(ring.fallback(), Some(Fallback::DeviceRemoved));
+    // With nothing counted as done, no frame is ready and no written texture is free.
+    let frame = exported(&ring, 0, 1);
+    assert!(frame.ring().completed(export::REMOVED) < frame.ready());
+    let mut slots = SlotTable::default();
+    let slot = slots.pick_released(0).unwrap();
+    slots.fill_released(slot, Instant::now()).unwrap();
+    assert_ne!(slots.pick_released(ring.completed(export::REMOVED)), Some(slot));
+}
+
+#[test]
+fn a_frame_given_again_is_refused_while_it_waits_and_after_its_texture_went_back() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    let first = exported(&ring, 0, 1);
+    assert!(feed.offer(first.clone(), 100).is_none());
+    // The same frame again while it waits.
+    assert!(!feed.accepts(&first));
+    assert_eq!(feed.offer(first.clone(), 101).map(|f| f.ready()), Some(1));
+    assert_eq!(feed.waiting(), 1, "the copy is not queued");
+    ring.set_ready(1);
+    assert!(feed.take_ready().is_some());
+    assert_eq!(feed.out(1), 1);
+    // Its texture went back and the compositor wrote frame 4 into it: the old frame is refused.
+    let newer = exported(&ring, 0, 4);
+    assert!(feed.offer(newer, 400).is_none());
+    assert!(!feed.accepts(&first));
+    assert_eq!(feed.offer(first, 102).map(|f| f.ready()), Some(1));
+    assert_eq!(feed.waiting(), 1);
+    // A frame older than the newest offered is refused too.
+    assert!(!feed.accepts(&exported(&ring, 1, 3)));
+    // A session on a ring read before refuses the frames that went back before it started.
+    ring.set_ready(4);
+    ring.release(4);
+    let feed = Feed::default();
+    assert!(!feed.accepts(&exported(&ring, 0, 4)));
+    assert!(feed.accepts(&exported(&ring, 1, 5)));
+}
+
+#[test]
 fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
     let ring = ExportRing::detached(64, 2);
     let mut feed = Feed::default();

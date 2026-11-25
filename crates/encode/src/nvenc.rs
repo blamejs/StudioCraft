@@ -213,6 +213,9 @@ impl NvencSession {
     #[cfg(target_os = "windows")]
     fn encode_ready(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
         let Some(shared) = &mut self.shared else { return Ok(()) };
+        if shared.ring.fallback() == Some(Fallback::DeviceRemoved) {
+            return Err(PluginError::Failed(format!("{} stopped: {}", self.name, Fallback::DeviceRemoved)));
+        }
         while let Some((frame, pts)) = shared.feed.take_ready() {
             let Some(texture) = shared.ring.texture(frame.slot()) else {
                 shared.ring.refuse(Fallback::NoEncoder);
@@ -262,6 +265,9 @@ impl VideoSession for NvencSession {
         if frame.ring().id() != shared.ring.id() {
             return Err(PluginError::Failed(format!("{} was given a frame of another ring", self.name)));
         }
+        if !shared.feed.accepts(&frame) {
+            return Err(PluginError::Failed(format!("{} was given a frame it was given before", self.name)));
+        }
         // A frame beyond the ring's textures replaces the oldest one waiting, which is not encoded.
         let _ = shared.feed.offer(frame, pts);
         self.poll_shared(out)
@@ -280,16 +286,24 @@ impl VideoSession for NvencSession {
     }
 
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
-        self.encode_ready(out)?;
+        let mut failed = self.encode_ready(out).err();
         // The last frames' copies are usually still running on the compositor's queue when the
-        // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded.
+        // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded. After a
+        // failure no more frames are submitted.
         let until = std::time::Instant::now() + FLUSH_WAIT;
-        while self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
+        while failed.is_none() && self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(1));
-            self.encode_ready(out)?;
+            failed = self.encode_ready(out).err();
         }
-        let ps = self.core.flush().map_err(|e| PluginError::Failed(format!("{} lost its last frames: {e}", self.name)))?;
-        packets(out, ps);
+        // The encoder is drained after a failure too: a packet it already read comes out here.
+        let flushed = self.core.flush().map_err(|e| PluginError::Failed(format!("{} lost its last frames: {e}", self.name)));
+        if let Some(e) = failed {
+            if let Ok(ps) = flushed {
+                packets(out, ps);
+            }
+            return Err(e);
+        }
+        packets(out, flushed?);
         // Frames whose copies did not finish in time are not encoded; the packets in `out` are
         // still written.
         let lost = self.shared.as_mut().map_or(0, |s| s.feed.drain());

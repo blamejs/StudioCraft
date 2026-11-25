@@ -39,7 +39,8 @@ pub struct RenderShared {
     pub canvas: Latest<(u32, u32)>,
     /// Start, change or stop converting frames for encoders.
     pub encode: Latest<Option<EncodeTarget>>,
-    /// Start, change or stop handing the encoder's frames to this queue on the GPU.
+    /// Start, change or stop handing the encoder's frames to this queue on the GPU. A queue for a
+    /// session of a new size is published after that size in [`RenderShared::encode`].
     pub encode_gpu: Latest<Option<Arc<Fifo<GpuFrame>>>>,
     /// Start, change or stop the small NV12 copy of the program that the scopes read.
     pub scope: Latest<Option<EncodeTarget>>,
@@ -693,10 +694,13 @@ impl Compositor {
                 shared.views.publish(self.views());
             }
         }
+        // The queue is taken before the target: a queue published after a new size is then
+        // applied after that size, never to the converter of the size before.
+        let sink = shared.encode_gpu.take();
         if let Some(e) = shared.encode.take() {
             self.set_encode(e);
         }
-        if let Some(sink) = shared.encode_gpu.take() {
+        if let Some(sink) = sink {
             self.set_encode_gpu(sink);
         }
         if let Some(s) = shared.scope.take() {

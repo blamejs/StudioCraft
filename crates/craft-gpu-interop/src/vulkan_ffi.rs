@@ -335,16 +335,19 @@ impl Timeline {
     }
 
     /// Copy the value the queue has signaled on the semaphore to the fence, without waiting.
-    fn poll(&self) {
+    /// Returns false when the semaphore's value could not be read or the fence could not be set;
+    /// the next call tries again.
+    fn poll(&self) -> bool {
         // SAFETY: `semaphore` is a timeline semaphore of this device, which runs Vulkan 1.2.
-        let Ok(done) = (unsafe { self.device.get_semaphore_counter_value(self.semaphore) }) else { return };
+        let Ok(done) = (unsafe { self.device.get_semaphore_counter_value(self.semaphore) }) else { return false };
         if done > self.signaled.load(Ordering::Acquire) {
-            // SAFETY: `fence` is a valid fence; setting its value from the CPU does not wait. A
-            // failure is tried again on the next call.
-            if unsafe { self.fence.Signal(done) }.is_ok() {
-                self.signaled.store(done, Ordering::Release);
+            // SAFETY: `fence` is a valid fence; setting its value from the CPU does not wait.
+            if unsafe { self.fence.Signal(done) }.is_err() {
+                return false;
             }
+            self.signaled.store(done, Ordering::Release);
         }
+        true
     }
 }
 
@@ -430,7 +433,7 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
             // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32`, `handle` is an open NT handle
             // of a single-sampled 2D NV12 texture of `size` with one mip level, as the encoder side
             // created it, and `ring` keeps it open. The import does not take the handle.
-            match unsafe { hal.texture_from_d3d11_shared_handle(handle, &hal_desc) } {
+            match unsafe { import_nv12(&hal, handle, &hal_desc) } {
                 Ok(texture) => textures.push(texture),
                 Err(_) => {
                     use wgpu::hal::Device as _;
@@ -462,6 +465,85 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
         }
     };
     Ok(Exported { textures: Some(textures), images, family, device: vk_device, wgpu_device: device.clone(), queue: queue.clone(), ready })
+}
+
+/// Open the shared NV12 texture `handle` as an image of `hal` with dedicated memory bound to it,
+/// as wgpu-hal's `texture_from_d3d11_shared_handle` does, except that a failed allocation or bind
+/// destroys the image and frees the memory it made.
+///
+/// # Safety
+///
+/// `hal` has `VULKAN_EXTERNAL_MEMORY_WIN32`, and `handle` is an open NT handle of a
+/// single-sampled 2D NV12 texture of `desc`'s size with one mip level, which stays open for the
+/// call. `desc` describes an NV12 texture used only as a copy destination.
+unsafe fn import_nv12(
+    hal: &wgpu::hal::vulkan::Device,
+    handle: HANDLE,
+    desc: &wgpu::hal::TextureDescriptor,
+) -> Result<wgpu::hal::vulkan::Texture, Fallback> {
+    let device = hal.raw_device();
+    let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
+    // The flags, format and usage wgpu-hal gives a multi-planar copy destination.
+    let info = vk::ImageCreateInfo::default()
+        .flags(vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE)
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+        .extent(vk::Extent3D { width: desc.size.width, height: desc.size.height, depth: 1 })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(vk::ImageUsageFlags::TRANSFER_DST)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .push_next(&mut external);
+    // SAFETY: `info` describes a valid 2D image for an external D3D11 texture, and its chain lives
+    // for the call.
+    let image = unsafe { device.create_image(&info, None) }.map_err(|_| Fallback::ImportFailed)?;
+    // SAFETY: `image` is an image of `device` without memory.
+    let requirements = unsafe { device.get_image_memory_requirements(image) };
+    // SAFETY: the physical device is the one `device` was created from.
+    let properties = unsafe { hal.shared_instance().raw_instance().get_physical_device_memory_properties(hal.raw_physical_device()) };
+    let index = properties
+        .memory_types_as_slice()
+        .iter()
+        .enumerate()
+        .position(|(i, ty)| requirements.memory_type_bits & (1 << i) != 0 && ty.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
+    let destroy_image = || {
+        // SAFETY: `image` is an image of `device` that nothing has used or bound memory to.
+        unsafe { device.destroy_image(image, None) };
+    };
+    let Some(index) = index.and_then(|i| u32::try_from(i).ok()) else {
+        destroy_image();
+        return Err(Fallback::ImportFailed);
+    };
+    let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
+    let mut import =
+        vk::ImportMemoryWin32HandleInfoKHR::default().handle_type(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE).handle(handle.0 as _);
+    let allocate = vk::MemoryAllocateInfo::default()
+        .allocation_size(requirements.size)
+        .memory_type_index(index)
+        .push_next(&mut dedicated)
+        .push_next(&mut import);
+    // SAFETY: `allocate` imports the open handle as dedicated memory of `image`, and its chain lives
+    // for the call. The import does not take the handle.
+    let memory = match unsafe { device.allocate_memory(&allocate, None) } {
+        Ok(memory) => memory,
+        Err(_) => {
+            destroy_image();
+            return Err(Fallback::ImportFailed);
+        }
+    };
+    // SAFETY: `memory` was allocated for `image` with its requirements, and nothing is bound yet.
+    if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
+        // SAFETY: nothing uses `memory`, which is bound to no image.
+        unsafe { device.free_memory(memory, None) };
+        destroy_image();
+        return Err(Fallback::ImportFailed);
+    }
+    // SAFETY: `image` is an image of `hal` described by `desc` with `memory` bound to it; wgpu-hal
+    // takes both and destroys them with the texture.
+    Ok(unsafe { hal.texture_from_raw(image, desc, None, wgpu::hal::vulkan::TextureMemory::Dedicated(memory)) })
 }
 
 impl Exported {
@@ -537,9 +619,10 @@ impl Exported {
         self.ready.after_submitted(value);
     }
 
-    /// Copy the value the queue has reached to the ready fence, without waiting.
-    pub(crate) fn poll(&self) {
-        self.ready.poll();
+    /// Copy the value the queue has reached to the ready fence, without waiting. Returns false
+    /// when the ready fence could not be set.
+    pub(crate) fn poll(&self) -> bool {
+        self.ready.poll()
     }
 }
 

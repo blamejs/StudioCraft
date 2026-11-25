@@ -2,6 +2,8 @@
 //! into. Every system call of the capture side is here, and so is the encoder side of an export
 //! ring: NV12 textures and two fences on a Direct3D 11 device of the compositor's adapter.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
@@ -331,6 +333,9 @@ pub(crate) struct Nv12Ring {
     textures: [ID3D11Texture2D; SLOTS],
     ready: ID3D11Fence,
     released: ID3D11Fence,
+    /// The highest value queued on `released`, read and written only under the context's lock.
+    /// A signal still queued is not in the fence's completed value yet.
+    queued: AtomicU64,
     /// Only the exporter (the `wgpu` feature) opens them.
     #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
     pub(crate) handles: Handles,
@@ -416,7 +421,7 @@ pub(crate) fn nv12_ring(adapter: AdapterId, width: u32, height: u32) -> Result<N
     let (released, released_handle) = fence()?;
     handles.released = released_handle;
     let textures: [ID3D11Texture2D; SLOTS] = made.try_into().map_err(|_| Fallback::Unsupported)?;
-    Ok(Nv12Ring { device, context: std::sync::Mutex::new(context), textures, ready, released, handles })
+    Ok(Nv12Ring { device, context: std::sync::Mutex::new(context), textures, ready, released, queued: AtomicU64::new(0), handles })
 }
 
 impl Nv12Ring {
@@ -442,14 +447,21 @@ impl Nv12Ring {
 
     /// Set the released fence to `value` once the work already queued on the device has run. The
     /// encoder calls it after the packet of the frame has come out, when the texture has been
-    /// read. Returns whether the signal was queued.
+    /// read. A value not above the highest one queued so far is not signaled, so the fence never
+    /// goes back; that counts as queued. Returns whether the signal was queued.
     pub(crate) fn release(&self, value: u64) -> bool {
         let Ok(context) = self.context.lock() else { return false };
+        if value <= self.queued.load(Ordering::Relaxed) {
+            return true;
+        }
         // SAFETY: `released` is a fence of this device; the signal runs on the GPU after the work
         // queued so far, without waiting here.
         let signaled = unsafe { context.Signal(&self.released, value) }.is_ok();
         // SAFETY: the context is valid; flushing sends the signal to the GPU.
         unsafe { context.Flush() };
+        if signaled {
+            self.queued.store(value, Ordering::Relaxed);
+        }
         signaled
     }
 }

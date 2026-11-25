@@ -27,10 +27,13 @@ pub enum Fallback {
     /// The system does not let this window be captured into textures (a window the capture API
     /// does not accept, or a capture the system or the person refused).
     Refused,
+    /// The graphics device that holds the export ring was removed or reset, so its fences no
+    /// longer say which frames are done.
+    DeviceRemoved,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 9] = [
+    pub(crate) const ALL: [Fallback; 10] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -40,6 +43,7 @@ impl Fallback {
         Fallback::MissingExtension,
         Fallback::NoEncoder,
         Fallback::Refused,
+        Fallback::DeviceRemoved,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -53,6 +57,7 @@ impl Fallback {
             Fallback::MissingExtension => 7,
             Fallback::NoEncoder => 8,
             Fallback::Refused => 9,
+            Fallback::DeviceRemoved => 10,
         }
     }
 
@@ -73,6 +78,7 @@ impl std::fmt::Display for Fallback {
             Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
+            Fallback::DeviceRemoved => "the graphics device that holds the encoder's frames was removed or reset",
         })
     }
 }

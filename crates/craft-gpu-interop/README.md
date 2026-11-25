@@ -96,7 +96,10 @@ exported. One encoder session reads each export ring.
   `Fallback::ImportFailed`. An encoder that cannot open a session on the export ring's device
   records `Fallback::NoEncoder` on the ring, and `Exporter::copy` then returns it. The caller reads
   the frames back through CPU memory instead. `ExportRing::release` also records
-  `Fallback::NoEncoder` when the released fence's signal cannot be queued.
+  `Fallback::NoEncoder` when the released fence's signal cannot be queued, and a Vulkan export
+  records `Fallback::ImportFailed` when it cannot set the ready fence. When the device that holds
+  the export ring has been removed, `ExportRing::ready` and `released` return 0 and record
+  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
   alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
   its color, which the system delivers multiplied by alpha, is divided by alpha.

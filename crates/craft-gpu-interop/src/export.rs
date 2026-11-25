@@ -10,6 +10,10 @@ use crate::ring::{AdapterId, SLOTS};
 
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
 
+/// The completed value `GetCompletedValue` returns for a fence whose device has been removed.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const REMOVED: u64 = u64::MAX;
+
 /// The NV12 textures and fences one encoder reads the compositor's program frames from. On
 /// Windows they live on a Direct3D 11 device of the compositor's adapter, the device a hardware
 /// encoder opens its session on, and are shared through NT handles with the compositor's device.
@@ -112,12 +116,26 @@ impl ExportRing {
     }
 
     /// The ready fence's value now, without waiting: the newest frame whose copy has finished.
+    /// Once the device that holds the textures has been removed it is 0, and
+    /// [`Fallback::DeviceRemoved`] is recorded.
     pub fn ready(&self) -> u64 {
         #[cfg(windows)]
         if let Some(nv12) = &self.nv12 {
-            return nv12.ready();
+            return self.completed(nv12.ready());
         }
         self.detached_ready.load(Ordering::Acquire)
+    }
+
+    /// `value`, a fence's completed value as Direct3D reports it. A removed device reports
+    /// [`REMOVED`]: then [`Fallback::DeviceRemoved`] is recorded and 0 returned, so no frame
+    /// counts as ready and no texture as handed back.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn completed(&self, value: u64) -> u64 {
+        if value == REMOVED {
+            self.refuse(Fallback::DeviceRemoved);
+            return 0;
+        }
+        value
     }
 
     /// Set a detached ring's ready fence to `value`. A ring with textures is not changed: its
@@ -131,22 +149,24 @@ impl ExportRing {
     }
 
     /// The released fence's value now, without waiting: the newest frame the encoder has read.
+    /// Once the device that holds the textures has been removed it is 0, and
+    /// [`Fallback::DeviceRemoved`] is recorded.
     pub fn released(&self) -> u64 {
         #[cfg(windows)]
         if let Some(nv12) = &self.nv12 {
-            return nv12.released();
+            return self.completed(nv12.released());
         }
         self.detached_released.load(Ordering::Acquire)
     }
 
     /// Hand the textures of the frames up to `value` back to the compositor, after the work the
-    /// encoder's device has already queued. Values only grow; a lower one changes nothing. When
-    /// the signal cannot be queued, [`Fallback::NoEncoder`] is recorded, since the compositor
-    /// would otherwise run out of textures without a reason.
+    /// encoder's device has already queued. Values only grow; a value not above the highest one
+    /// queued so far changes nothing. When the signal cannot be queued, [`Fallback::NoEncoder`]
+    /// is recorded, since the compositor would otherwise run out of textures without a reason.
     pub fn release(&self, value: u64) {
         #[cfg(windows)]
         if let Some(nv12) = &self.nv12 {
-            if value > nv12.released() && !nv12.release(value) {
+            if !nv12.release(value) {
                 self.refuse(Fallback::NoEncoder);
             }
             return;
@@ -222,25 +242,41 @@ pub struct Feed {
     reading: VecDeque<(ExportFrame, i64)>,
     /// The newest ready value handed back.
     handed: u64,
+    /// The newest ready value offered.
+    offered: u64,
 }
 
 impl Default for Feed {
     fn default() -> Self {
-        Feed { waiting: VecDeque::with_capacity(SLOTS + 1), reading: VecDeque::with_capacity(SLOTS + 1), handed: 0 }
+        Feed { waiting: VecDeque::with_capacity(SLOTS + 1), reading: VecDeque::with_capacity(SLOTS + 1), handed: 0, offered: 0 }
     }
 }
 
 impl Feed {
-    /// Add `frame`, shown at `pts`, after the frames already waiting. A ring has [`SLOTS`]
+    /// Whether [`Feed::offer`] queues `frame`. The compositor gives each frame a ready value
+    /// above every earlier one, so a frame whose value is not above the newest frame offered or
+    /// handed back is a copy of a frame already given: its texture may hold a newer picture, and
+    /// it is refused.
+    pub fn accepts(&self, frame: &ExportFrame) -> bool {
+        let handed = if self.handed == 0 { frame.ring.released() } else { self.handed };
+        frame.ready > self.offered.max(handed)
+    }
+
+    /// Add `frame`, shown at `pts`, after the frames already waiting. A frame that
+    /// [`Feed::accepts`] refuses is returned without being queued. A ring has [`SLOTS`]
     /// textures, so a frame beyond that many waiting ones means the oldest texture was written
     /// again: that frame is dropped and returned. Its texture is not handed back here, since that
     /// would also hand back the older frames still being encoded; the next frame handed back
     /// covers it.
     pub fn offer(&mut self, frame: ExportFrame, pts: i64) -> Option<ExportFrame> {
+        if !self.accepts(&frame) {
+            return Some(frame);
+        }
         if self.handed == 0 {
             // A ring another session read before: its frames up to here went back already.
             self.handed = frame.ring.released();
         }
+        self.offered = frame.ready;
         self.waiting.push_back((frame, pts));
         if self.waiting.len() > SLOTS {
             return self.waiting.pop_front().map(|(dropped, _)| dropped);
@@ -458,13 +494,15 @@ impl Exporter {
         planes: &[wgpu::Texture],
         now: std::time::Instant,
     ) -> Result<Option<(wgpu::CommandBuffer, Ticket)>, Fallback> {
+        self.poll();
+        // Reading the released fence records the fallback of a removed device.
+        let released = self.ring.released();
         if let Some(reason) = self.ring.fallback() {
             return Err(reason);
         }
-        self.poll();
         // An encoder may hold a picture for longer than `RECLAIM`, so a texture is written again
         // only once the encoder has released it.
-        let Some(slot) = self.slots.pick_released(self.ring.released()) else { return Ok(None) };
+        let Some(slot) = self.slots.pick_released(released) else { return Ok(None) };
         #[cfg(windows)]
         let commands = match &self.raw {
             Raw::Dx12(r) => r.copy(device, planes, slot),
@@ -501,11 +539,15 @@ impl Exporter {
     }
 
     /// Copy the values the compositor's queue has reached to the ready fence, without waiting.
-    /// Only a Vulkan export has anything to do; [`Exporter::copy`] also calls it.
+    /// Only a Vulkan export has anything to do; [`Exporter::copy`] also calls it. When the ready
+    /// fence cannot be set, [`Fallback::ImportFailed`] is recorded on the ring, as a Direct3D 12
+    /// export records it when its signal fails.
     pub fn poll(&self) {
         #[cfg(windows)]
-        if let Raw::Vulkan(r) = &self.raw {
-            r.poll();
+        if let Raw::Vulkan(r) = &self.raw
+            && !r.poll()
+        {
+            self.ring.refuse(Fallback::ImportFailed);
         }
     }
 }
