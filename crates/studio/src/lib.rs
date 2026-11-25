@@ -11,8 +11,10 @@ mod audio_tracks;
 mod captions;
 pub mod capture;
 mod events;
+mod face_models;
 pub mod files;
 mod golive;
+mod model_jobs;
 mod monitor;
 mod outputs;
 mod pause;
@@ -372,6 +374,8 @@ pub struct Studio {
     audio_tracks: audio_tracks::AudioTracks,
     /// Speech recognition of the program audio, and the caption files of recordings.
     captions: captions::Captions,
+    /// The download or install of the face tracking model.
+    face_models: face_models::FaceModels,
     /// Markers set during the recording, and the timeline files of recordings that stopped.
     recording_markers: recording_markers::RecordingMarkers,
     /// The scan of the recording folder for `recordings.list`, and its last result.
@@ -530,6 +534,7 @@ impl Studio {
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
+            face_models: face_models::FaceModels::default(),
             recording_markers: recording_markers::RecordingMarkers::default(),
             recordings: recordings::Recordings::default(),
             pause: None,
@@ -592,6 +597,7 @@ impl Studio {
         // Finished caption work is collected first, so a status reads the current state and a
         // start or download does not meet a worker that has already ended.
         self.sync_captions();
+        self.sync_face_models();
         let outcome = self.engine.execute(cmd);
         let outcome = match outcome {
             Ok(o) => o,
@@ -635,6 +641,10 @@ impl Studio {
                 RuntimeAction::CaptionsStatus => result = self.captions_json(),
                 RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
+                RuntimeAction::AvatarModels => result = self.face_models_json(),
+                RuntimeAction::AvatarModelDownload { model } => result = self.download_face_model(model)?,
+                RuntimeAction::AvatarModelDownloadCancel => self.cancel_face_model_job(),
+                RuntimeAction::AvatarModelInstall { path, model } => result = self.install_face_model(path, model)?,
                 RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::FilterMeter { source, filter } => result = self.filter_meter_json(source, filter),
                 RuntimeAction::PauseStart(values) => result = self.start_pause(values)?,
@@ -763,6 +773,7 @@ impl Studio {
         self.poll_virtual_camera();
         self.sync_audio_tracks();
         self.sync_captions();
+        self.sync_face_models();
         self.sync_recording_markers();
         self.mixer.free_retired();
     }
@@ -1794,6 +1805,7 @@ impl Drop for Studio {
         self.finish_audio_tracks_blocking();
         // Caption files of a recording that just stopped are written before the studio closes.
         self.finish_captions_blocking();
+        self.finish_face_models_blocking();
         // So is the marker file, with the recording ending when the app closed.
         self.finish_recording_markers_blocking(closed);
     }

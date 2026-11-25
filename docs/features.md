@@ -482,6 +482,18 @@ A phrase goes out within about a second of being finished, at most 32 characters
 captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
 left out. Recordings do not carry closed captions; they get the caption files.
 
+### Face tracking model
+
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant

@@ -555,13 +555,18 @@ impl Studio {
     }
 
     /// Look at a model's files for the status only when `filter` passes the models folder and
-    /// every path of that model; otherwise the status reports `downloaded` as null. `None` looks
-    /// at every model.
+    /// every path of that model; otherwise the status reports `downloaded` (for a face tracking
+    /// model, `installed`) as null. `None` looks at every model.
     pub fn set_model_file_filter(&mut self, filter: Option<ModelFileFilter>) {
         self.captions.model_filter = filter;
     }
 
-    /// Keep speech models in `dir` from now on.
+    /// Whether the model file filter passes `dir` and every one of `paths`.
+    pub(crate) fn model_files_shown(&self, dir: &Path, paths: &[PathBuf]) -> bool {
+        self.captions.model_filter.as_ref().is_none_or(|pass| pass(dir) && paths.iter().all(|p| pass(p)))
+    }
+
+    /// Keep speech models and face tracking models in `dir` from now on.
     pub fn set_models_dir(&mut self, dir: PathBuf) {
         self.captions.models_dir = dir;
     }
@@ -695,17 +700,23 @@ impl Studio {
         if let Some(d) = &self.captions.download {
             return Err(StudioError::Output(format!("the speech model `{}` is already being downloaded", d.model)));
         }
+        // A download a closed studio stopped still holds the model's folder until it ends, so this
+        // one cannot have its part files deleted.
+        let held = crate::model_jobs::Held::take(&models::model_dir(&self.captions.models_dir, info))
+            .ok_or_else(|| StudioError::Output(format!("an earlier download of the speech model `{model}` has not ended yet; try again shortly")))?;
         // The worker checks the files already there, so a large model is not hashed on this thread.
         let (cancel, done, total) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(info.size())));
         let (c, d, t, dir) = (Arc::clone(&cancel), Arc::clone(&done), Arc::clone(&total), self.captions.models_dir.clone());
         let handle = std::thread::Builder::new()
             .name("speech-model-download".into())
             .spawn(move || {
-                models::download(&dir, info, &mut |got, all, _| {
+                let result = models::download(&dir, info, &mut |got, all, _| {
                     d.store(got, Ordering::Relaxed);
                     t.store(all, Ordering::Relaxed);
                     !c.load(Ordering::Relaxed)
-                })
+                });
+                drop(held);
+                result
             })
             .map_err(|e| StudioError::Output(format!("the download could not start: {e}")))?;
         self.captions.download = Some(Download { model: model.to_string(), cancel, done, total, handle });

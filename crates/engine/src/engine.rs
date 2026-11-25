@@ -378,6 +378,23 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::CaptionsDownload { model }))
             }
             Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
+            Command::AvatarModels {} => Ok(Outcome::runtime(RuntimeAction::AvatarModels)),
+            Command::AvatarModelDownload { model } => {
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the face tracking model is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AvatarModelDownload { model }))
+            }
+            Command::AvatarModelDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::AvatarModelDownloadCancel)),
+            Command::AvatarModelInstall { path, model } => {
+                if path.trim().is_empty() {
+                    return Err(EngineError::Invalid("the model file's path is empty".into()));
+                }
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the face tracking model is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AvatarModelInstall { path, model }))
+            }
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::AudioTracksMarker { name } => {
                 check_marker_name(name.as_deref())?;
