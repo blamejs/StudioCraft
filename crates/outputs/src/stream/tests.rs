@@ -2312,6 +2312,17 @@ fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
 }
 
 #[test]
+fn destinations_that_are_off_do_not_count_against_the_copy() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut targets: Vec<Target> = (0..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
+    targets[0].enabled = false;
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let mut out = Streaming::start_copying(&job, targets, quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    assert!(out.stream_copy().is_some_and(|c| c.failure.is_none_or(|f| f.contains("not opened"))));
+    let _ = out.stop();
+}
+
+#[test]
 fn phrases_from_before_the_stream_are_not_sent() {
     let phrases = Arc::new(Fifo::new(8));
     phrases.push("said before the stream started".to_string());
