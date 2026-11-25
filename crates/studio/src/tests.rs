@@ -3228,4 +3228,27 @@ mod virtual_camera {
         assert_eq!(n.args, [("error", "unplugged".to_string())]);
         assert!(n.error);
     }
+
+    #[test]
+    fn the_virtual_camera_stops_when_the_graphics_device_goes_and_runs_on_when_it_changes() {
+        let Some(gpu) = shared_gpu() else {
+            eprintln!("no graphics device; skipped");
+            return;
+        };
+        let (mut s, board) = studio(Some(gpu.clone()));
+        s.run("vcam.start", &json!({})).unwrap();
+        // A new device restarts the compositor, and the camera keeps running.
+        s.set_gpu(Some(gpu));
+        assert!(!board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"]["active"], json!(true));
+        // Without a device nothing is drawn, so the camera stops.
+        s.set_gpu(None);
+        assert!(board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"], json!({"active": false}));
+        // The video settings can change again.
+        let mut p = s.profile().clone();
+        p.video.output_width = 640;
+        p.video.output_height = 360;
+        s.set_profile(p).unwrap();
+    }
 }

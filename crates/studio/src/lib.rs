@@ -831,13 +831,17 @@ impl Studio {
         self.gpu.as_ref()
     }
 
-    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor.
+    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor. A running
+    /// virtual camera keeps running when the compositor starts again, and stops when it does not.
     pub fn set_gpu(&mut self, gpu: Option<Gpu>) {
         self.recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
         self.gpu = gpu;
         self.gpu_loss = None;
         self.outputs.forget_hardware_tests();
         self.restart_video();
+        if self.video.is_none() {
+            self.stop_virtual_camera();
+        }
     }
 
     /// Bring sources, the mixer and the compositor in line with the collection, and start a
