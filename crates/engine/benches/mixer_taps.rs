@@ -14,7 +14,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::audio::BLOCK_SAMPLES;
 use studiocraft_media::mix::Levels;
 use studiocraft_media::tap::TapSlot;
-use studiocraft_model::{MonitorMode, SourceId};
+use studiocraft_model::{MixTracks, MonitorMode, SourceId};
 use studiocraft_plugin::AudioOut;
 
 /// A mixer with `inputs` inputs, each fed one block before every tick, and a tap for every input
@@ -35,6 +35,7 @@ fn mixer(inputs: u64, taps: bool) -> (MixState, Vec<Arc<AudioOut>>, Vec<Arc<TapS
             filters: Vec::new(),
             sync_offset_ms: 0,
             monitor: MonitorMode::Off,
+            mix_tracks: MixTracks::ALL,
         })
         .collect();
     m.apply(MixerCmd::Inputs(list));

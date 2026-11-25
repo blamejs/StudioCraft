@@ -18,9 +18,9 @@
 //! - A file that cannot be created or written stops the copy and keeps what was written. A file
 //!   that already holds data when the copy opens it is not written to. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
-//!   waits up to its limit for that, then leaves the file as it is; it plays up to its last whole
-//!   cluster. The copy then counts as not finished, even when a write that was waiting finishes
-//!   the file later.
+//!   waits up to its limit for that, then leaves the file unfinished, and it may not play. A file
+//!   that opens after that gets nothing written to it. The copy then counts as not finished, even
+//!   when a write that was waiting finishes the file later.
 
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Seek, Write};
@@ -159,7 +159,7 @@ impl StreamCopy {
         let mut failure = lock(&self.shared.failure);
         self.shared.abandon.store(true, Ordering::SeqCst);
         if !self.shared.finished.load(Ordering::SeqCst) && failure.is_none() {
-            *failure = Some(format!("the copy was not finished in {} seconds; it plays up to the last part written", wait.as_secs()));
+            *failure = Some(format!("the copy was not finished in {} seconds; the file may not play", wait.as_secs()));
         }
     }
 }

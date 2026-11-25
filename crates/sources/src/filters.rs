@@ -14,6 +14,10 @@ use studiocraft_plugin::{
 
 use crate::image::{PICTURE_EXTENSIONS, load as load_picture};
 
+mod lut;
+
+pub use lut::{ApplyLut, LUT_1D_LATTICE, LUT_MAX_1D_SIZE, LUT_MAX_FILE, LUT_MAX_SIZE, Lut, load_lut, lut_from_picture, parse_cube};
+
 /// A video filter's shader parameters.
 type Params = [f32; VIDEO_EFFECT_PARAMS];
 
@@ -1810,6 +1814,81 @@ mod tests {
             assert!(f.update(&s).is_err(), "{key} = {v}");
             assert_eq!(f.video_effect(), before, "{key} = {v}: the last good settings stay");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `.cube` file in `dir` holding the table of `n` colors a side that maps each lattice
+    /// color through `f`; its path.
+    fn cube(dir: &std::path::Path, name: &str, n: u32, f: impl Fn([f64; 3]) -> [f64; 3]) -> String {
+        let mut text = format!("LUT_3D_SIZE {n}\n");
+        let v = |i: u32| f64::from(i) / f64::from(n - 1);
+        for b in 0..n {
+            for g in 0..n {
+                for r in 0..n {
+                    let [x, y, z] = f([v(r), v(g), v(b)]);
+                    text.push_str(&format!("{x} {y} {z}\n"));
+                }
+            }
+        }
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn lut(s: &Settings) -> VideoEffect {
+        ApplyLut.create(s).unwrap().video_effect().unwrap()
+    }
+
+    /// Each table over two opaque pixels, drawn over black.
+    #[test]
+    fn apply_lut_maps_colors_through_its_table_by_its_amount() {
+        let dir = scratch("apply-lut-draw");
+        let invert = cube(&dir, "invert.cube", 2, |[r, g, b]| [1.0 - r, 1.0 - g, 1.0 - b]);
+        let swap = cube(&dir, "swap.cube", 3, |[r, g, b]| [b, g, r]);
+        let identity = cube(&dir, "identity.cube", 33, |c| c);
+        let source = [[200, 100, 50, 255], [10, 240, 130, 255]];
+        let s = |file: &str| Settings::new().with("file", file);
+        let cases: [(Settings, [[u8; 4]; 2]); 5] = [
+            (s(&invert), [[55, 155, 205, 255], [245, 15, 125, 255]]),
+            (s(&invert).with("amount", 25.0), [[164, 114, 89, 255], [69, 184, 129, 255]]),
+            (s(&invert).with("amount", 0.0), source),
+            (s(&swap), [[50, 100, 200, 255], [130, 240, 10, 255]]),
+            (s(&identity), source),
+        ];
+        for (settings, want) in cases {
+            let Some(px) = draw_frame(&source, 2, 1, vec![lut(&settings)]) else { break };
+            for (x, w) in want.iter().enumerate() {
+                assert!(near(canvas_pixel(&px, x, 0), *w), "{settings:?}, x {x}: {:?}", canvas_pixel(&px, x, 0));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The input range picks the part of each channel the table covers; colors outside it use
+    /// the table's edge.
+    #[test]
+    fn apply_lut_reads_colors_through_the_tables_input_range() {
+        let dir = scratch("apply-lut-domain");
+        let path = dir.join("range.cube");
+        std::fs::write(&path, "DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n")
+            .unwrap();
+        let source = [[64, 200, 0, 255]];
+        let Some(px) = draw_frame(&source, 1, 1, vec![lut(&Settings::new().with("file", &*path.to_string_lossy()))]) else { return };
+        // 64 / 255 is about half of 0.5, and 200 / 255 is past 0.5.
+        assert!(near(canvas_pixel(&px, 0, 0), [128, 255, 0, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A table value below 0 or above 1 is blended as it is, and only the result is clipped.
+    #[test]
+    fn apply_lut_blends_table_values_outside_0_to_1_before_clipping() {
+        let dir = scratch("apply-lut-wide");
+        // Red runs from -1 to 1, so a red of 128 / 255 comes out at about 1 / 255.
+        let wide = cube(&dir, "wide.cube", 2, |[r, g, b]| [2.0 * r - 1.0, g, b]);
+        let source = [[128, 100, 50, 255], [255, 100, 50, 255]];
+        let Some(px) = draw_frame(&source, 2, 1, vec![lut(&Settings::new().with("file", wide.as_str()))]) else { return };
+        assert!(near(canvas_pixel(&px, 0, 0), [1, 100, 50, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        assert!(near(canvas_pixel(&px, 1, 0), [255, 100, 50, 255]), "{:?}", canvas_pixel(&px, 1, 0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

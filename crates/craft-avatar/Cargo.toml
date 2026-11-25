@@ -1,0 +1,19 @@
+[package]
+name = "craft-avatar"
+description = "Avatars driven by face tracking: the avatar model (skeleton, humanoid bones, meshes with morph targets, materials, expressions, look-at, spring bones and license terms), the 52-shape tracking vocabulary with head pose, mappings from tracked shapes to expressions, calibration, expression overrides, the lost-face and idle motion, and the spring-bone step"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-ease = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+stats_alloc = { workspace = true }
