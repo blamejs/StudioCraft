@@ -165,6 +165,9 @@
 	Linear	Лінійно
 	LIVE	ЕФІР
 	Layouts	Розкладки
+	Layout	Розкладка
+	Collection	Колекція
+layout	Custom	Власна
 	Live, {time}	В ефірі, {time}
 	Lock (it can't be moved in the preview)	Заблокувати (не можна переміщати в попередньому перегляді)
 	Lock Preview	Заблокувати попередній перегляд

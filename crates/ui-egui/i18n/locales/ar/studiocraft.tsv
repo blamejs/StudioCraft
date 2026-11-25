@@ -168,6 +168,9 @@
 	Linear	خطي
 	LIVE	مباشر
 	Layouts	التخطيطات
+	Layout	التخطيط
+	Collection	المجموعة
+layout	Custom	مخصص
 	Live, {time}	مباشر، {time}
 	Lock (it can't be moved in the preview)	قفل (لا يمكن تحريكه في المعاينة)
 	Lock Preview	قفل المعاينة

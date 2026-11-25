@@ -1332,6 +1332,139 @@ fn the_status_bar_is_the_shells_status_bar_along_the_bottom() {
     assert_eq!(rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).bottom(), 800.0);
 }
 
+/// The status bar's selects: name, description and bounds, in reading order.
+fn status_switchers_drawn(tree: &craft_ui::testing::access::AccessTree) -> Vec<(String, String, egui::Rect)> {
+    use craft_ui::contract::Role;
+    let Some(bar) = tree.with_role(Role::STATUS).into_iter().find_map(|k| tree.bounds_of(k)) else { return Vec::new() };
+    let mut out: Vec<(String, String, egui::Rect)> = tree
+        .with_role(Role::COMBO_BOX)
+        .into_iter()
+        .filter_map(|k| {
+            let r = tree.bounds_of(k)?;
+            let name = tree.name_of(k)?.to_string();
+            bar.contains_rect(r).then(|| (name, tree.description_of(k).unwrap_or("").to_string(), r))
+        })
+        .collect();
+    out.sort_by(|a, b| a.2.left().total_cmp(&b.2.left()));
+    out
+}
+
+#[test]
+fn the_status_bar_switches_the_layout_from_its_list_and_names_the_one_in_use() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let drawn = status_switchers_drawn(&tree);
+    let seen: Vec<(&str, &str)> = drawn.iter().map(|(n, d, _)| (n.as_str(), d.as_str())).collect();
+    assert_eq!(seen, [("Profile", DEFAULT_NAME), ("Collection", DEFAULT_NAME), ("Layout", "Classic")], "{drawn:?}");
+    // A click opens the Layout list; Home and Enter pick its first entry.
+    let at = drawn[2].2.center();
+    for events in [vec![Event::PointerMoved(at)], vec![button(at, true)], vec![button(at, false)], vec![], press(Key::Home, Modifiers::NONE)] {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_with(&mut a, &ctx, size, press(Key::Enter, Modifiers::NONE));
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(Some(a.store().prefs().docks), store::built_in_layout("Set up").map(|l| l.docks), "the pick applied Set up");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert_eq!(status_switchers_drawn(&tree).get(2).map(|s| s.1.as_str()), Some("Set up"));
+    // Docks moved by hand match no layout.
+    run(&mut a, &ctx, "dock.sources", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert_eq!(status_switchers_drawn(&tree).get(2).map(|s| s.1.as_str()), Some("Custom"));
+}
+
+#[test]
+fn long_switcher_names_leave_the_readouts_whole_in_the_narrowest_window() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // Names are at most 100 characters.
+    let long = |what: &str| format!("{what} {}", "w".repeat(99 - what.len()));
+    a.named(Named::NewProfile, &long("Profile")).unwrap();
+    a.named(Named::NewCollection, &long("Collection")).unwrap();
+    // The default docks match Classic, which the switcher would name instead of the saved layout.
+    run(&mut a, &ctx, "dock.sources", json!({})).unwrap();
+    run(&mut a, &ctx, "dock.layout_save", json!({"name": long("Layout")})).unwrap();
+    assert_eq!(a.studio().profile().name.chars().count(), 100);
+    let size = egui::vec2(760.0, 480.0);
+    for _ in 0..3 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let bar = tree.with_role(craft_ui::contract::Role::STATUS).into_iter().find_map(|k| tree.bounds_of(k)).unwrap_or(egui::Rect::NOTHING);
+    let member = |part: &str| {
+        let key = tree.keys().into_iter().find(|k| tree.name_of(*k).is_some_and(|n| n.contains(part)));
+        key.and_then(|k| tree.bounds_of(k)).unwrap_or(egui::Rect::NOTHING)
+    };
+    let (fps, dropped) = (member(" fps  "), member("dropped "));
+    assert!(bar.contains_rect(fps) && bar.contains_rect(dropped), "{fps:?} {dropped:?} in {bar:?}");
+    // The switchers are collected wherever they are drawn, so one pushed out of the bar fails below.
+    let mut drawn: Vec<(String, String, egui::Rect)> = tree
+        .with_role(craft_ui::contract::Role::COMBO_BOX)
+        .into_iter()
+        .filter_map(|k| Some((tree.name_of(k)?.to_string(), tree.description_of(k).unwrap_or("").to_string(), tree.bounds_of(k)?)))
+        .filter(|(name, _, _)| ["Profile", "Collection", "Layout"].contains(&name.as_str()))
+        .collect();
+    drawn.sort_by(|a, b| a.2.left().total_cmp(&b.2.left()));
+    let shown: Vec<(&str, &str)> = drawn.iter().map(|(n, d, _)| (n.as_str(), d.as_str())).collect();
+    assert_eq!(
+        shown,
+        [("Profile", long("Profile").as_str()), ("Collection", long("Collection").as_str()), ("Layout", long("Layout").as_str())],
+        "{drawn:?}"
+    );
+    for (name, _, r) in &drawn {
+        assert!(bar.contains_rect(*r), "{name} at {r:?} is outside {bar:?}");
+        assert!(!r.intersects(fps) && !r.intersects(dropped), "{name} at {r:?} covers {fps:?} or {dropped:?}");
+        assert!(r.width() < 300.0, "{name} is {} points wide", r.width());
+    }
+}
+
+#[test]
+fn the_status_bar_switchers_follow_the_profile_the_collection_and_the_docks() {
+    let names = vec!["Main".to_string(), "Weekly".to_string()];
+    let mut p = store::Prefs::default();
+    let summary = |s: &[Switcher]| -> Vec<(&str, &str, Option<String>, String)> {
+        s.iter().map(|s| (s.caption, s.command, s.current.clone(), s.shown.clone())).collect()
+    };
+    let values = |s: &Switcher| -> Vec<String> { s.entries.iter().filter_map(|e| e.value().cloned()).collect() };
+    let s = status_switchers(&names, "Weekly", &names, "Main", &p, false);
+    assert_eq!(
+        summary(&s),
+        [
+            ("Profile", "profile.switch", Some("Weekly".into()), "Weekly".into()),
+            ("Collection", "collection.switch", Some("Main".into()), "Main".into()),
+            ("Layout", "dock.layout_apply", Some("Classic".into()), "Classic".into()),
+        ]
+    );
+    assert_eq!(values(&s[0]), names);
+    assert_eq!(values(&s[2]), ["Set up", "Live", "Review", "Classic"]);
+    // While an output runs, only the layout switches from the bar.
+    let s = status_switchers(&names, "Weekly", &names, "Main", &p, true);
+    assert_eq!(s.iter().map(|s| s.command).collect::<Vec<_>>(), ["dock.layout_apply"]);
+    // Docks that match no layout show Custom; saved, they show the saved name after the built-in
+    // layouts and a separator.
+    p.docks.scenes = false;
+    let s = status_switchers(&names, "Weekly", &names, "Main", &p, false);
+    assert_eq!((s[2].current.clone(), s[2].shown.as_str()), (None, "Custom"));
+    p.save_dock_layout("Talk").unwrap();
+    let s = status_switchers(&names, "Weekly", &names, "Main", &p, false);
+    assert_eq!((s[2].current.as_deref(), s[2].shown.as_str()), (Some("Talk"), "Talk"));
+    assert_eq!(values(&s[2]), ["Set up", "Live", "Review", "Classic", "Talk"]);
+    assert_eq!(s[2].entries.len(), 6, "a separator before the saved layouts");
+    // A built-in layout names docks a saved layout also holds.
+    p.docks = store::built_in_layout("Live").map(|l| l.docks).unwrap_or_default();
+    p.save_dock_layout("Mine").unwrap();
+    let s = status_switchers(&names, "Weekly", &names, "Main", &p, false);
+    assert_eq!(s[2].current.as_deref(), Some("Live"));
+    // A name that is not in the list is none of the entries.
+    let s = status_switchers(&names, "Gone", &[], "", &p, false);
+    assert_eq!((s[0].current.clone(), s[0].shown.as_str(), s[1].entries.len()), (None, "", 0));
+}
+
 /// One frame at `size` with `events`, and the accessibility tree it produced.
 fn frame_tree(app: &mut StudioApp, ctx: &egui::Context, size: egui::Vec2, events: Vec<Event>) -> craft_ui::testing::access::AccessTree {
     ctx.enable_accesskit();

@@ -165,6 +165,9 @@
 	Linear	リニア
 	LIVE	ライブ
 	Layouts	レイアウト
+	Layout	レイアウト
+	Collection	コレクション
+layout	Custom	カスタム
 	Live, {time}	配信中、{time}
 	Lock (it can't be moved in the preview)	ロック (プレビューで移動できなくなります)
 	Lock Preview	プレビューをロック

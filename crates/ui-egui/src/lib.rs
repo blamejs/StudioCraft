@@ -2582,8 +2582,16 @@ impl StudioApp {
     /// with its countdown, the audio tracks state, the running replay buffer, recording and stream
     /// with their times and the count of destinations reconnecting, the drop counts and, last, the
     /// frame rate and frame time.
-    fn status_bar(&mut self, ui: &mut Ui) {
+    fn status_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let stats = self.studio.stats();
+        let switchers = status_switchers(
+            &self.profiles,
+            &self.studio.profile().name,
+            &self.collections,
+            &self.studio.collection().name,
+            self.store.prefs(),
+            self.outputs_running(),
+        );
         let fps = self.studio.video_settings().fps();
         let rec = self.studio.output(OutputKind::Recording);
         let live = self.studio.output(OutputKind::Streaming);
@@ -2614,6 +2622,9 @@ impl StudioApp {
         let rate = craft_i18n::fmt(tl!("{fps} fps  {ms} ms"), &[("fps", &format!("{fps:.2}")), ("ms", &format!("{:.1}", stats.render_avg_ms))]);
         let (dropped, lagged) = (stats.encoder_dropped.to_string(), stats.lagged.to_string());
         let drops = craft_i18n::fmt(tl!("dropped {dropped}  lagged {lagged}"), &[("dropped", &dropped), ("lagged", &lagged)]);
+        // A pick runs once after the bar is drawn, also when the bar's body runs more than once in
+        // a pass.
+        let mut picked: Option<CommandRef> = None;
         // An empty label names the bar with the framework's words for a status bar.
         let _ = Bar::new("", BarKind::Status)
             .trailing(|ui, _| {
@@ -2639,7 +2650,27 @@ impl StudioApp {
                 Divider::vertical().show(ui);
                 let _ = Text::new(rate.clone()).role(TypeRole::Mono).show(ui);
             })
-            .show(ui, |_, _| {});
+            .show(ui, |ui, _| {
+                for (k, s) in switchers.iter().enumerate() {
+                    if k > 0 {
+                        Divider::vertical().show(ui);
+                    }
+                    let _ = Text::new(s.caption).show(ui);
+                    // The entries are not stepped, so the accessible value is empty; the
+                    // description names the one in use.
+                    let choice = Select::new(s.caption, Bind::given(s.current.clone().unwrap_or_default()), &s.entries)
+                        .placeholder(s.shown.clone())
+                        .description(s.shown.clone())
+                        .id_salt(("status-switcher", s.command))
+                        .show(ui);
+                    if let Some(name) = choice.events.committed()
+                        && s.current.as_ref() != Some(name)
+                    {
+                        picked = Some(CommandRef::with_params(s.command, json!({"name": name})));
+                    }
+                }
+            });
+        acts.extend(picked.map(Act::Run));
     }
 
     fn windows(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
@@ -2807,7 +2838,7 @@ impl StudioApp {
         let mut pass = Pass { app: self, acts: Vec::new() };
         AppShell::new(WindowKey::main())
             .title_bar(|ui, _, pass: &mut Pass<'_>| pass.app.title_bar(ui, &mut pass.acts))
-            .status(status_bar, |ui, _, pass: &mut Pass<'_>| pass.app.status_bar(ui))
+            .status(status_bar, |ui, _, pass: &mut Pass<'_>| pass.app.status_bar(ui, &mut pass.acts))
             .body(move |ui, bcx, pass: &mut Pass<'_>| {
                 if let Some(host) = bcx.dialogs() {
                     pass.app.window_dialogs = Some(host);
@@ -3032,6 +3063,59 @@ fn stream_tag(c: studiocraft_plugin::DestinationCounts) -> (&'static str, Option
     }
     let waiting = (c.retrying > 0).then(|| craft_i18n::fmt(tl!("{count} reconnecting"), &[("count", &c.retrying.to_string())]));
     (tl!("LIVE"), waiting, false)
+}
+
+/// A switcher of the status bar: a caption and a select whose pick runs `command` with the picked
+/// entry's value as `name`.
+struct Switcher {
+    caption: &'static str,
+    command: &'static str,
+    entries: Vec<Entry<String>>,
+    /// The value of the entry in use, or `None` when none of the entries is in use.
+    current: Option<String>,
+    /// The label of the entry in use, or the word for none of them.
+    shown: String,
+}
+
+/// The status bar's switchers: Profile and Collection, then Layout. While a recording, stream or
+/// replay buffer runs (`outputs_run`) only Layout shows; the Profile and Scene Collection menus
+/// still switch. A layout is in use while the docks are as it sets them, a built-in one before a
+/// saved one. The entries are not stepped, so the arrow keys and the wheel over a closed select
+/// do not switch; a pick in its list does.
+fn status_switchers(
+    profiles: &[String],
+    profile: &str,
+    collections: &[String],
+    collection: &str,
+    prefs: &store::Prefs,
+    outputs_run: bool,
+) -> Vec<Switcher> {
+    let names = |caption: &'static str, command: &'static str, names: &[String], current: &str| {
+        let entries = names.iter().map(|n| Entry::new(n.clone(), n.clone()).stepped(false)).collect();
+        let current = names.iter().find(|n| *n == current).cloned();
+        let shown = current.clone().unwrap_or_default();
+        Switcher { caption, command, entries, current, shown }
+    };
+    let mut out = Vec::with_capacity(3);
+    if !outputs_run {
+        out.push(names(tl!("Profile"), "profile.switch", profiles, profile));
+        out.push(names(tl!("Collection"), "collection.switch", collections, collection));
+    }
+    let mut entries: Vec<Entry<String>> = store::BUILT_IN_LAYOUTS.iter().map(|n| Entry::new((*n).to_string(), tl!(*n)).stepped(false)).collect();
+    if !prefs.dock_layouts.is_empty() {
+        entries.push(Entry::separator());
+        entries.extend(prefs.dock_layouts.iter().map(|l| Entry::new(l.name.clone(), l.name.clone()).stepped(false)));
+    }
+    let built_in = store::BUILT_IN_LAYOUTS.iter().find(|n| store::built_in_layout(n).is_some_and(|l| l.docks == prefs.docks));
+    let (current, shown) = match built_in {
+        Some(n) => (Some((*n).to_string()), tl!(*n).to_string()),
+        None => match prefs.dock_layouts.iter().find(|l| l.docks == prefs.docks) {
+            Some(l) => (Some(l.name.clone()), l.name.clone()),
+            None => (None, tlc!("layout", "Custom").to_string()),
+        },
+    };
+    out.push(Switcher { caption: tl!("Layout"), command: "dock.layout_apply", entries, current, shown });
+    out
 }
 
 /// The pause item of the status bar while the program is paused: `PAUSED` with the countdown's

@@ -154,6 +154,9 @@
 	Keyframe interval	Keyframe-interval
 	Language	Taal
 	Layouts	Indelingen
+	Layout	Indeling
+	Collection	Verzameling
+layout	Custom	Aangepast
 	Left	Links
 	Licenses	Licenties
 	Limit height	Hoogte beperken

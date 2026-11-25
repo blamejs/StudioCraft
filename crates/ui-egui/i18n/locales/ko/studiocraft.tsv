@@ -165,6 +165,9 @@
 	Linear	선형
 	LIVE	방송 중
 	Layouts	레이아웃
+	Layout	레이아웃
+	Collection	모음
+layout	Custom	사용자 지정
 	Live, {time}	방송 중, {time}
 	Lock (it can't be moved in the preview)	잠금 (미리 보기에서 옮길 수 없음)
 	Lock Preview	미리 보기 잠금
