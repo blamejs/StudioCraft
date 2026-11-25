@@ -14,6 +14,7 @@
 	Add a source	Add a source
 	Add Destination	Add Destination
 	Add Scene	Add Scene
+	Add the Camera's Microphone	Add the Camera's Microphone
 	Add Stream Destination	Add Stream Destination
 	Alignment	Alignment
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
@@ -208,6 +209,7 @@
 	Media file	Media file
 	Media files	Media files
 	medium	medium
+	Microphone	Microphone
 	Mid (dB)	Mid (dB)
 	Minimize	Minimize
 	MIT	MIT
@@ -258,6 +260,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (built in)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (built in)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (built in)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (built in)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (built in)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (built in)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)
@@ -607,6 +612,7 @@
 	Intel Quick Sync HEVC	Intel Quick Sync HEVC
 	Intel Quick Sync AV1	Intel Quick Sync AV1
 	Windows Media Foundation HEVC	Windows Media Foundation HEVC
+	Windows Media Foundation AV1	Windows Media Foundation AV1
 	VideoToolbox H.264	VideoToolbox H.264
 	VideoToolbox HEVC	VideoToolbox HEVC
 	VA-API H.264	VA-API H.264
@@ -653,6 +659,10 @@
 @msg	Exported the scene collection to {path}	Exported the scene collection to {path}
 @msg	Imported the scene collection `{name}`	Imported the scene collection `{name}`
 @msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
+@msg	No microphone of the camera in {source} was found	No microphone of the camera in {source} was found
+@msg	The search for the camera's microphone could not start	The search for the camera's microphone could not start
+@msg	{source} already plays in every scene	{source} already plays in every scene
+@msg	{source} is already in this scene	{source} is already in this scene
 @msg	Recording saved to {path}	Recording saved to {path}
 @msg	Replay saved to {path}	Replay saved to {path}
 @msg	Lost the connection to {name}; reconnecting	Lost the connection to {name}; reconnecting
@@ -711,6 +721,12 @@
 menu	Transform	Transform
 	Record as its own track	Record as its own track
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)
+	Balance	Balance
+	Moves this source between the left and right channels; double-click to center it	Moves this source between the left and right channels; double-click to center it
+	{percent}% left	{percent}% left
+	{percent}% right	{percent}% right
+	Downmix to mono	Downmix to mono
+	Plays the average of this source's left and right channels on both	Plays the average of this source's left and right channels on both
 	Audio tracks	Audio tracks
 	Write each recorded source and the program mix to its own WAV file	Write each recorded source and the program mix to its own WAV file
 	Write them while	Write them while

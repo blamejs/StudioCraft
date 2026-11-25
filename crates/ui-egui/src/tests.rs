@@ -2401,3 +2401,100 @@ fn the_pause_menu_starts_a_countdown_and_opens_the_pause_screen_settings() {
     assert!(a.settings.as_ref().is_some_and(|w| !w.pause_focus_pending()), "the Pause screen section took the focus");
     assert!(ctx.memory(|m| m.focused()).is_some(), "a field has the keyboard focus");
 }
+
+#[test]
+fn a_cameras_microphone_is_added_once_found_and_the_window_runs_while_it_is_looked_for() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let (found, wait) = std::sync::mpsc::sync_channel::<Option<studiocraft_platform::audio::DeviceInfo>>(1);
+    let wait = std::sync::Mutex::new(wait);
+    let asked = Arc::new(std::sync::Mutex::new(None));
+    let keys = Arc::clone(&asked);
+    a.find_camera_mic = Arc::new(move |key: &str| {
+        *keys.lock().unwrap() = Some(key.to_string());
+        wait.lock().unwrap().recv().ok().flatten()
+    });
+    // A collection without the default Microphone source, which captures the default input in
+    // every scene.
+    a.load_collection(SceneCollection::new("Cameras", "Scene"));
+    // The camera source keeps its Default camera, stored as an empty key.
+    let added = run(&mut a, &ctx, "source.add", json!({"kind": "camera", "name": "Desk Cam"})).unwrap();
+    let camera = SourceId(added["source"].as_u64().unwrap());
+    let count = a.studio().collection().sources.len();
+    a.act(&ctx, Act::AddCameraMicrophone(camera));
+    // The search has not answered: frames go on and nothing is added.
+    for _ in 0..3 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(a.studio().collection().sources.len(), count);
+    // The device setting takes only devices the system lists; the default one is listed everywhere.
+    let device = studiocraft_platform::audio::DEFAULT_DEVICE;
+    found.send(Some(studiocraft_platform::audio::DeviceInfo { id: device.into(), name: "Desk Cam Mic".into(), default: false })).unwrap();
+    // The search ends once the finder returns; each frame takes its answer when it has one.
+    while a.camera_mic.is_some() {
+        frame(&mut a, &ctx, vec![]);
+        std::thread::yield_now();
+    }
+    let c = a.studio().collection();
+    let mic = c.sources.last().unwrap();
+    let notices = a.hud()["ui"]["notices"].clone();
+    assert_eq!((mic.kind.as_str(), mic.name.as_str(), mic.settings.str("device")), ("audio_input", "Desk Cam Mic", Some(device)), "{notices}");
+    let scene = c.scene(a.studio().engine().edit_scene()).unwrap();
+    assert!(scene.items.iter().any(|i| i.source == mic.id), "the microphone is in the scene being edited");
+    let stored = c.source(camera).and_then(|s| s.settings.str("device")).unwrap_or_default().to_string();
+    assert_eq!(asked.lock().unwrap().clone(), Some(stored), "the camera source's setting is looked up");
+
+    // Nothing found: the status bar says so and nothing is added.
+    a.act(&ctx, Act::AddCameraMicrophone(camera));
+    found.send(None).unwrap();
+    let count = a.studio().collection().sources.len();
+    while a.camera_mic.is_some() {
+        frame(&mut a, &ctx, vec![]);
+        std::thread::yield_now();
+    }
+    assert_eq!(a.studio().collection().sources.len(), count);
+    let notices = a.hud()["ui"]["notices"].clone();
+    assert!(
+        notices.as_array().unwrap().iter().any(|n| n["text"] == "No microphone of the camera in Desk Cam was found" && n["error"] == true),
+        "{notices}"
+    );
+
+    // Another collection is loaded during a search: its answer is dropped.
+    a.act(&ctx, Act::AddCameraMicrophone(camera));
+    a.load_collection(SceneCollection::new("Other", "Scene"));
+    assert!(a.camera_mic.is_none(), "the search for the earlier collection is dropped");
+    found.send(None).unwrap();
+}
+
+#[test]
+fn a_cameras_microphone_added_to_another_scene_keeps_the_selection() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let (found, wait) = std::sync::mpsc::sync_channel::<Option<studiocraft_platform::audio::DeviceInfo>>(1);
+    let wait = std::sync::Mutex::new(wait);
+    a.find_camera_mic = Arc::new(move |_: &str| wait.lock().unwrap().recv().ok().flatten());
+    a.load_collection(SceneCollection::new("Cameras", "Scene"));
+    let added = run(&mut a, &ctx, "source.add", json!({"kind": "camera", "name": "Desk Cam"})).unwrap();
+    let camera = SourceId(added["source"].as_u64().unwrap());
+    let first = a.studio().engine().edit_scene();
+    a.act(&ctx, Act::AddCameraMicrophone(camera));
+    // During the search the user moves to another scene and selects an item there.
+    run(&mut a, &ctx, "scene.add", json!({"name": "Second"})).unwrap();
+    run(&mut a, &ctx, "scene.select", json!({"scene": "Second"})).unwrap();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Backdrop"})).unwrap();
+    let selected = a.selected;
+    assert!(selected.is_some());
+    let device = studiocraft_platform::audio::DEFAULT_DEVICE;
+    found.send(Some(studiocraft_platform::audio::DeviceInfo { id: device.into(), name: "Desk Cam Mic".into(), default: false })).unwrap();
+    while a.camera_mic.is_some() {
+        frame(&mut a, &ctx, vec![]);
+        std::thread::yield_now();
+    }
+    let c = a.studio().collection();
+    let mic = c.sources.last().unwrap();
+    assert_eq!(mic.name, "Desk Cam Mic");
+    assert!(c.scene(first).unwrap().items.iter().any(|i| i.source == mic.id), "the microphone is in the scene the search started in");
+    assert_eq!(a.selected, selected, "the item selected in the scene being edited stays selected");
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.selected, selected);
+}

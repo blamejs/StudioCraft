@@ -4,10 +4,12 @@
 //! - [`h264::H264`] is the built-in H.264 video encoder, registered as the `h264` encoder. Its
 //!   sessions take the NV12 frames the compositor converts and return packets in decoding order.
 //! - [`aac::AacSession`] encodes the mixer's 48 kHz stereo blocks as AAC-LC.
-//! - [`nvenc::Nvenc`] runs NVIDIA's NVENC H.264 and HEVC encoders through the driver, registered
-//!   as `nvenc_native_h264` and `nvenc_native_hevc`.
-//! - [`mf::MediaFoundation`] runs the hardware H.264 and HEVC encoders Windows Media Foundation
-//!   lists, registered as `mf_native_h264` and `mf_native_hevc`.
+//! - [`nvenc::Nvenc`] runs NVIDIA's NVENC H.264, HEVC and AV1 encoders through the driver,
+//!   registered as `nvenc_native_h264`, `nvenc_native_hevc` and `nvenc_native_av1`.
+//! - [`mf::MediaFoundation`] runs the hardware H.264, HEVC and AV1 encoders Windows Media
+//!   Foundation lists, registered as `mf_native_h264`, `mf_native_hevc` and `mf_native_av1`.
+//! - [`amf::Amf`] runs AMD's AMF H.264, HEVC and AV1 encoders on Windows, registered as
+//!   `amf_native_h264`, `amf_native_hevc` and `amf_native_av1`.
 //! - [`vt::VideoToolbox`] runs the hardware H.264 and HEVC encoders of macOS VideoToolbox,
 //!   registered as `vt_native_h264` and `vt_native_hevc`.
 //! - [`vaapi::VaApi`] runs the VA-API hardware H.264, HEVC and AV1 encoders on 64-bit Linux,
@@ -15,10 +17,11 @@
 //! - [`hardware::for_candidate`] gives the built-in encoder that runs a `craft_hwenc` candidate.
 //!
 //! The H.264 and AAC encoders are written on the clean-room encoders of `craft-video` and
-//! `craft-audio`; NVENC, Media Foundation, VideoToolbox and VA-API run through
+//! `craft-audio`; NVENC, Media Foundation, AMF, VideoToolbox and VA-API run through
 //! `craft-hwenc-native`.
 
 pub mod aac;
+pub mod amf;
 pub mod h264;
 pub mod hardware;
 pub mod mf;
@@ -27,6 +30,7 @@ pub mod vaapi;
 pub mod vt;
 
 pub use aac::AacSession;
+pub use amf::Amf;
 pub use h264::H264;
 pub use hardware::{Hardware, SessionError};
 pub use mf::MediaFoundation;

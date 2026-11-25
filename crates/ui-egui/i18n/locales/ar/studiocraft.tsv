@@ -140,6 +140,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (مدمج)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (مدمج)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (مدمج)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (مدمج)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (مدمج)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (مدمج)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (مدمج)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (مدمج)
 	VA-API H.264 (built in)	VA-API H.264 (مدمج)
@@ -468,6 +471,12 @@
 menu	Transform	التحويل
 	Record as its own track	التسجيل كمسار مستقل
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	تكتب المسارات الصوتية هذا المصدر في ملف WAV خاص به (الإعدادات › الإخراج › المسارات الصوتية)
+	Balance	التوازن
+	Moves this source between the left and right channels; double-click to center it	ينقل هذا المصدر بين القناتين اليسرى واليمنى؛ انقر نقرًا مزدوجًا لتوسيطه
+	{percent}% left	{percent}% يسار
+	{percent}% right	{percent}% يمين
+	Downmix to mono	دمج إلى أحادي
+	Plays the average of this source's left and right channels on both	يشغّل متوسط القناتين اليسرى واليمنى لهذا المصدر على كلتيهما
 	Audio tracks	المسارات الصوتية
 	Write each recorded source and the program mix to its own WAV file	كتابة كل مصدر مسجَّل ومزيج البرنامج في ملف WAV خاص به
 	Write them while	كتابتها عند

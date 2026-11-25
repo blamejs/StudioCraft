@@ -6632,6 +6632,7 @@ dependencies = [
  "v4l",
  "wayland-client",
  "windows 0.62.2",
+ "windows-collections",
  "x11rb",
  "xcap",
  "zune-jpeg",

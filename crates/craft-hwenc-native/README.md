@@ -5,8 +5,9 @@ APIs, without the `ffmpeg` program. It loads the drivers at run time. Building t
 require a vendor SDK, and on a system without the hardware an encoder returns an error and does not
 crash.
 
-Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code. The
-Media Foundation calls go through the `windows` crate's bindings, and the VideoToolbox calls go
+Only the private `nvenc_ffi`, `mf_ffi`, `amf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe`
+code. The Media Foundation calls go through the `windows` crate's bindings, the AMF calls go through
+the crate's own declarations of the AMF interfaces, and the VideoToolbox calls go
 through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 `objc2-core-foundation` bindings.
 
@@ -24,6 +25,8 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `nvenc::available(codec)` | It reports whether this system can open an NVENC session that writes `codec`. |
 | `mf::Encoder` | This runs the hardware H.264, HEVC and AV1 (Main, 8-bit) encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
 | `mf::available(codec)` | It reports whether Media Foundation lists a hardware encoder that writes `codec` and opens. |
+| `amf::Encoder` | This runs AMD's hardware H.264 High, HEVC Main and AV1 Main (8-bit) encoders through AMF on Windows (`amfrt64.dll`, which AMD's graphics driver installs), from NV12 frames in system memory. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level (AV1: base quantizer index `5 × level`, at most 255), constant bitrate uses a one-second buffer, and it uses the transcoding usage, no B-frames and BT.709 limited range. The parameter sets come from the encoder's extra data, or from a gray frame encoded in a second instance when it reports none; the first frame of the encoder that records must then carry parameter sets that match them. |
+| `amf::available(codec)`, `amf::driver()` | `available` reports whether an AMD encoder that writes `codec` opens. `driver` reports whether the AMF runtime loads. |
 | `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
 | `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline), HEVC Main and AV1 Main (8-bit) encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
@@ -104,6 +107,16 @@ encoder is present; the copy bench writes into heap memory, not a mapped surface
 
 - Off Windows, and on Windows without a hardware encoder MFT, `mf::Encoder::new` returns
   `Error::NoDevice`.
+- Off Windows, and on Windows without AMD's AMF runtime (`amfrt64.dll`), an AMD GPU or an encoder
+  for the codec, `amf::Encoder::new` returns `Error::NoDevice`. A runtime older than AMF 1.4 also
+  returns `Error::NoDevice`.
+- `amf::Encoder::new` returns `Error::Unsupported` for sizes above 8192 pixels a side, for P010
+  frames and for any color but `Color::Bt709`, and for AV1 at a size outside 64 × 16 blocks when
+  the driver keeps that alignment.
+- `amf::Encoder::encode` waits only while the encoder's input queue is full, and returns
+  `Error::Failed` when the encoder takes no frame for 10 seconds; `flush` returns it when the last
+  frames take longer than 10 seconds. A packet that is not ready when `encode` returns comes out of
+  a later `encode` or of `flush`.
 - Off macOS, and on a Mac without a hardware encoder for the codec, `vt::Encoder::new` returns
   `Error::NoDevice`.
 - Off 64-bit Linux, without libva, and without a driver that encodes the codec,
@@ -123,7 +136,9 @@ encoder is present; the copy bench writes into heap memory, not a mapped surface
 ## Tests
 
 The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the
-C header's sizes and offsets, and they run on every platform. The AV1 header tests compare the
+C header's sizes and offsets, and they run on every platform. The AMF layout tests check the sizes
+of the plain structures and the slot of every interface method the crate calls. The AMF encode and
+drain loops are tested with a scripted encoder that is late, full or stalled, with no sleeps. The AV1 header tests compare the
 sequence and frame header OBUs with bytes worked out from the AV1 specification, read them back with
 a reader written from the specification, and check the bit offsets the driver rewrites.
 
@@ -131,6 +146,9 @@ a reader written from the specification, and check the bit offsets the driver re
 
 - ISO/IEC 14496-15 for the `avcC` and `hvcC` decoder configuration records.
 - NVIDIA's `nvEncodeAPI.h` (Video Codec SDK, API 12.1) for the NVENC structures.
+- AMD's Advanced Media Framework SDK (AMF 1.5.3, https://github.com/GPUOpen-LibrariesAndSDKs/AMF):
+  the `core` and `components` headers for the AMF interfaces, and the H.264, HEVC and AV1 video
+  encoder API documents in its `amf/doc` folder for the encoder properties.
 - ITU-T H.273 for the color code points, and ITU-T H.265 Annex D (D.2.28 and D.2.35) for the
   mastering display colour volume and content light level SEI payloads.
 - The AV1 Bitstream and Decoding Process Specification (https://aomediacodec.github.io/av1-spec/)
@@ -147,4 +165,5 @@ commit and copyright: the NVENC backend, the Annex B helpers, the HEVC parameter
 layout tests; the Media Foundation loading, COM setup, sample creation, MFT enumeration and output
 reading; and the VideoToolbox session setup, pixel buffer filling, output callback and
 parameter-set reading. It also names NVIDIA's `nvEncodeAPI.h` as the source of the NVENC
-declarations, with NVIDIA's copyright and MIT license.
+declarations and AMD's AMF SDK headers as the source of the AMF declarations, each with its
+copyright and MIT license.

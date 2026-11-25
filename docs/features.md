@@ -165,6 +165,36 @@ The camera source behaves as follows:
 | Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
+A camera with a built-in microphone shows up as a camera and, separately, as an audio input. In
+the Sources dock or the preview, a camera source's context menu has **Add the Camera's
+Microphone**, which adds that input to the scene being edited as an audio input capture source
+named after the input. The name keeps the input's first 240 characters, without control
+characters. The input is found as follows:
+
+1. On Windows, the input in the same device container as the camera. Built-in devices, which all
+   share the computer's container, are matched by name instead.
+2. On Linux, the PipeWire input whose node name carries the camera's USB serial, as listed in
+   `/dev/v4l/by-id`.
+3. Otherwise, the input whose name is the camera's name, or else the one input whose name holds
+   the camera's name, for example "Microphone (HD Webcam)" for a camera named "HD Webcam". When
+   two inputs match equally well, none is chosen. When the camera's device container or USB
+   serial is known, an input that belongs to another device is not matched by name.
+
+When the camera's device has several inputs on Windows or Linux, for example a microphone and a
+line input, the one whose name says it is a microphone is chosen, and after that the one whose
+name matches the camera's name best. When two of them are equally good, none is chosen.
+
+On Windows, an input that shares its name with another input is matched by name only.
+
+The search runs in the background, and the window keeps working while it does. The microphone
+goes into the scene that was being edited when the search started. When the camera source is
+removed, taken out of that scene or set to another camera before the search ends, or another
+scene collection is loaded, nothing is added. When an audio
+input capture source already records that input, it is placed in the scene instead of a second
+one. A source set to the default device does not count as recording the input. When that source is already in the scene, or is a global audio source that every scene
+records ([Audio](#audio)), nothing is added and the status bar says so. When no input matches, or the camera is not plugged
+in, the status bar reports that no microphone was found.
+
 [docs/architecture.md](architecture.md#camera-capture) describes how the capture thread opens,
 reads and reopens a camera.
 
@@ -222,11 +252,21 @@ short-term, integrated, loudness range and true peak). Each profile keeps a loud
 tool `audio_loudness` report the readings with the band. The window does not show these readings
 yet.
 
-A source's Properties window sets two more audio options:
+A source's Properties window sets four more audio options:
 
 - **Sync offset** delays the source's audio by 0 to 5000 ms to line it up with its picture.
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
+- **Balance** moves the source between the left and right channels, from fully left to fully
+  right; the label beside the slider shows how far, as a percentage. In the center both
+  channels keep their level. Toward the right the left channel is lowered, at 50% right to
+  half its level, and fully right it is silent; toward the left the right channel is lowered
+  the same way. Double-clicking the slider centers it.
+- **Downmix to mono** plays the average of the source's left and right channels on both. The
+  mixer mixes the channels down first and then applies the balance.
+
+The mixer applies the balance and the downmix after the source's audio filters and before its
+volume, so the source's meters, the program, the mix tracks and monitoring all hear the result.
 
 The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
 the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
@@ -318,8 +358,9 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | Software (x264) | MKV, MP4 and MOV at every level | Yes | All |
 | H.264 (built in) | MKV at Compact, High and Pristine, with a Speed, Balanced or Quality preset, and streams | No | All |
 | Hardware (set in Settings › Video) | MKV, MP4 and MOV, and streams, with the hardware encoder set in Settings › Video › Hardware acceleration | Yes, except for the built-in encoders below and for streams | All |
-| NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
-| Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
+| NVIDIA NVENC H.264, HEVC and AV1 (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
+| Windows Media Foundation H.264, HEVC and AV1 (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
+| AMD AMF H.264, HEVC and AV1 (built in) | MKV, through AMD's AMF runtime | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
 | VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
@@ -750,7 +791,11 @@ the chosen adapter is missing or the app fell back to software. After a device l
 again on a new device, and after 3 losses in 10 minutes it draws in software.
 
 **Hardware encoder** picks the encoder that recordings and streams use when their encoder is
-Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
+Hardware: Automatic, Software only, or one of the listed hardware encoders. The list holds this
+system's built-in hardware encoders and the hardware encoders the `ffmpeg` program lists, or
+every hardware encoder of this system when the `ffmpeg` list cannot be read. A built-in encoder
+that `ffmpeg` does not list is marked "(not in this ffmpeg)": it records MKV files, and an MP4,
+MOV or Lossless recording cannot use it. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
 encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
 H.264 (built in) for a stream. One test stops after 5 s, and the tests of one start stop after
@@ -766,7 +811,7 @@ candidates run in `ffmpeg`, except for a stream:
 | NVIDIA NVENC | H.264, HEVC and AV1 |
 | AMD AMF | H.264, HEVC and AV1 |
 | Intel Quick Sync | H.264, HEVC and AV1 |
-| Windows Media Foundation | H.264 and HEVC |
+| Windows Media Foundation | H.264, HEVC and AV1 |
 | VideoToolbox | H.264 and HEVC |
 | VA-API | H.264, HEVC and AV1 |
 
@@ -775,10 +820,13 @@ a built-in encoder in the following list with that built-in encoder, inside its 
 instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the built-in encoder.
 A stream tests only the H.264 candidates in this list, and skips every other candidate:
 
-- NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver on Windows and 64-bit
-  Linux.
-- Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
-  lists, on Windows.
+- NVIDIA NVENC H.264, HEVC and AV1 (built in) run through the NVIDIA driver on Windows and
+  64-bit Linux. AV1 needs a GPU whose encoder writes AV1.
+- Windows Media Foundation H.264, HEVC and AV1 (built in) run the hardware encoders Media
+  Foundation lists, on Windows. AV1 is 8-bit.
+- AMD AMF H.264, HEVC and AV1 (built in) run AMD's hardware encoders through the AMF runtime that
+  AMD's graphics driver installs, on Windows. AV1 is 8-bit and needs a GPU whose encoder writes
+  AV1.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
 - VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
   Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with

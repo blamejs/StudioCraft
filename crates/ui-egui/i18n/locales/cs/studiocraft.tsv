@@ -137,6 +137,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (vestavěný)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (vestavěný)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (vestavěný)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (vestavěný)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (vestavěný)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (vestavěný)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (vestavěný)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
@@ -480,6 +483,12 @@
 menu	Transform	Transformace
 	Record as its own track	Nahrávat jako samostatnou stopu
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Zvukové stopy zapisují tento zdroj do samostatného souboru WAV (Nastavení › Výstup › Zvukové stopy)
+	Balance	Vyvážení
+	Moves this source between the left and right channels; double-click to center it	Posouvá tento zdroj mezi levým a pravým kanálem; dvojitým kliknutím jej vystředíte
+	{percent}% left	{percent} % vlevo
+	{percent}% right	{percent} % vpravo
+	Downmix to mono	Smíchat do mona
+	Plays the average of this source's left and right channels on both	Přehrává průměr levého a pravého kanálu tohoto zdroje na obou
 	Audio tracks	Zvukové stopy
 	Write each recorded source and the program mix to its own WAV file	Zapisovat každý nahrávaný zdroj a mix programu do samostatného souboru WAV
 	Write them while	Zapisovat, když

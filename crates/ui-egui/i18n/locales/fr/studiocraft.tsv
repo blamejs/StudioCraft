@@ -138,6 +138,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (intégré)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (intégré)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (intégré)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (intégré)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (intégré)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (intégré)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (intégré)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (intégré)
 	VA-API H.264 (built in)	VA-API H.264 (intégré)
@@ -489,6 +492,12 @@
 menu	Transform	Transformer
 	Record as its own track	Enregistrer comme piste distincte
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Les pistes audio écrivent cette source dans son propre fichier WAV (Paramètres › Sortie › Pistes audio)
+	Balance	Balance
+	Moves this source between the left and right channels; double-click to center it	Déplace cette source entre les canaux gauche et droit ; double-cliquez pour la centrer
+	{percent}% left	{percent} % à gauche
+	{percent}% right	{percent} % à droite
+	Downmix to mono	Mixer en mono
+	Plays the average of this source's left and right channels on both	Joue la moyenne des canaux gauche et droit de cette source sur les deux
 	Audio tracks	Pistes audio
 	Write each recorded source and the program mix to its own WAV file	Écrire chaque source enregistrée et le mixage du programme dans son propre fichier WAV
 	Write them while	Les écrire quand

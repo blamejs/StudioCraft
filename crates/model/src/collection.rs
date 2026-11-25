@@ -158,7 +158,7 @@ impl<'de> Deserialize<'de> for MixTracks {
     }
 }
 
-/// Volume, mute, sync offset and monitoring of a source's audio.
+/// Volume, mute, sync offset, monitoring, mix tracks, balance and mono of a source's audio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioState {
@@ -176,6 +176,13 @@ pub struct AudioState {
     pub record_track: Option<bool>,
     /// The mix tracks the source's audio goes to; every track by default.
     pub mix_tracks: MixTracks,
+    /// Where the source sits between the left and right channels, −1 (left) to 1 (right). At 0,
+    /// the default, both channels keep their level; toward one side, the other channel is
+    /// lowered, and at −1 or 1 it is silent.
+    pub balance: f32,
+    /// Whether the mixer turns the source's two channels into one, the average of left and right
+    /// played on both, before its balance is applied.
+    pub mono: bool,
 }
 
 /// Longest audio sync offset accepted, in milliseconds.
@@ -189,9 +196,21 @@ pub const MAX_GAIN: f32 = 10.0;
 
 impl Default for AudioState {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off, record_track: None, mix_tracks: MixTracks::ALL }
+        Self {
+            gain: 1.0,
+            muted: false,
+            sync_offset_ms: 0,
+            monitor: MonitorMode::Off,
+            record_track: None,
+            mix_tracks: MixTracks::ALL,
+            balance: 0.0,
+            mono: false,
+        }
     }
 }
+
+/// The balance at each end: −`MAX_BALANCE` is fully left and `MAX_BALANCE` fully right.
+pub const MAX_BALANCE: f32 = 1.0;
 
 impl AudioState {
     /// Whether audio tracks record the source to its own file.
@@ -422,7 +441,7 @@ impl SceneCollection {
     /// Repairs what [`SceneCollection::problems`] reports where a repair keeps the user's work:
     /// items of missing sources are dropped, a missing program scene falls back to the first
     /// scene (one is created when there is none), `next_id` moves past every id, and a source's
-    /// gain outside 0 to [`MAX_GAIN`] is brought into that range.
+    /// gain outside 0 to [`MAX_GAIN`] and a balance outside −1 to 1 are brought into those ranges.
     pub fn repair(&mut self, default_scene_name: &str) {
         let sources: std::collections::BTreeSet<SourceId> = self.sources.iter().map(|s| s.id).collect();
         for s in &mut self.scenes {
@@ -456,6 +475,7 @@ impl SceneCollection {
         for s in &mut self.sources {
             s.audio.sync_offset_ms = s.audio.sync_offset_ms.min(MAX_SYNC_OFFSET_MS);
             s.audio.gain = if s.audio.gain.is_finite() { s.audio.gain.clamp(0.0, MAX_GAIN) } else { 1.0 };
+            s.audio.balance = if s.audio.balance.is_finite() { s.audio.balance.clamp(-MAX_BALANCE, MAX_BALANCE) } else { 0.0 };
         }
     }
 }

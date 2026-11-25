@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use craft_hwenc_native::{Codec as NativeCodec, Color, Config, Input, Rate};
 use studiocraft_plugin::{Encoder, Packet, PluginError, RateControl, VideoParams, VideoSession};
 
+use crate::amf::Amf;
 use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
 use crate::mf::MediaFoundation;
 use crate::nvenc::Nvenc;
@@ -44,6 +45,10 @@ static NVENC_HEVC: Nvenc = Nvenc::HEVC;
 static NVENC_AV1: Nvenc = Nvenc::AV1;
 static MF_H264: MediaFoundation = MediaFoundation::H264;
 static MF_HEVC: MediaFoundation = MediaFoundation::HEVC;
+static MF_AV1: MediaFoundation = MediaFoundation::AV1;
+static AMF_H264: Amf = Amf::H264;
+static AMF_HEVC: Amf = Amf::HEVC;
+static AMF_AV1: Amf = Amf::AV1;
 static VT_H264: VideoToolbox = VideoToolbox::H264;
 static VT_HEVC: VideoToolbox = VideoToolbox::HEVC;
 static VAAPI_H264: VaApi = VaApi::H264;
@@ -59,6 +64,10 @@ pub fn for_candidate(candidate: &str) -> Option<&'static dyn Hardware> {
         "nvenc_av1" => Some(&NVENC_AV1),
         "mf_h264" => Some(&MF_H264),
         "mf_hevc" => Some(&MF_HEVC),
+        "mf_av1" => Some(&MF_AV1),
+        "amf_h264" => Some(&AMF_H264),
+        "amf_hevc" => Some(&AMF_HEVC),
+        "amf_av1" => Some(&AMF_AV1),
         "vt_h264" => Some(&VT_H264),
         "vt_hevc" => Some(&VT_HEVC),
         "vaapi_h264" => Some(&VAAPI_H264),
@@ -197,13 +206,17 @@ mod tests {
         assert_eq!(ids("nvenc_hevc"), Some(("nvenc_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("mf_h264"), Some(("mf_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("mf_hevc"), Some(("mf_native_hevc", studiocraft_plugin::Codec::Hevc)));
+        assert_eq!(ids("mf_av1"), Some(("mf_native_av1", studiocraft_plugin::Codec::Av1)));
         assert_eq!(ids("vt_h264"), Some(("vt_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("vt_hevc"), Some(("vt_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("vaapi_h264"), Some(("vaapi_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("vaapi_hevc"), Some(("vaapi_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("vaapi_av1"), Some(("vaapi_native_av1", studiocraft_plugin::Codec::Av1)));
         assert_eq!(ids("nvenc_av1"), Some(("nvenc_native_av1", studiocraft_plugin::Codec::Av1)));
-        for none in ["amf_h264", "qsv_hevc", "qsv_av1", "x264"] {
+        assert_eq!(ids("amf_h264"), Some(("amf_native_h264", studiocraft_plugin::Codec::H264)));
+        assert_eq!(ids("amf_hevc"), Some(("amf_native_hevc", studiocraft_plugin::Codec::Hevc)));
+        assert_eq!(ids("amf_av1"), Some(("amf_native_av1", studiocraft_plugin::Codec::Av1)));
+        for none in ["qsv_h264", "qsv_hevc", "qsv_av1", "x264"] {
             assert!(for_candidate(none).is_none(), "{none}");
         }
     }

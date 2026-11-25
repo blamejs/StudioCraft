@@ -36,6 +36,8 @@ fn mixer(inputs: u64, taps: bool) -> (MixState, Vec<Arc<AudioOut>>, Vec<Arc<TapS
             sync_offset_ms: 0,
             monitor: MonitorMode::Off,
             mix_tracks: MixTracks::ALL,
+            balance: 0.0,
+            mono: false,
         })
         .collect();
     m.apply(MixerCmd::Inputs(list));

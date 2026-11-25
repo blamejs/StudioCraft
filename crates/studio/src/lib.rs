@@ -51,7 +51,10 @@ use studiocraft_sources::FfmpegSetting;
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use captions::{CaptionState, Loader as CaptionLoader, ModelFileFilter, default_models_dir};
 pub use files::FileError;
-pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, recording_folder, recording_path, replay_path, stream_copy_path, stream_saves_copy};
+pub use outputs::{
+    HARDWARE_TESTS_FILE, OutputKind, OutputState, has_built_in_twin, recording_folder, recording_path, replay_path, stream_copy_path,
+    stream_saves_copy,
+};
 pub use pause::{countdown_text, media_extensions as pause_media_extensions, paused_text};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_outputs::stream::diagnose;
