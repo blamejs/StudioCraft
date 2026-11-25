@@ -861,8 +861,15 @@ mod imp {
 
     #[cfg(target_os = "linux")]
     fn listed_sending(present: &[CameraInfo], sending: &[CameraInfo]) {
+        #[cfg(test)]
+        let _listing = LISTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         change(&SENT, |sent| remember(sent, present, sending));
     }
+
+    /// Held while a listing of the system's cameras updates `SENT`, so a test that records a
+    /// camera the system does not list can read it back before a listing forgets it.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) static LISTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The cameras whose streams this app is starting, once for each start in progress.
     #[cfg(target_os = "linux")]
@@ -1782,6 +1789,9 @@ mod tests {
             panic!("a capture thread stops while it reads the bookkeeping");
         });
         assert!(holder.join().is_err());
+        // A listing of the system's cameras in another test would forget this camera, which
+        // the system does not list.
+        let _listing = imp::LISTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let starting = imp::Starting::new(camera.clone());
         assert_eq!(imp::bookkeeping(&camera), (true, false), "kept listed while its stream starts");
         starting.started();
