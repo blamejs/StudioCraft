@@ -15,7 +15,8 @@
 //!   that already holds data when the copy opens it is not written to. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
 //!   waits up to its limit for that, then leaves the file as it is; it plays up to its last whole
-//!   cluster.
+//!   cluster. The copy then counts as not finished, even when a write that was waiting finishes
+//!   the file later.
 
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Seek, Write};
@@ -144,8 +145,12 @@ impl StreamCopy {
             let _ = t.join();
             return;
         }
+        // Under the failure's lock, so the copy is either finished or reported as not finished.
+        let mut failure = lock(&self.shared.failure);
         self.shared.abandon.store(true, Ordering::SeqCst);
-        self.shared.fail(format!("the copy was not finished in {} seconds; it plays up to the last part written", wait.as_secs()));
+        if !self.shared.finished.load(Ordering::SeqCst) && failure.is_none() {
+            *failure = Some(format!("the copy was not finished in {} seconds; it plays up to the last part written", wait.as_secs()));
+        }
     }
 }
 
@@ -197,7 +202,13 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Err(e) => return shared.fail(not_finished(&e)),
     };
     match w.flush() {
-        Ok(()) => shared.finished.store(true, Ordering::SeqCst),
+        Ok(()) => {
+            // A stop that gave up on the copy has reported it as not finished, and it stays so.
+            let _decided = lock(&shared.failure);
+            if !shared.abandon.load(Ordering::SeqCst) {
+                shared.finished.store(true, Ordering::SeqCst);
+            }
+        }
         Err(e) => shared.fail(not_finished(&e)),
     }
 }
