@@ -52,6 +52,18 @@ stopped, changing any of the source's properties opens the picker again. The lis
 for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
 picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
 
+A Display capture source on Linux keeps the picture on the GPU when the compositor draws with
+Vulkan and its driver supports `VK_EXT_external_memory_dma_buf` and
+`VK_EXT_image_drm_format_modifier`. The source offers the screen-cast stream DMA-BUF buffers in
+the formats and DRM format modifiers the compositor's device can read, ahead of buffers in memory,
+and the compositor opens each buffer as a texture. A buffer is drawn once the desktop has finished
+writing it, and goes back to the desktop once the GPU has finished drawing it. The source copies the picture through CPU memory instead when the compositor draws
+with another backend, when the driver lacks either extension, when the compositor's device is not
+the one the stream was negotiated for, when the desktop picks a format or modifier the device
+cannot read, when the stream has fewer than two buffers, when the desktop sends a buffer in memory,
+and when the compositor cannot open a buffer, even while the screen is still. Window capture sources and Staged
+windows sources on Linux always copy through CPU memory.
+
 ### Staged windows
 
 A Staged windows source holds up to six windows or displays, chosen in its Properties as Window 1

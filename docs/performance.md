@@ -132,6 +132,14 @@ export ring case runs only on Windows, on Direct3D 12 or on Vulkan with
 `VK_KHR_external_memory_win32`; elsewhere the bench prints why it was skipped. Neither case has
 been measured on Windows hardware yet.
 
+On Linux the bench also times `DMA-BUF import 1080p` and `DMA-BUF import 4k`: a linear BGRX
+DMA-BUF that the bench makes over ordinary memory through `/dev/udmabuf`, handed to the importer
+as a screen-cast stream's buffer and drawn into a source texture on a Vulkan device with
+`VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`. Each iteration waits until
+the GPU has finished. The bench prints why the two rows were skipped when the device cannot import
+a linear BGRX buffer or `/dev/udmabuf` cannot be opened. They have not been measured yet: the
+machine the rows above were measured on does not let the build user open `/dev/udmabuf`.
+
 ### Audio tracks
 
 Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run

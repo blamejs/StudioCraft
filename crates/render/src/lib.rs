@@ -78,13 +78,13 @@ pub struct Gpu {
 
 /// The device studiocraft opens: its own label, and the adapter's own limits, so an adapter with
 /// lower limits than wgpu's defaults (an older or software one) still opens. A Vulkan device on
-/// Windows also opens shared textures when the driver can, for a display capture that stays on the
-/// GPU.
+/// Windows also opens shared textures when the driver can, and one on Linux DMA-BUF buffers, for a
+/// display capture that stays on the GPU.
 #[cfg(not(target_arch = "wasm32"))]
 const REQUEST: Request<'static> = Request {
     label: Some("studiocraft"),
     required_features: wgpu::Features::empty(),
-    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
+    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32.union(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF),
     limits: None,
 };
 
@@ -111,6 +111,7 @@ impl Gpu {
             OpenError::NoAdapter => RenderError::NoAdapter(e.to_string()),
             _ => RenderError::NoDevice(e.to_string()),
         })?;
+        craft_gpu_interop::publish_import_caps(&opened.device);
         let gpu = Gpu {
             device: opened.device,
             queue: opened.queue,
@@ -125,6 +126,7 @@ impl Gpu {
     /// errors are recorded instead of ending the process.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Gpu {
         let health = DeviceHealth::watch(&device);
+        craft_gpu_interop::publish_import_caps(&device);
         Gpu {
             device,
             queue,

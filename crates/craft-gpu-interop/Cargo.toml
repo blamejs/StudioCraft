@@ -1,13 +1,13 @@
 [package]
 name = "craft-gpu-interop"
-description = "Captured frames shared on the GPU: Windows desktop duplication and window capture into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 or Vulkan device, program frames exported from that device to a hardware encoder in shared NV12 textures, with the reasons a caller falls back to a CPU copy"
+description = "Captured frames shared on the GPU: Windows desktop duplication and window capture into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 or Vulkan device, Linux screen-cast DMA-BUF buffers imported into a wgpu Vulkan device, program frames exported from that device to a hardware encoder in shared NV12 textures, with the reasons a caller falls back to a CPU copy"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
 # One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
-# `dxgi_ffi`, `wgc_ffi`, `d3d12_ffi` and `vulkan_ffi` modules allow it, and every unsafe block carries a
+# `dxgi_ffi`, `wgc_ffi`, `d3d12_ffi`, `vulkan_ffi`, `dmabuf_ffi` and `pw_hold_ffi` modules allow it, and every unsafe block carries a
 # SAFETY comment.
 [lints.rust]
 unsafe_code = "deny"
@@ -29,6 +29,8 @@ undocumented_unsafe_blocks = "deny"
 # The importer: shared textures into a wgpu device, and the opaque copy into the caller's texture.
 # The exporter: a wgpu device's program frames copied into an export ring.
 wgpu = ["dep:wgpu", "dep:ash"]
+# Linux: screen-cast stream buffers held until the compositor has read them.
+pipewire = ["dep:pipewire"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
@@ -58,8 +60,17 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Linux: duplicating and polling the DMA-BUF descriptors of a screen-cast stream (libc), the
+# Vulkan side of their import (ash, the version wgpu-hal 30 uses), and holding the stream's
+# buffers (pipewire).
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", default-features = false, optional = true }
+libc = "0.2"
+pipewire = { version = "0.10", optional = true }
+
 [dev-dependencies]
-wgpu = "30"
+# The noop backend gives the tests a device that runs on neither Direct3D 12 nor Vulkan.
+wgpu = { version = "30", features = ["noop"] }
 pollster = "0.4"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 

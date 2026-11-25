@@ -26,6 +26,20 @@
 //! builds, [`Duplication::open`] and [`WindowCapture::open`] return [`Fallback::Unsupported`], and
 //! an import reports the same.
 //!
+//! On Linux a display capture's screen-cast stream can hand its pictures over as DMA-BUFs. The
+//! compositor publishes the formats and DRM format modifiers its Vulkan device can import
+//! ([`publish_import_caps`]), and the capture offers those to the stream ahead of buffers in
+//! memory. A [`DmabufStream`] duplicates each buffer's descriptor into a slot of a ring made with
+//! [`SharedRing::dmabuf`], and the [`Importer`] opens each buffer once as a wgpu texture through
+//! `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`. It draws a frame only
+//! once the buffer has no pending write, which it learns by polling the buffer's descriptor without
+//! waiting, and records on the ring when the GPU has finished the draw that read it. With the
+//! `pipewire` feature, `HeldBuffers` keeps each buffer from the producer until then, so the
+//! producer does not write into a buffer that is being read. [`check_dmabuf`] gives the reasons the pictures go through memory instead: a compositor
+//! not on Vulkan, a device without the two extensions, a ring negotiated for another device, or a
+//! format and modifier the device cannot read ([`Fallback::Modifier`]); an import the driver
+//! refuses gives [`Fallback::ImportFailed`].
+//!
 //! The other direction carries the compositor's program frames to a hardware encoder. An
 //! [`ExportRing`] holds three NV12 textures and two fences on a Direct3D 11 device of the
 //! compositor's adapter, the device the encoder opens its session on, shared through NT handles.
@@ -42,12 +56,15 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod dmabuf;
 #[cfg(windows)]
 mod duplication;
 mod export;
 mod fallback;
 #[cfg(feature = "wgpu")]
 mod import;
+#[cfg(all(target_os = "linux", feature = "pipewire"))]
+mod pw_hold;
 mod ring;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod window_capture;
@@ -55,9 +72,15 @@ mod window_capture;
 #[cfg(all(windows, feature = "wgpu"))]
 #[allow(unsafe_code)]
 mod d3d12_ffi;
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod dmabuf_ffi;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod dxgi_ffi;
+#[cfg(all(target_os = "linux", feature = "pipewire"))]
+#[allow(unsafe_code)]
+mod pw_hold_ffi;
 #[cfg(all(windows, feature = "wgpu"))]
 #[allow(unsafe_code)]
 mod vulkan_ffi;
@@ -68,13 +91,39 @@ mod wgc_ffi;
 #[cfg(test)]
 mod tests;
 
+pub use dmabuf::{
+    DmabufCaps, DmabufFormat, DmabufLayout, HoldQueue, MAX_BUFFERS, MAX_HELD, MOD_INVALID, MOD_LINEAR, check_dmabuf, dmabuf_caps, publish_dmabuf_caps,
+};
+#[cfg(target_os = "linux")]
+pub use dmabuf::{DmabufPlane, DmabufStream};
 pub use export::{ExportFrame, ExportRing, Feed};
 #[cfg(feature = "wgpu")]
 pub use export::{Exporter, Ticket, device_backend};
 pub use fallback::{Backend, Fallback, check_export, check_import};
 #[cfg(feature = "wgpu")]
 pub use import::{Drawn, Importer, Opaque};
-pub use ring::{AdapterId, Handoff, RECLAIM, SLOTS, SharedFrame, SharedRing, SlotTable};
+#[cfg(all(target_os = "linux", feature = "pipewire"))]
+pub use pw_hold::{Dequeued, HeldBuffers, HeldPlane};
+pub use ring::{AdapterId, FrameWatch, Handoff, RECLAIM, SLOTS, SharedFrame, SharedRing, SlotTable};
+
+/// Publish what the compositor's `device` can import as DMA-BUFs ([`publish_dmabuf_caps`]), for
+/// the Linux display captures that negotiate their streams after this call. A device that cannot
+/// import any clears what an earlier device published. Elsewhere than Linux this does nothing.
+#[cfg(feature = "wgpu")]
+pub fn publish_import_caps(device: &wgpu::Device) {
+    #[cfg(target_os = "linux")]
+    publish_dmabuf_caps(dmabuf_ffi::caps(device).ok());
+    #[cfg(not(target_os = "linux"))]
+    let _ = device;
+}
+
+/// A DMA-BUF over `len` bytes of ordinary memory, made through `/dev/udmabuf`, for measuring and
+/// testing the import without a screen-cast stream. `len` must be a whole number of pages. It
+/// fails where the kernel has no udmabuf device or the user cannot open it.
+#[cfg(target_os = "linux")]
+pub fn dmabuf_in_memory(len: u64) -> std::io::Result<std::os::fd::OwnedFd> {
+    dmabuf_ffi::dmabuf_in_memory(len)
+}
 
 /// What one call to [`Duplication::grab`] or [`WindowCapture::grab`] gave.
 #[derive(Debug)]

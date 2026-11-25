@@ -164,6 +164,305 @@ fn elsewhere_than_windows_the_capture_reports_the_fallback() {
     assert_eq!(WindowCapture::open(1, "display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
 }
 
+/// A device that can import BGRx and BGRA buffers laid out linearly or with modifier 7, and nothing
+/// in RGB order.
+fn dmabuf_caps_of(device: AdapterId) -> DmabufCaps {
+    DmabufCaps {
+        device,
+        formats: vec![(DmabufFormat::Bgrx, vec![MOD_LINEAR, 7]), (DmabufFormat::Bgra, vec![MOD_LINEAR]), (DmabufFormat::Rgbx, vec![])],
+    }
+}
+
+#[test]
+fn a_dmabuf_import_needs_vulkan_the_two_extensions_the_streams_device_and_a_known_modifier() {
+    let a = AdapterId(11);
+    let caps = dmabuf_caps_of(a);
+    let linear = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, linear), Ok(()));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgrx, modifier: 7 }), Ok(()));
+    // A compositor on another backend.
+    assert_eq!(check_dmabuf(false, true, Some(&caps), a, linear), Err(Fallback::UnsupportedBackend));
+    // A Vulkan device opened without the extensions, or one that reports nothing it can import.
+    assert_eq!(check_dmabuf(true, false, Some(&caps), a, linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf(true, true, None, a, linear), Err(Fallback::MissingExtension));
+    // A stream negotiated for another device.
+    assert_eq!(check_dmabuf(true, true, Some(&caps), AdapterId(12), linear), Err(Fallback::OtherAdapter));
+    // A modifier or a format the device cannot read, and the implicit modifier, which the import
+    // cannot take.
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgra, modifier: 7 }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Rgbx, modifier: MOD_LINEAR }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Rgba, modifier: MOD_LINEAR }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_INVALID }), Err(Fallback::Modifier));
+    // The backend comes first, then the extensions, then the device.
+    assert_eq!(check_dmabuf(false, false, None, AdapterId(12), linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_dmabuf(true, false, None, AdapterId(12), linear), Err(Fallback::MissingExtension));
+    assert_eq!(
+        check_dmabuf(true, true, Some(&caps), AdapterId(12), DmabufLayout { format: DmabufFormat::Rgba, modifier: 9 }),
+        Err(Fallback::OtherAdapter)
+    );
+}
+
+#[test]
+fn published_dmabuf_caps_drop_repeats_and_the_implicit_modifier_and_a_device_without_any_clears_them() {
+    let mut caps = dmabuf_caps_of(AdapterId(3));
+    caps.formats[0].1 = vec![7, MOD_INVALID, 7, MOD_LINEAR, 7];
+    caps.formats.push((DmabufFormat::Rgba, (0..1000).collect()));
+    publish_dmabuf_caps(Some(caps));
+    let published = dmabuf_caps().unwrap();
+    assert_eq!(published.modifiers(DmabufFormat::Bgrx), [7, MOD_LINEAR]);
+    assert_eq!(published.modifiers(DmabufFormat::Rgbx), [] as [u64; 0]);
+    assert_eq!(published.modifiers(DmabufFormat::Rgba).len(), 64, "a driver's list is capped");
+    publish_dmabuf_caps(Some(DmabufCaps { device: AdapterId(3), formats: vec![(DmabufFormat::Bgrx, vec![MOD_INVALID])] }));
+    assert!(dmabuf_caps().is_none(), "a device that imports nothing publishes nothing");
+    publish_dmabuf_caps(Some(dmabuf_caps_of(AdapterId(3))));
+    publish_dmabuf_caps(None);
+    assert!(dmabuf_caps().is_none());
+}
+
+#[test]
+fn a_device_uuid_names_one_device() {
+    let mut uuid = [0u8; 16];
+    let a = crate::dmabuf::adapter_from_uuid(uuid);
+    uuid[15] = 1;
+    let b = crate::dmabuf::adapter_from_uuid(uuid);
+    uuid[15] = 0;
+    uuid[7] = 2;
+    let c = crate::dmabuf::adapter_from_uuid(uuid);
+    assert!(a != b && b != c && a != c);
+    assert_eq!(crate::dmabuf::adapter_from_uuid(uuid), c);
+}
+
+#[test]
+fn kept_buffers_go_back_only_once_their_frames_are_read_and_a_buffer_past_the_limit_is_not_kept() {
+    let mut held = HoldQueue::new();
+    let mut back = Vec::new();
+    assert_eq!(held.keep('a', 1, 2), Ok(()));
+    assert_eq!(held.keep('b', 2, 2), Ok(()));
+    // A third buffer with a limit of two is not kept, and the two being read stay.
+    assert_eq!(held.keep('c', 3, 2), Err('c'));
+    assert_eq!(held.len(), 2);
+    held.release(0, |b| back.push(b));
+    assert!(back.is_empty(), "nothing has been read yet");
+    // The GPU has read frame 1, so its buffer goes back and the one of frame 2 stays.
+    held.release(1, |b| back.push(b));
+    assert_eq!((back.as_slice(), held.len()), (['a'].as_slice(), 1));
+    held.release(0, |b| back.push(b));
+    assert_eq!(held.len(), 1, "an older value gives nothing back");
+    // A limit of 0 keeps nothing, and no limit keeps more than MAX_HELD.
+    assert_eq!(held.keep('d', 4, 0), Err('d'));
+    assert_eq!(held.keep('e', 5, 100), Ok(()));
+    assert_eq!(held.keep('f', 6, 100), Ok(()));
+    assert_eq!(held.keep('g', 7, 100), Err('g'));
+    assert_eq!(held.len(), MAX_HELD);
+    // One value covers every earlier frame.
+    held.release(6, |b| back.push(b));
+    assert_eq!(back, ['a', 'b', 'e', 'f']);
+    // A buffer the stream removed is forgotten, not given back.
+    assert_eq!(held.keep('h', 8, 100), Ok(()));
+    assert!(held.forget(|&b| b == 'h'));
+    assert!(!held.forget(|&b| b == 'h'));
+    assert!(held.is_empty());
+    assert_eq!(held.keep('i', 9, 100), Ok(()));
+    held.release_all(|b| back.push(b));
+    assert!(held.is_empty());
+    assert_eq!(back, ['a', 'b', 'e', 'f', 'i']);
+}
+
+#[test]
+fn kept_buffers_whose_frames_were_dropped_undrawn_go_back_without_a_read() {
+    // A frame replaced before the compositor drew it, or dropped when the capture left the GPU, is
+    // never recorded as read, so its buffer goes back once every copy of it is gone.
+    let ring = SharedRing::detached(4, 4);
+    let frame = |ready| SharedFrame::watched(std::sync::Arc::clone(&ring), 0, ready).unwrap();
+    let (first, second, third) = (frame(1), frame(2), frame(3));
+    let copy = second.clone();
+    let mut held = HoldQueue::new();
+    for (name, f) in [('a', &first), ('b', &second), ('c', &third)] {
+        assert!(held.keep((name, f.watch().unwrap()), f.ready(), 100).is_ok());
+    }
+    let mut back = Vec::new();
+    let mut release = |held: &mut HoldQueue<(char, FrameWatch)>| held.release_unread(|(_, w)| w.dropped_undrawn(), |(b, _)| back.push(b));
+    release(&mut held);
+    assert_eq!(held.len(), 3, "every frame is still held");
+    // A buffer behind one whose frame is still held goes back too, but not while a copy is left.
+    drop(second);
+    release(&mut held);
+    assert_eq!(held.len(), 3, "a copy of the second frame is left");
+    drop(copy);
+    release(&mut held);
+    assert_eq!(held.len(), 2);
+    // A drawn frame waits for the compositor's read, even once it is gone.
+    third.mark_drawn();
+    drop(third);
+    drop(first);
+    release(&mut held);
+    assert_eq!(back, ['b', 'a']);
+    assert_eq!(held.len(), 1);
+    // A frame made without a watch has none.
+    assert!(SharedFrame::new(std::sync::Arc::clone(&ring), 0, 4).unwrap().watch().is_none());
+}
+
+#[cfg(target_os = "linux")]
+mod dmabuf {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::sync::Arc;
+
+    use super::*;
+
+    const LINEAR: DmabufLayout = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+
+    #[test]
+    fn a_plane_holds_its_own_copy_of_the_descriptor() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let plane = DmabufPlane::duplicate(reader.as_raw_fd(), 64, 7680).unwrap();
+        assert_ne!(plane.fd.as_raw_fd(), reader.as_raw_fd());
+        assert_eq!((plane.offset(), plane.stride()), (64, 7680));
+        writer.write_all(&[1]).unwrap();
+        drop(reader);
+        drop(writer);
+        // The copy stays open after the stream's own descriptor is closed.
+        assert!(plane.ready(), "the copy still polls the pipe's byte");
+        assert!(DmabufPlane::duplicate(-1, 0, 4).is_err());
+        assert!(DmabufPlane::duplicate(i32::MAX, 0, 4).is_err(), "a number that is not open is refused");
+    }
+
+    #[test]
+    fn a_frame_whose_buffer_is_still_being_written_waits_and_the_compositor_goes_on() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap()));
+        let mut handoff = Handoff::default();
+        handoff.offer(frame(&ring, 0, 1));
+        // The pipe stands in for a buffer whose producer has not finished: every check returns at
+        // once and the frame stays.
+        for _ in 0..3 {
+            let done = handoff.pending().map_or(0, crate::dmabuf::completed);
+            assert!(handoff.take_ready(done).is_none());
+        }
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(1));
+        writer.write_all(&[1]).unwrap();
+        let done = handoff.pending().map_or(0, crate::dmabuf::completed);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(0));
+        // A slot without its plane is never ready.
+        assert_eq!(crate::dmabuf::completed(&frame(&ring, 1, 2)), 0);
+    }
+
+    #[test]
+    fn a_dmabuf_ring_has_a_slot_per_buffer_and_each_slot_gets_one_plane() {
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let plane = || DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert_eq!((ring.slots(), ring.dmabuf_layout(), ring.adapter(), ring.keeps_alpha()), (MAX_BUFFERS, Some(LINEAR), AdapterId(1), false));
+        assert!(SharedFrame::new(Arc::clone(&ring), MAX_BUFFERS - 1, 1).is_some());
+        assert!(SharedFrame::new(Arc::clone(&ring), MAX_BUFFERS, 1).is_none());
+        assert!(ring.set_plane(3, plane()));
+        assert!(!ring.set_plane(3, plane()), "a slot's plane is set once");
+        assert!(!ring.set_plane(MAX_BUFFERS, plane()));
+        assert!(ring.plane(3).is_some() && ring.plane(2).is_none());
+        let detached = SharedRing::detached(4, 2);
+        assert!(!detached.set_plane(0, plane()), "a ring of shared textures takes no planes");
+        assert_eq!((detached.slots(), detached.dmabuf_layout()), (SLOTS, None));
+    }
+
+    #[test]
+    fn a_stream_reuses_the_slot_of_a_buffer_it_has_seen_and_starts_a_new_ring_when_its_buffers_change() {
+        let pipes: Vec<_> = (0..MAX_BUFFERS + 1).map(|_| std::io::pipe().unwrap()).collect();
+        let fd = |i: usize| pipes[i].0.as_raw_fd();
+        let mut stream = DmabufStream::new();
+        assert!(matches!(stream.frame(fd(0), 0, 16), Ok(None)), "a stream in memory gives no frames");
+        assert!(!stream.active());
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(5))));
+        assert!(stream.active());
+        let a = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        let b = stream.frame(fd(1), 0, 16).unwrap().unwrap();
+        let a2 = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        assert_eq!((a.slot(), b.slot(), a2.slot()), (0, 1, 0));
+        assert_eq!((a.ready(), b.ready(), a2.ready()), (1, 2, 3));
+        assert!(Arc::ptr_eq(a.ring(), a2.ring()));
+        assert_eq!((a.width(), a.height(), a.ring().adapter()), (4, 2, AdapterId(5)));
+        // A buffer whose stride changed starts a new ring.
+        let c = stream.frame(fd(0), 0, 32).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(a.ring(), c.ring()));
+        assert_eq!((c.slot(), c.ring().plane(0).map(DmabufPlane::stride)), (0, Some(32)));
+        // Added or removed buffers start a new ring too.
+        stream.buffers_changed();
+        let d = stream.frame(fd(1), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(c.ring(), d.ring()));
+        // One buffer more than the ring holds starts a new ring.
+        let ring = Arc::clone(d.ring());
+        for i in 2..=MAX_BUFFERS {
+            let f = stream.frame(fd(i), 0, 16).unwrap().unwrap();
+            assert!(Arc::ptr_eq(&ring, f.ring()), "buffer {i} fits");
+        }
+        let e = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(&ring, e.ring()));
+        assert_eq!(e.slot(), 0);
+        // The compositor's refusal is seen on the stream; a new format forgets the ring.
+        assert_eq!(stream.refused(), None);
+        e.ring().refuse(Fallback::Modifier);
+        assert_eq!(stream.refused(), Some(Fallback::Modifier));
+        stream.set_format(None);
+        assert_eq!(stream.refused(), None);
+        assert!(matches!(stream.frame(fd(0), 0, 16), Ok(None)));
+    }
+
+    #[test]
+    fn only_a_dmabuf_whose_rows_hold_the_picture_goes_to_the_driver() {
+        use crate::dmabuf_ffi::{is_dmabuf, plane_fits};
+        use std::os::fd::AsFd;
+        let (reader, _writer) = std::io::pipe().unwrap();
+        assert!(!is_dmabuf(reader.as_fd()), "a pipe is not a DMA-BUF");
+        assert!(plane_fits(1920, 1080, 0, 7680, true));
+        assert!(plane_fits(1920, 1080, 4096, 8192, true));
+        assert!(!plane_fits(1920, 1080, 0, 7676, true), "a linear row shorter than its pixels");
+        assert!(plane_fits(1920, 1080, 0, 7676, false), "a tiled layout's stride is the driver's");
+        assert!(!plane_fits(0, 1080, 0, 7680, true));
+        assert!(!plane_fits(1920, 0, 0, 7680, true));
+        assert!(!plane_fits(1920, 1080, 0, 0, false));
+        assert!(plane_fits(u32::MAX, u32::MAX, u32::MAX, u32::MAX, false), "the largest sizes do not overflow");
+        assert!(!plane_fits(u32::MAX, 1, 0, u32::MAX, true), "a row of u32::MAX pixels is longer than any stride");
+    }
+
+    #[test]
+    fn a_buffer_that_cannot_be_read_is_an_error_not_a_frame() {
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(5))));
+        assert_eq!(stream.frame(-1, 0, 16).err(), Some(Fallback::ImportFailed));
+        assert_eq!(stream.frame(i32::MAX, 0, 16).err(), Some(Fallback::ImportFailed), "a closed descriptor");
+        let (reader, _writer) = std::io::pipe().unwrap();
+        assert_eq!(stream.frame(reader.as_raw_fd(), 0, 0).err(), Some(Fallback::ImportFailed), "a stride of 0");
+        assert!(stream.frame(reader.as_raw_fd(), 0, 16).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_dmabuf_ring_records_the_newest_frame_the_compositor_has_read() {
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert_eq!(ring.dmabuf_released(), 0);
+        ring.release_dmabuf(3);
+        ring.release_dmabuf(2);
+        assert_eq!(ring.dmabuf_released(), 3, "a frame read late does not move the value back");
+        let textures = SharedRing::detached(4, 2);
+        textures.release_dmabuf(5);
+        assert_eq!(textures.dmabuf_released(), 0, "a ring of shared textures has no such value");
+        // All of a stream's rings record into one value, which the stream reads.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(1))));
+        let first = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert_eq!(stream.released(), 0);
+        stream.buffers_changed();
+        let second = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(first.ring(), second.ring()));
+        first.ring().release_dmabuf(first.ready());
+        assert_eq!(stream.released(), first.ready(), "a frame of an earlier ring is seen");
+        second.ring().release_dmabuf(second.ready());
+        assert_eq!((stream.released(), first.ring().dmabuf_released()), (second.ready(), second.ready()));
+        stream.set_format(None);
+        assert_eq!(stream.released(), second.ready(), "the value outlives the stream's format");
+    }
+}
+
 mod window {
     use std::collections::VecDeque;
 
@@ -525,6 +824,13 @@ fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
 mod gpu {
     use super::*;
 
+    /// The tests in this module run one at a time, so no two threads create instances and devices
+    /// at once.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
@@ -572,6 +878,7 @@ mod gpu {
 
     #[test]
     fn the_opaque_copy_keeps_the_color_and_sets_alpha() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         let dst = texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
@@ -599,6 +906,7 @@ mod gpu {
 
     #[test]
     fn a_window_picture_keeps_its_alpha_and_a_display_picture_does_not() {
+        let _gpu = serial();
         assert!(!SharedRing::detached(4, 2).keeps_alpha(), "a display's ring is drawn opaque");
         let Some((device, queue)) = device() else { return };
         let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
@@ -640,6 +948,7 @@ mod gpu {
 
     #[test]
     fn a_ring_the_device_cannot_open_records_why_and_drops_the_frame() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let ring = SharedRing::detached(64, 1);
         let format = wgpu::TextureFormat::Bgra8Unorm;
@@ -665,6 +974,7 @@ mod gpu {
 
     #[test]
     fn the_copy_that_readies_the_planes_uses_their_own_formats() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let plane = |format, w, h| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -697,9 +1007,114 @@ mod gpu {
         assert_eq!(formats(&crate::export::scratch_for(&device, &unorm, Some(scratch))), formats(&unorm));
     }
 
+    /// A device on wgpu's `backends`, opened with those of `features` the adapter has.
+    #[cfg(target_os = "linux")]
+    fn device_on(backends: wgpu::Backends, features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = backends;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no adapter on {backends:?}: this test is skipped");
+            return None;
+        };
+        let desc = wgpu::DeviceDescriptor { required_features: features & adapter.features(), ..Default::default() };
+        pollster::block_on(adapter.request_device(&desc)).ok()
+    }
+
+    /// A DMA-BUF ring whose slot 0 holds a pipe in place of a buffer, readable so that a frame in
+    /// it is ready and the import is tried.
+    #[cfg(target_os = "linux")]
+    fn pipe_ring(layout: DmabufLayout, device: AdapterId) -> (std::sync::Arc<SharedRing>, std::io::PipeReader) {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(&[1]).unwrap();
+        let ring = SharedRing::dmabuf(64, 1, layout, device);
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(reader.as_raw_fd(), 0, 256).unwrap()));
+        (ring, reader)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dmabuf_ring_on_a_compositor_not_on_vulkan_falls_back_for_the_backend() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, AdapterId(1));
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| None), Err(Fallback::UnsupportedBackend));
+        assert_eq!(ring.fallback(), Some(Fallback::UnsupportedBackend));
+        assert_eq!(crate::dmabuf_ffi::caps(&device).err(), Some(Fallback::UnsupportedBackend));
+    }
+
+    /// A frame is recorded as read only once the GPU has finished the work submitted before it, it
+    /// is marked as drawn at once, and a ring of shared textures records nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dmabuf_frame_is_recorded_as_read_once_the_submitted_work_has_finished() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, AdapterId(1));
+        queue.submit([device.create_command_encoder(&Default::default()).finish()]);
+        let drawn = SharedFrame::watched(std::sync::Arc::clone(&ring), 0, 4).unwrap();
+        let mut watch = drawn.watch().unwrap();
+        crate::import::release_dmabuf_after_submitted(&queue, &drawn);
+        drop(drawn);
+        assert!(!watch.dropped_undrawn(), "a drawn frame waits for its read");
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(ring.dmabuf_released(), 4);
+        let textures = SharedRing::detached(64, 1);
+        crate::import::release_dmabuf_after_submitted(&queue, &SharedFrame::new(std::sync::Arc::clone(&textures), 0, 5).unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(textures.dmabuf_released(), 0);
+    }
+
+    /// On a Vulkan device: without the DMA-BUF feature the reason is the extension; with it, a ring
+    /// of another device, a modifier the device cannot read, and a descriptor that is not a DMA-BUF
+    /// each give their own reason.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_vulkan_compositor_imports_only_buffers_it_can_read() {
+        let _gpu = serial();
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let linear = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+        let Some((plain, plain_queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::empty()) else { return };
+        assert_eq!(crate::dmabuf_ffi::caps(&plain).err(), Some(Fallback::MissingExtension));
+        let (ring, _pipe) = pipe_ring(linear, AdapterId(1));
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&plain, &plain_queue, format, |_, _| None), Err(Fallback::MissingExtension));
+
+        let Some((device, queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else { return };
+        let Ok(caps) = crate::dmabuf_ffi::caps(&device) else {
+            eprintln!("the Vulkan driver cannot import DMA-BUFs: the rest of this test is skipped");
+            return;
+        };
+        let other = AdapterId(caps.device.0 ^ 1);
+        let (ring, _pipe) = pipe_ring(linear, other);
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::OtherAdapter));
+        let unknown = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_INVALID };
+        let (ring, _pipe) = pipe_ring(unknown, caps.device);
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::Modifier));
+        let Some(&modifier) = caps.modifiers(DmabufFormat::Bgrx).first() else {
+            eprintln!("the Vulkan driver lists no modifier for BGRx: the rest of this test is skipped");
+            return;
+        };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier }, caps.device);
+        importer.offer(frame(&ring, 0, 1));
+        // The pipe is not a DMA-BUF, so it never reaches the driver.
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::ImportFailed));
+        assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn elsewhere_than_windows_an_export_reports_the_fallback() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         assert_eq!(device_backend(&device), (Backend::Other, None));
         assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::Unsupported));
@@ -711,6 +1126,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_windows_compositor_exports_its_frames_or_says_why_not() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let (backend, adapter) = device_backend(&device);
         let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
@@ -761,6 +1177,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_vulkan_compositor_opens_rings_of_its_own_adapter() {
+        let _gpu = serial();
         let Some((device, queue)) = vulkan(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32) else { return };
         let (Some(own), timeline) = crate::vulkan_ffi::adapter(&device).expect("a Vulkan device") else {
             eprintln!("the Vulkan driver does not report its adapter: this test is skipped");
@@ -788,6 +1205,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_direct3d_12_device_is_not_opened_as_vulkan() {
+        let _gpu = serial();
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = wgpu::Backends::DX12;
         let instance = wgpu::Instance::new(desc);

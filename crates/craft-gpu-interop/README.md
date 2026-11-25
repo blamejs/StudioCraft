@@ -4,7 +4,9 @@ craft-gpu-interop hands captured display and window pictures from the capture si
 compositor without copying them through CPU memory. On Windows it captures a display with DXGI
 desktop duplication, or a window with Windows.Graphics.Capture, into Direct3D 11 textures that are
 shared through NT handles, and opens those textures and two shared fences on a wgpu Direct3D 12 or
-Vulkan device. Without the `wgpu` feature the crate
+Vulkan device. On Linux it takes the DMA-BUF buffers of a display's screen-cast stream and opens
+each one as a texture on a wgpu Vulkan device with `VK_EXT_external_memory_dma_buf` and
+`VK_EXT_image_drm_format_modifier`. Without the `wgpu` feature the crate
 builds for every target, WebAssembly included, and holds the types both sides exchange.
 
 It also hands the compositor's NV12 program frames to a hardware encoder in the other direction:
@@ -12,8 +14,10 @@ an export ring of shared NV12 textures and two fences on a Direct3D 11 device of
 adapter, written by the compositor's wgpu Direct3D 12 or Vulkan device and read by the encoder.
 
 Only the private `dxgi_ffi` and `wgc_ffi` (capture side), `d3d12_ffi` and `vulkan_ffi`
-(compositor side) modules contain `unsafe` code. They call Direct3D and Windows.Graphics.Capture
-through the `windows` crate's bindings, Vulkan through `ash`, and wgpu through `wgpu::hal`.
+(compositor side), `dmabuf_ffi` (Linux, both sides) and `pw_hold_ffi` (Linux, capture side, with the
+`pipewire` feature) modules contain `unsafe` code. They call Direct3D and Windows.Graphics.Capture
+through the `windows` crate's bindings, Vulkan through `ash`, wgpu through `wgpu::hal`, the Linux
+system calls through `libc`, and PipeWire's buffer queue through the `pipewire` crate.
 
 ## Contents
 
@@ -28,6 +32,13 @@ through the `windows` crate's bindings, Vulkan through `ash`, and wgpu through `
 | `SlotTable` | It is the capture side's record of which textures the compositor still reads. `pick_released` picks only a texture the reader has released, without the `RECLAIM` time limit, as an export ring needs. |
 | `Handoff` | It is the compositor side's frame waiting for its copy to finish. |
 | `check_import(backend, capture, compositor)` | It returns the `Fallback` when the compositor's device cannot open the ring: a backend other than Direct3D 12 and Vulkan, another adapter, or a Vulkan device without `VK_KHR_external_memory_win32`. |
+| `publish_import_caps(device)` (`wgpu` feature) | On Linux it records the formats and single-plane DRM format modifiers the compositor's Vulkan device can sample as DMA-BUFs, and the device's UUID; `dmabuf_caps` returns them to the capture side. A device that cannot import any, or a device on another backend, clears them. Elsewhere it does nothing. |
+| `DmabufStream` (Linux) | It is the capture side's record of one screen-cast stream's DMA-BUF buffers. `set_format` takes the negotiated size, format and modifier, `buffers_changed` forgets the buffers when the stream adds or removes one, and `frame(fd, offset, stride)` duplicates a new buffer's descriptor into a free slot of a ring made with `SharedRing::dmabuf` (up to `MAX_BUFFERS`, 16) and returns a `SharedFrame`. A buffer whose offset or stride changes starts a new ring. |
+| `check_dmabuf(vulkan, extensions, caps, device, layout)` | It returns the `Fallback` when a DMA-BUF ring cannot be opened: `UnsupportedBackend`, `MissingExtension`, `OtherAdapter`, or `Modifier` for a format and modifier the device cannot read. |
+| `HeldBuffers` (Linux, `pipewire` feature) | It keeps a screen-cast stream's DMA-BUF buffers from the producer until the GPU has read their frames: `Dequeued::take` takes the stream's newest buffer, `keep(buffer, frame, limit)` keeps it, `release(stream, released)` gives back those whose frames have been read and those whose frames were dropped without a draw, and `forget` drops a buffer the stream removed. It keeps at most `MAX_HELD` (3) buffers and at most the limit the caller gives; a buffer beyond that goes back unread and its frame is not shown. `HoldQueue` is its bookkeeping, without PipeWire. |
+| `SharedFrame::watched(ring, slot, ready)` | It makes a frame whose copies share a record of whether a draw read it. `watch` gives the capture side a `FrameWatch`, whose `dropped_undrawn` reports that every copy is gone and none was drawn; the importer calls `mark_drawn` when it submits a draw. `DmabufStream` makes its frames this way. |
+| `SharedRing::release_dmabuf(ready)` (Linux) | The importer records that the GPU has finished every draw up to the frame `ready` of a DMA-BUF ring; `DmabufStream::released` reads it on the capture side, for all of the stream's rings. |
+| `dmabuf_in_memory(len)` (Linux) | It makes a DMA-BUF over `len` bytes of sealed memory through `/dev/udmabuf`, for the bench and tests. |
 | `Importer` (`wgpu` feature) | It opens a ring on the compositor's device, takes the waiting frame once its copy is done, draws it into the caller's texture and signals the released fence. `Importer::poll` hands back finished textures on a frame without a draw. |
 | `Opaque` (`wgpu` feature) | It copies one texture into another of the same size with alpha set to 1 (`draw`), or with each texel's alpha kept and its premultiplied color made straight (`draw_keeping_alpha`). |
 | `ExportRing::open(adapter, width, height)` | It makes `SLOTS` (3) shared NV12 textures and two shared fences on a Direct3D 11 device of that adapter, the device an encoder opens its session on (`device`, `texture`). Both sides must be even and not zero (`Fallback::ImportFailed`); elsewhere than Windows it returns `Fallback::Unsupported`. `ExportRing::detached` makes a ring without textures for tests. |
@@ -57,6 +68,17 @@ raw Vulkan commands. A texture the
 compositor never releases is written again after `RECLAIM` (500 ms).
 When every texture is still being read, the capture keeps the acquired desktop picture and copies
 it on a later grab.
+
+A DMA-BUF ring uses the kernel's implicit synchronization instead of fences. The capture side
+duplicates each buffer's descriptor and keeps the buffer from the stream. The compositor polls the
+duplicate for reading with a timeout of 0 and draws the frame only once the poll reports that no
+write is pending, so a late buffer stays waiting while the compositor draws the rest of the scene.
+When the GPU has finished the draw, and every draw submitted before it, the importer records the
+frame's ready value, and the capture side gives that buffer and every earlier one back to the
+stream the next time the stream hands it a buffer. A frame the compositor skips is recorded the
+same way once the draws submitted before it have finished. A buffer whose frame was replaced or
+dropped before any draw read it goes back once the last copy of the frame is gone. Each draw submits a barrier that takes the image from the external queue family in the
+`GENERAL` layout to `SHADER_READ_ONLY_OPTIMAL`, and one that hands it back after.
 
 An export ring runs the same way in the other direction. The compositor copies a frame into a free
 texture and sets the ready fence after the copy: on Direct3D 12 the queue signals it, and on
@@ -106,6 +128,15 @@ exported. One encoder session reads each export ring.
   wider or taller than 16,384 pixels gives `CaptureError::Failed`.
 - The window capture's Direct3D 11 device runs with multithread protection on, since the system
   writes the frame pool's buffers from its own thread.
+- A DMA-BUF ring opens only on a Vulkan 1.1 device created with wgpu's
+  `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`, and only for single-plane BGRA, BGRX, RGBA and RGBX
+  buffers. Before a buffer reaches the driver, the importer checks that its descriptor is a
+  DMA-BUF and that its stride and offset hold the picture; a buffer that fails the check, or that
+  the driver refuses, gives `Fallback::ImportFailed`.
+- The capture side keeps at most `MAX_HELD` (3) buffers, and at most one fewer than the stream
+  has, so the producer always has a buffer to write into. A buffer that arrives while that many
+  are kept goes back unread, and its frame is not shown. A stream with fewer than two buffers is
+  copied through memory.
 
 ## License
 
