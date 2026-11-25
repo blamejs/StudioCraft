@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FilterId, FitMode, ItemId, PauseAnchor, PauseAtZero, PauseSettings, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, MixTracks, PauseAnchor, PauseAtZero, PauseSettings, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +100,9 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    StartVirtualCamera,
+    StopVirtualCamera,
+    ToggleVirtualCamera,
     /// The program's loudness readings and the profile's loudness target.
     AudioLoudness,
     /// The state of the audio tracks.
@@ -300,6 +303,9 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
+    /// The mix tracks the source's audio goes to, as track numbers 1 to 6.
+    #[serde(rename = "source.mix_tracks")]
+    SourceMixTracks { source: SourceRef, tracks: MixTracks },
     /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
     /// source, or of every one whose slot is not empty when `source` is absent.
     #[serde(rename = "present.window")]
@@ -456,6 +462,13 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// Send the program to the virtual camera device, which other apps open as a camera.
+    #[serde(rename = "vcam.start")]
+    VirtualCameraStart {},
+    #[serde(rename = "vcam.stop")]
+    VirtualCameraStop {},
+    #[serde(rename = "vcam.toggle")]
+    VirtualCameraToggle {},
     /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
     /// profile's loudness target.
     #[serde(rename = "audio.loudness")]
@@ -693,6 +706,7 @@ impl Command {
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
+            Command::SourceMixTracks { .. } => "source.mix_tracks",
             Command::PresentWindow { .. } => "present.window",
             Command::PresentNext { .. } => "present.next",
             Command::PresentPrevious { .. } => "present.previous",
@@ -728,6 +742,9 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::VirtualCameraStart {} => "vcam.start",
+            Command::VirtualCameraStop {} => "vcam.stop",
+            Command::VirtualCameraToggle {} => "vcam.toggle",
             Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
@@ -818,6 +835,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
+    spec("source.mix_tracks", "Mix Tracks", "source: id or name, tracks: list of track numbers 1 to 6, [] for none", Undo::Undoable),
     spec(
         "present.window",
         "Present Staged Window",
@@ -868,6 +886,9 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("vcam.start", "Start Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.stop", "Stop Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.toggle", "Start or Stop Virtual Camera", "", Undo::NotUndoable),
     spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),

@@ -932,7 +932,7 @@ fn after_a_video_packet_is_left_out_video_waits_for_a_keyframe() {
     let mut rx = control.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
     let refused = Arc::new(AtomicU64::new(0));
     let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false, captions: None };
-    let item = |track, at: i64, keyframe, data: Vec<u8>| Item { track, order_ns: at, pts_ns: at, dts_ns: at, keyframe, data };
+    let item = |track, at: i64, keyframe, data: Vec<u8>| Item { track, audio: 0, order_ns: at, pts_ns: at, dts_ns: at, keyframe, data };
     let mut write = |i: Item| sink.write(i).unwrap();
     write(item(Track::Video, 0, true, vec![1]));
     // A buffer larger than a packet may be is refused, and so are the frames after it.

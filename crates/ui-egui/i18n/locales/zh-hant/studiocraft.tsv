@@ -333,6 +333,7 @@
 	the audio stream failed	音訊串流發生錯誤
 	the camera capture could not start	無法開始攝影機擷取
 	the camera is already open in another format	攝影機已以另一種格式開啟
+	the camera is not connected	攝影機未連接
 	the camera is still closing	攝影機仍在關閉中
 	the camera offers no format StudioCraft reads	此攝影機沒有 StudioCraft 支援的影像格式
 	the camera sends frames that cannot be read	攝影機傳送的影格無法讀取
@@ -370,7 +371,7 @@
 	Video	視訊
 	Video bitrate	視訊位元率
 	Video encoder	視訊編碼器
-	Video settings can't change while recording, streaming or running the replay buffer.	錄影、直播或執行重播緩衝時無法變更視訊設定。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	錄影、直播或執行重播緩衝、虛擬攝影機時無法變更視訊設定。
 	View	檢視
 	waiting for a choice in the system picker	正在等待在系統選擇器中選擇
 	waiting for the camera	正在等待攝影機

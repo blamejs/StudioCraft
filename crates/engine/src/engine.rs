@@ -351,6 +351,9 @@ impl Engine {
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::VirtualCameraStart {} => Ok(Outcome::runtime(RuntimeAction::StartVirtualCamera)),
+            Command::VirtualCameraStop {} => Ok(Outcome::runtime(RuntimeAction::StopVirtualCamera)),
+            Command::VirtualCameraToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleVirtualCamera)),
             Command::AudioLoudness {} => Ok(Outcome::runtime(RuntimeAction::AudioLoudness)),
             Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
             Command::AudioTracksRepair { folder } => {
@@ -821,6 +824,15 @@ impl Engine {
                 if s.audio.record_track.is_some() || s.audio.records_track() != on {
                     s.audio.record_track = Some(on);
                 }
+                Ok((Value::Null, None))
+            }
+            Command::SourceMixTracks { source, tracks } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                s.audio.mix_tracks = tracks;
                 Ok((Value::Null, None))
             }
             Command::SourceMute { source, muted } => {
