@@ -6697,6 +6697,7 @@ dependencies = [
  "craft-captions",
  "craft-hwenc",
  "craft-speech",
+ "crossbeam-queue",
  "dirs",
  "image",
  "log",
