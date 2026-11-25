@@ -601,9 +601,11 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState, latency_frames:
         ui.label(tl!("Balance"));
         let mut balance = if state.balance.is_finite() { state.balance.clamp(-MAX_BALANCE, MAX_BALANCE) } else { 0.0 };
         ui.horizontal(|ui| {
-            let r = ui
-                .add(egui::Slider::new(&mut balance, -MAX_BALANCE..=MAX_BALANCE).step_by(0.01).show_value(false))
-                .on_hover_text(tl!("Moves this source between the left and right channels; double-click to center it"));
+            // `Edits` leaves a saved value between the 0.01 steps as it is when the slider draws;
+            // a drag or a key press still rounds to a step and stays in range.
+            let slider =
+                egui::Slider::new(&mut balance, -MAX_BALANCE..=MAX_BALANCE).step_by(0.01).clamping(egui::SliderClamping::Edits).show_value(false);
+            let r = ui.add(slider).on_hover_text(tl!("Moves this source between the left and right channels; double-click to center it"));
             if r.double_clicked() {
                 balance = 0.0;
             }
@@ -1108,7 +1110,8 @@ mod tests {
     #[test]
     fn the_balance_and_mono_rows_draw_without_running_a_command() {
         let ctx = egui::Context::default();
-        for (balance, mono) in [(0.0, false), (-1.0, true), (0.35, false), (1.0, true)] {
+        // A saved balance between the slider's 0.01 steps (0.347, -0.123) stays as it is.
+        for (balance, mono) in [(0.0, false), (-1.0, true), (0.35, false), (1.0, true), (0.347, false), (-0.123, true)] {
             let state = AudioState { balance, mono, ..AudioState::default() };
             let mut actions = vec![("x", json!(null))];
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
