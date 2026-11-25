@@ -113,17 +113,18 @@ The `write_texture` rows do not include the capture's own read-back of the deskt
 memory, which the shared path also does without.
 
 The same two cases run for a window capture's picture at 1280 × 720 and 2560 × 1440
-(`write_texture upload window 720p`, `opaque GPU copy window 1440p`). On Windows a Window capture
-source takes the shared path through Windows.Graphics.Capture, and the memory path reads the
-window into CPU memory first, which these rows also do not include. Measured on 2026-11-24 on the
-same llvmpipe adapter, with the same limits:
+(`write_texture upload window 720p`, `alpha GPU copy window 1440p`). The GPU copy of a window's
+picture keeps its alpha, as a window capture draws it. On Windows a Window capture source takes
+the shared path through Windows.Graphics.Capture, and the memory path reads the window into CPU
+memory first, which these rows also do not include. Measured on 2026-11-25 on the same llvmpipe
+adapter, with the same limits:
 
 | Bench | Median | Range (95%) |
 | --- | --- | --- |
-| `write_texture upload window 720p` | 254 µs | 246 to 264 µs |
-| `opaque GPU copy window 720p` | 2.23 ms | 2.05 to 2.44 ms |
-| `write_texture upload window 1440p` | 2.47 ms | 2.30 to 2.66 ms |
-| `opaque GPU copy window 1440p` | 3.52 ms | 3.37 to 3.68 ms |
+| `write_texture upload window 720p` | 312 µs | 272 to 363 µs |
+| `alpha GPU copy window 720p` | 7.97 ms | 7.61 to 8.36 ms |
+| `write_texture upload window 1440p` | 2.94 ms | 2.78 to 3.12 ms |
+| `alpha GPU copy window 1440p` | 19.77 ms | 19.29 to 20.25 ms |
 
 The same bench times how a 1080p and a 4K NV12 frame (an R8 and an RG8 plane) reach an encoder:
 `NV12 read-back`, copied into a buffer that is then mapped, and `NV12 export ring copy`, copied
