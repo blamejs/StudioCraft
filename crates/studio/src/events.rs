@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use studiocraft_media::Tick;
 use studiocraft_media::clock::tick_of;
 use studiocraft_model::SceneId;
+use studiocraft_outputs::stream::MAX_DESTINATIONS;
 use studiocraft_plugin::{DestinationState, DestinationStatus};
 
 /// How many events the ring keeps, StudioCraft's own value.
@@ -141,6 +142,10 @@ pub(crate) struct ReconnectWatch {
     /// The sum of the counts.
     total: u64,
     seen: HashMap<String, u32>,
+    /// The counts of the last [`MAX_DESTINATIONS`] destinations that left the stream's list,
+    /// oldest first. The stream goes on from the count of one added again under its id while it
+    /// is among them.
+    gone: VecDeque<(String, u32)>,
 }
 
 impl ReconnectWatch {
@@ -152,6 +157,7 @@ impl ReconnectWatch {
             self.stream = stream;
             self.total = 0;
             self.seen.clear();
+            self.gone.clear();
         }
         if total == self.total {
             return Vec::new();
@@ -168,6 +174,41 @@ impl ReconnectWatch {
             }
         }
         out
+    }
+
+    /// Follow a change of the stream's list from the ids `before` to the ids `after`, as the
+    /// stream keeps its counts: one added goes on from the count it left with, one that left joins
+    /// the last [`MAX_DESTINATIONS`] that left, also with no reconnects, and those that left
+    /// before them are forgotten.
+    pub(crate) fn relist(&mut self, before: &[String], after: &[String]) {
+        for id in after.iter().filter(|id| !before.contains(id)) {
+            if let Some(i) = self.gone.iter().position(|(g, _)| g == id)
+                && let Some((id, count)) = self.gone.remove(i)
+                && !self.seen.contains_key(&id)
+            {
+                self.seen.insert(id, count);
+            }
+        }
+        for id in before.iter().filter(|id| !after.contains(id)) {
+            let count = self.seen.remove(id).unwrap_or(0);
+            self.gone.push_back((id.clone(), count));
+        }
+        while self.gone.len() > MAX_DESTINATIONS {
+            self.gone.pop_front();
+        }
+    }
+
+    /// Record `count` as destination `id`'s count of stream `stream`.
+    #[cfg(test)]
+    pub(crate) fn record(&mut self, stream: Option<u64>, id: &str, count: u32) {
+        self.stream = stream;
+        self.seen.insert(id.to_string(), count);
+    }
+
+    /// The ids whose counts are kept, and how many of those that left.
+    #[cfg(test)]
+    pub(crate) fn ids(&self) -> (Vec<&str>, usize) {
+        (self.seen.keys().map(String::as_str).collect(), self.gone.len())
     }
 }
 
@@ -231,6 +272,17 @@ impl ReconnectNotices {
             }
         }
         out
+    }
+
+    /// Drop the notices shown for the destinations `keep` rejects.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&String) -> bool) {
+        self.shown.retain(|id, _| keep(id));
+    }
+
+    /// The ids whose notices are kept.
+    #[cfg(test)]
+    pub(crate) fn ids(&self) -> Vec<&str> {
+        self.shown.keys().map(String::as_str).collect()
     }
 }
 
@@ -317,6 +369,28 @@ mod tests {
         assert_eq!(look(&mut w, Some(2), &[dest("a", 1), dest("b", 1)]), [r("a", 1, 1)]);
         assert!(look(&mut w, None, &[]).is_empty(), "no stream runs");
         assert_eq!(reads, 4, "the states are read only when the sum moved");
+    }
+
+    #[test]
+    fn a_destination_added_again_goes_on_from_its_count_while_among_the_last_that_left() {
+        let mut w = ReconnectWatch::default();
+        let r = |d: &str, count, lost| Kind::Reconnect { destination: d.into(), count, lost };
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(w.observe(Some(1), 2, || vec![dest("a", 2)]), [r("a", 2, 2)]);
+        // `b` takes the place of `a`, then `a` takes the place of `b`.
+        w.relist(&ids(&["a"]), &ids(&["b"]));
+        w.relist(&ids(&["b"]), &ids(&["a"]));
+        // The stream goes on from its count: one more loss, not three.
+        assert_eq!(w.observe(Some(1), 3, || vec![dest("a", 3)]), [r("a", 3, 1)]);
+        // Once as many others as a stream lists have left after it, none of them with a
+        // reconnect, its count is forgotten, as the stream starts it from zero.
+        w.relist(&ids(&["a"]), &ids(&["c0"]));
+        for i in 0..MAX_DESTINATIONS {
+            w.relist(&[format!("c{i}")], &[format!("c{}", i + 1)]);
+        }
+        assert_eq!(w.ids(), (Vec::new(), MAX_DESTINATIONS), "the record stays bounded");
+        w.relist(&[format!("c{MAX_DESTINATIONS}")], &ids(&["a"]));
+        assert_eq!(w.observe(Some(1), 4, || vec![dest("a", 1)]), [r("a", 1, 1)]);
     }
 
     #[test]

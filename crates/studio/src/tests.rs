@@ -680,6 +680,7 @@ fn destinations_added_and_removed_while_the_stream_runs_leave_no_records_behind(
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
     s.start_output(OutputKind::Streaming).unwrap();
     let a_conn = a.recv_timeout(GUARD).expect("the destination connects at the start");
+    s.outputs.note_reconnect("a");
     let status = |s: &Studio, id: &str| s.stream_destinations().into_iter().find(|d| d.id == id).map(|d| d.status);
     for i in 0..ADDED {
         let id = format!("added{i}");
@@ -687,23 +688,35 @@ fn destinations_added_and_removed_while_the_stream_runs_leave_no_records_behind(
         p.stream.destinations.push(Destination { id: id.clone(), server: closing.clone(), key: KeyRef::Profile, ..Destination::default() });
         s.set_profile(p).unwrap();
         s.set_stream_destination(&id, true).unwrap();
+        // Each one lost its connection once and got a notice for it.
+        s.outputs.note_reconnect(&id);
         s.set_stream_destination(&id, false).unwrap();
         let waited = std::time::Instant::now();
         while !matches!(status(&s, &id), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))) {
             assert!(waited.elapsed() < GUARD, "`{id}` did not end: {:?}", status(&s, &id));
             std::thread::yield_now();
         }
-        let mut p = s.profile().clone();
-        p.stream.destinations.retain(|d| d.id != id);
-        s.set_profile(p).unwrap();
+        // The first one stays in the profile.
+        if i > 0 {
+            let mut p = s.profile().clone();
+            p.stream.destinations.retain(|d| d.id != id);
+            s.set_profile(p).unwrap();
+        }
     }
-    // Only the destinations the stream still lists keep their records.
+    // Only the destinations the stream still lists or the profile has keep their records. The
+    // first one gave its place to an added one.
     let listed: Vec<String> = s.stream_destinations().into_iter().map(|d| d.id).collect();
-    assert!(listed.len() < ADDED, "{listed:?}");
-    for ids in s.outputs.stream_record_ids() {
-        assert!(ids.iter().all(|id| listed.iter().any(|l| l == id)), "records of destinations no longer listed: {ids:?}");
-        assert!(ids.contains(&"a") && ids.contains(&format!("added{}", ADDED - 1).as_str()), "{ids:?}");
+    assert!(listed.len() < ADDED && !listed.iter().any(|l| l == "added0"), "{listed:?}");
+    let [keys, servers, names, prints, counts, notices] = s.outputs.stream_record_ids();
+    for ids in [keys, servers, names, prints, notices] {
+        assert!(ids.iter().all(|id| *id == "added0" || listed.iter().any(|l| l == id)), "records of destinations no longer listed: {ids:?}");
+        assert!(ids.contains(&"a") && ids.contains(&"added0") && ids.contains(&format!("added{}", ADDED - 1).as_str()), "{ids:?}");
     }
+    // A reconnect count follows the stream's list, which keeps the counts of those that left
+    // apart, for one added again.
+    assert!(counts.iter().all(|id| listed.iter().any(|l| l == id)), "counts of destinations no longer listed: {counts:?}");
+    assert!(counts.contains(&"a") && counts.contains(&format!("added{}", ADDED - 1).as_str()), "{counts:?}");
+    assert_eq!(s.outputs.gone_reconnect_counts(), ADDED + 1 - listed.len());
     drop(a_conn);
     s.stop_output(OutputKind::Streaming);
 }

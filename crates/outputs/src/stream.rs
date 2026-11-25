@@ -95,6 +95,9 @@ pub mod ingests;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
+/// The most destinations a stream lists, and the most of those that gave their place to added
+/// ones whose counts it keeps by id.
+pub const MAX_DESTINATIONS: usize = MAX_SUBSCRIBERS;
 /// The most a wait before a try again is cut by, in percent, so destinations that lost their
 /// connections together do not all try again at the same moment.
 pub const JITTER_PERCENT: u64 = 20;

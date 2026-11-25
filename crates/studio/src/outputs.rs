@@ -428,16 +428,33 @@ impl Outputs {
         &self.stream_prints
     }
 
-    /// The ids of the keys, servers, names and fingerprints recorded for the stream's
-    /// destinations.
+    /// The ids of the keys, servers, names, fingerprints, reconnect counts and loss notices
+    /// recorded for the stream's destinations.
     #[cfg(test)]
-    pub(crate) fn stream_record_ids(&self) -> [Vec<&str>; 4] {
+    pub(crate) fn stream_record_ids(&self) -> [Vec<&str>; 6] {
         [
             self.stream_keys.keys().map(String::as_str).collect(),
             self.stream_servers.keys().map(String::as_str).collect(),
             self.stream_names.keys().map(String::as_str).collect(),
             self.stream_prints.keys().map(String::as_str).collect(),
+            self.reconnects.ids().0,
+            self.reconnect_notices.ids(),
         ]
+    }
+
+    /// How many reconnect counts of destinations that left the stream's list are kept.
+    #[cfg(test)]
+    pub(crate) fn gone_reconnect_counts(&self) -> usize {
+        self.reconnects.ids().1
+    }
+
+    /// Record a reconnect and a loss notice for the running stream's destination `id`.
+    #[cfg(test)]
+    pub(crate) fn note_reconnect(&mut self, id: &str) {
+        let stream = self.active.get(&OutputKind::Streaming).map(|a| a.id);
+        self.reconnects.record(stream, id, 1);
+        self.reconnect_notices.follow(stream);
+        self.reconnect_notices.lost(id, Tick(0));
     }
 
     /// The running stream's status; `None` while no stream runs.
@@ -1517,7 +1534,13 @@ impl Studio {
             let (source, server, name, print) = (d.key.clone(), d.server.clone(), d.name.trim().to_string(), crate::golive::print(&d.server, key));
             // One that is sending keeps its server and key, and its record. One asked to stop that
             // has not stopped yet still shows as sending, and takes the profile's setup.
-            if !a.instance.start_destination_as(&setup)? {
+            let ids = |a: &Active| a.instance.destinations().into_iter().map(|d| d.id).collect::<Vec<String>>();
+            let before = ids(a);
+            let started = a.instance.start_destination_as(&setup);
+            // The one it added and the one it replaced, also when the start then failed.
+            let listed = ids(a);
+            self.outputs.reconnects.relist(&before, &listed);
+            if !started? {
                 return Ok(());
             }
             // It took the profile's setup now, and is recorded as it started.
@@ -1526,15 +1549,15 @@ impl Studio {
             self.outputs.stream_names.insert(id.to_string(), name);
             self.outputs.stream_prints.insert(id.to_string(), print);
             // A destination added to a full stream takes the place of one that ended. The records
-            // of the destinations the stream no longer lists and the profile does not have are
-            // dropped.
-            let listed: Vec<String> = a.instance.destinations().into_iter().map(|d| d.id).collect();
+            // and loss notices of the destinations the stream no longer lists and the profile does
+            // not have are dropped.
             let profile = &self.profile.stream.destinations;
             let keep = |id: &String| listed.contains(id) || profile.iter().any(|d| &d.id == id);
             self.outputs.stream_keys.retain(|id, _| keep(id));
             self.outputs.stream_servers.retain(|id, _| keep(id));
             self.outputs.stream_names.retain(|id, _| keep(id));
             self.outputs.stream_prints.retain(|id, _| keep(id));
+            self.outputs.reconnect_notices.retain(keep);
             return Ok(());
         }
         // A held key is looked up again, so one held after the stream started is used. Where a
