@@ -151,6 +151,36 @@ The camera source behaves as follows:
 | Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
+A camera with a built-in microphone shows up as a camera and, separately, as an audio input. In
+the Sources dock or the preview, a camera source's context menu has **Add the Camera's
+Microphone**, which adds that input to the scene being edited as an audio input capture source
+named after the input. The name keeps the input's first 240 characters, without control
+characters. The input is found as follows:
+
+1. On Windows, the input in the same device container as the camera. Built-in devices, which all
+   share the computer's container, are matched by name instead.
+2. On Linux, the PipeWire input whose node name carries the camera's USB serial, as listed in
+   `/dev/v4l/by-id`.
+3. Otherwise, the input whose name is the camera's name, or else the one input whose name holds
+   the camera's name, for example "Microphone (HD Webcam)" for a camera named "HD Webcam". When
+   two inputs match equally well, none is chosen.
+
+When the camera's device has several inputs on Windows or Linux, for example a microphone and a
+line input, the one whose name says it is a microphone is chosen, and after that the one whose
+name matches the camera's name best. When two of them are equally good, none is chosen.
+
+On Windows, an input that shares its name with another input is matched by name only.
+
+The search runs in the background, and the window keeps working while it does. The microphone
+goes into the scene that was being edited when the search started. When the camera source is
+removed, taken out of that scene or set to another camera before the search ends, or another
+scene collection is loaded, nothing is added. When an audio
+input capture source already records that input, it is placed in the scene instead of a second
+one. A source set to the default device counts as recording the input while that input is the
+system's default. When that source is already in the scene, or is a global audio source that every scene
+records ([Audio](#audio)), nothing is added and the status bar says so. When no input matches, or the camera is not plugged
+in, the status bar reports that no microphone was found.
+
 [docs/architecture.md](architecture.md#camera-capture) describes how the capture thread opens,
 reads and reopens a camera.
 

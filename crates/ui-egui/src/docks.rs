@@ -315,7 +315,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
                 }
                 r.context_menu(|ui| {
                     acts.push(Act::Select(Some(it.id)));
-                    item_menu(ui, it.id, src.id, &src.name, st.renaming, acts);
+                    item_menu(ui, it.id, src.id, &src.name, src.kind == crate::camera_mic::CAMERA, st.renaming, acts);
                 });
             });
         }
@@ -323,8 +323,17 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
     drawn
 }
 
-/// The context menu of a scene item (Sources dock and preview).
-pub fn item_menu(ui: &mut Ui, item: ItemId, source: SourceId, name: &str, renaming: &mut Option<(Rename, String)>, acts: &mut Vec<Act>) {
+/// The context menu of a scene item (Sources dock and preview). A camera source's menu can add
+/// the camera's own microphone.
+pub fn item_menu(
+    ui: &mut Ui,
+    item: ItemId,
+    source: SourceId,
+    name: &str,
+    camera: bool,
+    renaming: &mut Option<(Rename, String)>,
+    acts: &mut Vec<Act>,
+) {
     if ui.button(tl!("Rename")).clicked() {
         *renaming = Some((Rename::Source(source), name.to_string()));
         ui.close();
@@ -335,6 +344,10 @@ pub fn item_menu(ui: &mut Ui, item: ItemId, source: SourceId, name: &str, renami
     }
     if ui.button(tid!("selection.filters", "Filters…")).clicked() {
         acts.push(Act::Filters(source));
+        ui.close();
+    }
+    if camera && ui.button(tl!("Add the Camera's Microphone")).clicked() {
+        acts.push(Act::AddCameraMicrophone(source));
         ui.close();
     }
     ui.menu_button(tlc!("menu", "Transform"), |ui| {
