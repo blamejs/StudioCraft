@@ -543,7 +543,11 @@ tried (at most four) with its own outcome. A lookup with no answer within 10 s s
 did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
-Stop send to one destination or stop sending to it while the others go on. A destination added
+Stop send to one destination or stop sending to it while the others go on. A destination that
+waits to try again shows its try number out of the tries it has, such as "try 3 of 10", and when
+the next try starts, as a countdown in seconds, or "when a network route to the server returns" for
+a server given as an IP address that has no route. Try Now starts that try at once, without a route
+too; unlike Stop and Start, the try counts toward the tries. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
 Check Connection, under each destination of the Streaming window, checks what this computer's
@@ -641,10 +645,11 @@ The copy reads the stream's packets from a buffer of its own that holds up to 4 
 encoders and destinations do not wait for it. When the disk falls further behind than that, the
 copy leaves out packets up to the next keyframe and counts them. A file that cannot be made or
 written stops the copy, keeps what was written, and shows a notice once, and the stream goes on.
-When the stream stops, StudioCraft writes what the buffer holds and finishes the file, for up to 20
-seconds; after that the file plays up to the last part written. A notice names the file when it is
-finished, with the packets left out when there were any. A stream with a copy can have at most 63
-destinations.
+When another file that holds data has taken the copy's name before the copy starts writing, the
+copy does not write to it and stops in the same way. When the stream stops, StudioCraft writes
+what the buffer holds and finishes the file, for up to 20 seconds; after that the file plays up to
+the last part written. A notice names the file when it is finished, with the packets left out when
+there were any. A stream with a copy can have at most 63 destinations.
 
 The copy needs a keyframe at least every 2 seconds, as a recording does. With a longer Keyframe
 interval in Settings › Stream, the stream starts without the copy and a notice says why.

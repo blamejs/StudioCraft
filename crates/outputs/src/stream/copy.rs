@@ -13,13 +13,14 @@
 //!   destinations and the other subscribers never wait for the copy. When the disk falls behind
 //!   before the copy gets its first packet, the file starts at a later keyframe, and
 //!   [`StreamCopyState::start_ns`] says how much of the stream comes before the file's start.
-//! - A file that cannot be created or written stops the copy and keeps what was written. The
-//!   stream goes on.
+//! - A file that cannot be created or written stops the copy and keeps what was written. A file
+//!   that already holds data when the copy opens it is not written to. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
 //!   waits up to its limit for that, then leaves the file as it is; it plays up to its last whole
-//!   cluster.
+//!   cluster. The copy then counts as not finished, even when a write that was waiting finishes
+//!   the file later.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -52,11 +53,15 @@ fn lost(s: &Stats) -> u64 {
     s.dropped_packets.saturating_add(s.skipped_packets).saturating_add(s.discarded_packets)
 }
 
-/// A new file at `path`, written through a 1 MiB buffer.
+/// The file at `path`, written through a 1 MiB buffer: the empty file reserved for the copy, or a
+/// new one when none is there. A file that already holds data is left as it is, and the copy fails.
 pub(crate) fn create(path: &Path) -> Open {
     let path = path.to_path_buf();
     Box::new(move || {
-        let file = File::create(&path)?;
+        let file = OpenOptions::new().write(true).create(true).truncate(false).open(&path)?;
+        if file.metadata()?.len() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already holds data", path.display())));
+        }
         Ok(Box::new(BufWriter::with_capacity(1 << 20, file)) as Box<dyn CopyFile>)
     })
 }
@@ -64,7 +69,7 @@ pub(crate) fn create(path: &Path) -> Open {
 /// What the copy's thread and the stream share.
 #[derive(Default)]
 struct Shared {
-    /// Bytes in the file.
+    /// Bytes written, counting those still in the file's buffer.
     stats: Arc<EncoderStats>,
     /// [`StreamCopyState::start_ns`], once the copy got its first packet.
     start_ns: AtomicU64,
@@ -145,8 +150,12 @@ impl StreamCopy {
             let _ = t.join();
             return;
         }
+        // Under the failure's lock, so the copy is either finished or reported as not finished.
+        let mut failure = lock(&self.shared.failure);
         self.shared.abandon.store(true, Ordering::SeqCst);
-        self.shared.fail(format!("the copy was not finished in {} seconds; it plays up to the last part written", wait.as_secs()));
+        if !self.shared.finished.load(Ordering::SeqCst) && failure.is_none() {
+            *failure = Some(format!("the copy was not finished in {} seconds; it plays up to the last part written", wait.as_secs()));
+        }
     }
 }
 
@@ -165,6 +174,10 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Ok(f) => f,
         Err(e) => return shared.fail(could_not(&e)),
     };
+    if shared.abandon.load(Ordering::SeqCst) {
+        // The stop gave up on the copy while the file was opening: nothing is written to it.
+        return;
+    }
     let opts = MuxOptions { writing_app: writing_app(), ..MuxOptions::default() };
     let mut mux = match MkvWriter::new(Counted::new(file, Arc::clone(&shared.stats)), tracks, opts) {
         Ok(m) => m,
@@ -203,7 +216,13 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Err(e) => return shared.fail(not_finished(&e)),
     };
     match w.flush() {
-        Ok(()) => shared.finished.store(true, Ordering::SeqCst),
+        Ok(()) => {
+            // A stop that gave up on the copy has reported it as not finished, and it stays so.
+            let _decided = lock(&shared.failure);
+            if !shared.abandon.load(Ordering::SeqCst) {
+                shared.finished.store(true, Ordering::SeqCst);
+            }
+        }
         Err(e) => shared.fail(not_finished(&e)),
     }
 }
