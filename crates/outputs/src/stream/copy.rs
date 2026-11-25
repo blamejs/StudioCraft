@@ -13,6 +13,8 @@
 //!   destinations and the other subscribers never wait for the copy. When the disk falls behind
 //!   before the copy gets its first packet, the file starts at a later keyframe, and
 //!   [`StreamCopyState::start_ns`] says how much of the stream comes before the file's start.
+//!   When it falls behind near the stream's end, the file ends before the stream's last frame,
+//!   and [`StreamCopyState::last_video_ns`] says where.
 //! - A file that cannot be created or written stops the copy and keeps what was written. A file
 //!   that already holds data when the copy opens it is not written to. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
@@ -73,6 +75,8 @@ struct Shared {
     stats: Arc<EncoderStats>,
     /// [`StreamCopyState::start_ns`], once the copy got its first packet.
     start_ns: AtomicU64,
+    /// [`StreamCopyState::last_video_ns`] plus 1, or 0 before the file holds a video frame.
+    last_video: AtomicU64,
     finished: AtomicBool,
     /// Leave the file as it is: the thread ends without finishing it.
     abandon: AtomicBool,
@@ -133,6 +137,7 @@ impl StreamCopy {
             bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
             lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
             start_ns: self.shared.start_ns.load(Ordering::SeqCst),
+            last_video_ns: self.shared.last_video.load(Ordering::SeqCst).checked_sub(1),
             finished: self.shared.finished.load(Ordering::SeqCst),
             failure: lock(&self.shared.failure).clone(),
         }
@@ -208,6 +213,10 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         let pts = packet.pts().saturating_sub(zero).max(0);
         if let Err(e) = mux.write_frame(track as usize, pts, keyframe, packet.data(), None) {
             return shared.fail(could_not(&e));
+        }
+        if track == Track::Video {
+            let at = u64::try_from(packet.pts()).unwrap_or(0).saturating_add(1);
+            shared.last_video.fetch_max(at, Ordering::SeqCst);
         }
     }
     let not_finished = |e: &dyn std::fmt::Display| format!("the copy of the stream at {shown} could not be finished: {e}");

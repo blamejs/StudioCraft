@@ -1919,6 +1919,8 @@ fn the_copy_holds_the_pictures_and_sound_the_destination_got() {
     let mut shown: Vec<i64> = video.iter().map(|v| v.0).collect();
     shown.sort_unstable();
     assert!(shown[0] >= 0 && shown.windows(2).all(|w| w[1] - w[0] == 100_000_000), "one picture every 100 ms: {shown:?}");
+    // The file starts at the stream's first frame, so its times are the stream's.
+    assert_eq!(state.last_video_ns, shown.last().and_then(|&t| u64::try_from(t).ok()), "the copy knows its last picture");
     assert_eq!(decode(&tracks[0].codec_private, &video).len(), video.len(), "every picture decodes");
     // The sound is the destination's, at the same times (the file keeps milliseconds).
     let ms: Vec<i64> = audio.iter().map(|a| a.0.div_euclid(NS_PER_MS)).collect();

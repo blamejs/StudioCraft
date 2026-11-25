@@ -343,7 +343,9 @@ the stream's encoder was handed, a marker past the clip's end goes on its last f
 skipped while the computer was suspended is left out, and a file of that name is not replaced. When
 the disk fell behind before the copy got the stream's first packets, its file starts at a later
 keyframe: the timeline then leaves that opening out of the clip, places each marker in the file, and
-puts a marker from before the file's start on its first frame. A copy whose file could not be finished gets no timeline file, and a copy that fails while its stream
+puts a marker from before the file's start on its first frame. When the disk fell behind near the
+stream's end and the file lost the stream's last packets, the clip ends at the file's last picture.
+A copy whose file could not be finished gets no timeline file, and a copy that fails while its stream
 runs takes no more markers. When a recording and a stream's copy
 both run, each gets the marker, and when one of them does not keep it, the other still does.
 

@@ -302,11 +302,12 @@ pub(crate) struct Outputs {
     copy_path: Option<PathBuf>,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
-    /// The copies of streams that ended, each file, whether it was finished and its
-    /// [`StreamCopyState::start_ns`], oldest first, for [`Outputs::copy_ended`] and
-    /// [`Outputs::copy_start`]: the last [`MAX_UNFINISHED`], and every copy that ended since the
-    /// last poll began, however many there are, until the next poll.
-    ended_copies: Vec<(PathBuf, bool, u64)>,
+    /// The copies of streams that ended, each file, whether it was finished, its
+    /// [`StreamCopyState::start_ns`] and its [`StreamCopyState::last_video_ns`], oldest first,
+    /// for [`Outputs::copy_ended`], [`Outputs::copy_start`] and [`Outputs::copy_last_video`]: the
+    /// last [`MAX_UNFINISHED`], and every copy that ended since the last poll began, however many
+    /// there are, until the next poll.
+    ended_copies: Vec<(PathBuf, bool, u64, Option<u64>)>,
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
     streams: u64,
@@ -665,7 +666,7 @@ impl Outputs {
     /// Keep `state`, the copy of a stream that ended, among the ended copies, and as the last
     /// stream's copy when `latest`, that stream being the last one that started.
     fn note_copy_ended(&mut self, state: StreamCopyState, latest: bool) {
-        self.ended_copies.push((state.path.clone(), state.finished, state.start_ns));
+        self.ended_copies.push((state.path.clone(), state.finished, state.start_ns, state.last_video_ns));
         if latest {
             self.last_copy = Some(state);
         }
@@ -674,7 +675,13 @@ impl Outputs {
     /// [`StreamCopyState::start_ns`] of the copy of a stream at `path` that ended, the latest one
     /// with that file name; `None` when no such copy is known.
     pub(crate) fn copy_start(&self, path: &Path) -> Option<u64> {
-        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map(|(.., start)| *start)
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map(|(_, _, start, _)| *start)
+    }
+
+    /// [`StreamCopyState::last_video_ns`] of the copy of a stream at `path` that ended, the latest
+    /// one with that file name; `None` when no such copy is known or its file holds no video frame.
+    pub(crate) fn copy_last_video(&self, path: &Path) -> Option<u64> {
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).and_then(|(.., last)| *last)
     }
 
     /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
@@ -687,7 +694,7 @@ impl Outputs {
         if stopping || running {
             return None;
         }
-        Some(self.ended_copies.iter().rev().find(|(p, ..)| p == path).is_some_and(|(_, finished, _)| *finished))
+        Some(self.ended_copies.iter().rev().find(|(p, ..)| p == path).is_some_and(|(_, finished, ..)| *finished))
     }
 
     /// Why the running stream's copy stopped while the stream goes on, once [`Outputs::poll`] has
@@ -2627,7 +2634,7 @@ pub(crate) mod tests {
     }
 
     /// [`stream_with_copy`], with a stop that waits on `gate` when one is given.
-    fn stream_with_copy_gated(
+    pub(crate) fn stream_with_copy_gated(
         o: &mut Outputs,
         start: Tick,
         stats: Arc<EncoderStats>,
