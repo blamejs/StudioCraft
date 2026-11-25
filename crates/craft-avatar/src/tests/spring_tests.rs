@@ -244,6 +244,26 @@ fn chains_that_share_a_skipped_node_are_refused() {
 }
 
 #[test]
+fn a_chain_listed_before_the_chain_it_hangs_from_moves_after_it() {
+    // The chain from b to c starts where the chain from a to b ends, and is listed first.
+    let mut m = chain(0.0, 1.0, 1.0);
+    let joints = m.springs.springs[0].joints.clone();
+    let part = |j: &[SpringJoint]| Spring { name: "s".into(), joints: j.to_vec(), collider_groups: Vec::new() };
+    m.springs.springs = vec![part(&joints[1..]), part(&joints[..2])];
+    m.validate(&Limits::default()).unwrap();
+    let (sim, local) = run(&m, 1.0 / 60.0, 60.0);
+    let tails: Vec<Vec3> = sim.tails().collect();
+    let end = tip(&m, &local);
+    // The drawn end is where the simulation keeps the lower chain's tail.
+    assert!((end - tails[0]).length() < 1e-5, "drawn {end:?}, simulated {:?}", tails[0]);
+    // And both match one chain from a to c.
+    let one = chain(0.0, 1.0, 1.0);
+    let (_, whole) = run(&one, 1.0 / 60.0, 60.0);
+    let w = tip(&one, &whole);
+    assert!((end - w).length() < 1e-5, "split {end:?}, whole {w:?}");
+}
+
+#[test]
 fn a_part_too_long_to_measure_stays_still() {
     // Each coordinate is finite, but the part's length is past the largest f32.
     let mut m = chain(1.0, 1.0, 0.4);

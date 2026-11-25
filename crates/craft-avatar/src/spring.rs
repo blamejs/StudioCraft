@@ -95,6 +95,20 @@ fn is_ancestor(model: &Model, ancestor: usize, node: usize) -> bool {
     false
 }
 
+/// How many ancestors `node` has.
+fn depth(model: &Model, node: usize) -> usize {
+    let mut at = model.nodes.get(node).and_then(|n| n.parent);
+    let mut depth = 0;
+    while let Some(p) = at {
+        depth += 1;
+        if depth > model.nodes.len() {
+            break;
+        }
+        at = model.nodes.get(p).and_then(|n| n.parent);
+    }
+    depth
+}
+
 impl SpringBones {
     pub(crate) fn validate(&self, model: &Model, limits: &Limits) -> Result<(), AvatarError> {
         if self.springs.len() > limits.springs {
@@ -233,6 +247,9 @@ impl SpringSim {
             }
             chains.push((start, joints.len(), colliders));
         }
+        // The chains run from the shallowest first joint down, so a chain that hangs from
+        // another chain's nodes moves after that chain. `tails` keeps the model's order.
+        chains.sort_by_cached_key(|(start, _, _)| joints.get(*start).map_or(0, |j| depth(model, j.node)));
         SpringSim { joints, chains, pending: 0.0, path: Vec::with_capacity(model.nodes.len() + 1) }
     }
 
