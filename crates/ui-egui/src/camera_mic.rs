@@ -76,12 +76,12 @@ pub(crate) enum Then {
 const MAX_DEVICE_NAME: usize = 240;
 
 /// A source name from the device name `device`: without control characters, trimmed and cut to
-/// [`MAX_DEVICE_NAME`] characters, or "Microphone" when nothing is left.
+/// [`MAX_DEVICE_NAME`] characters, or "Microphone" in the interface language when nothing is left.
 fn source_name(device: &str) -> String {
     let clean: String = device.chars().filter(|c| !c.is_control()).collect();
     let cut: String = clean.trim().chars().take(MAX_DEVICE_NAME).collect();
     match cut.trim_end() {
-        "" => "Microphone".to_string(),
+        "" => tl!("Microphone").to_string(),
         name => name.to_string(),
     }
 }
@@ -194,6 +194,18 @@ mod tests {
         let Some(Then::Run(_, params)) = then(&c, &asked, Some(&mic("mic-1", &long))) else { panic!("a command") };
         let name = params["name"].as_str().unwrap();
         assert!(name.chars().count() <= 256 && name.ends_with(" 2"), "{name}");
+    }
+
+    #[test]
+    fn a_device_without_a_name_gets_the_fallback_in_the_interface_language() {
+        use craft_i18n::Lang;
+
+        use crate::i18n::set_lang;
+        set_lang(Lang::PSEUDO);
+        let name = source_name(" \t\u{0} ");
+        set_lang(Lang::EN);
+        assert_eq!(name, "\u{27e6}Microphone\u{27e7}");
+        assert_eq!(source_name(""), "Microphone");
     }
 
     #[test]

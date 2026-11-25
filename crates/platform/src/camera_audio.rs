@@ -128,10 +128,11 @@ fn node_serial(node: &str) -> Option<&str> {
 
 #[cfg(windows)]
 mod imp {
+    use std::sync::Arc;
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use crossbeam_queue::ArrayQueue;
     use windows::Devices::Enumeration::{DeviceClass, DeviceInformation, DeviceInformationUpdate, DeviceWatcher};
     use windows::Foundation::{IPropertyValue, TypedEventHandler};
     use windows::core::{HSTRING, IInspectable, Interface};
@@ -162,13 +163,14 @@ mod imp {
     }
 
     /// The devices of `class` with their container ids, read by a device watcher until it has
-    /// listed them all. Empty when they cannot be listed.
+    /// listed them all. The watcher's callback sends each device through a bounded lock-free queue,
+    /// and this thread takes them out once the listing is complete. Empty when they cannot be listed.
     fn listed(class: DeviceClass) -> Vec<Listed> {
         let Ok(_com) = comedy::com::ComApartmentScope::init_mta() else { return Vec::new() };
         let Ok(filter) = DeviceInformation::GetAqsFilterFromDeviceClass(class) else { return Vec::new() };
         let wanted = IIterable::<HSTRING>::from(vec![HSTRING::from(CONTAINER_ID)]);
         let Ok(watcher) = DeviceInformation::CreateWatcherAqsFilterAndAdditionalProperties(&filter, &wanted) else { return Vec::new() };
-        let found = Arc::new(Mutex::new(Vec::new()));
+        let found = Arc::new(ArrayQueue::<Listed>::new(MAX_DEVICES));
         // True once every device was listed, false when the watcher stopped before that.
         let (done, finished) = mpsc::sync_channel::<bool>(1);
         let ended = done.clone();
@@ -177,13 +179,14 @@ mod imp {
         // updated events.
         let handlers = watcher
             .Added(&TypedEventHandler::<DeviceWatcher, DeviceInformation>::new(move |_, info| {
-                if let Ok(info) = info.ok()
-                    && let Ok(mut list) = into.lock()
-                    && list.len() < MAX_DEVICES
+                // A device past the queue's bound is not read; the search compares at most
+                // MAX_DEVICES of them.
+                if !into.is_full()
+                    && let Ok(info) = info.ok()
                 {
                     let id = info.Id().map(|s| s.to_string()).unwrap_or_default();
                     let name = info.Name().map(|s| s.to_string()).unwrap_or_default();
-                    list.push((id, name, container(info)));
+                    let _ = into.push((id, name, container(info)));
                 }
                 Ok(())
             }))
@@ -209,7 +212,7 @@ mod imp {
         if !complete {
             return Vec::new();
         }
-        found.lock().map(|l| l.clone()).unwrap_or_default()
+        super::drained(&found)
     }
 
     /// The container id of `camera`, whose id is its device link.
@@ -222,6 +225,12 @@ mod imp {
         let listed: Vec<(String, Option<String>)> = listed(DeviceClass::AudioCapture).into_iter().map(|(_, name, c)| (name, c)).collect();
         inputs.iter().map(|d| super::container_by_name(&listed, &d.name)).collect()
     }
+}
+
+/// Everything `queue` holds, taken out in the order it was pushed.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drained<T>(queue: &crossbeam_queue::ArrayQueue<T>) -> Vec<T> {
+    std::iter::from_fn(|| queue.pop()).take(queue.capacity()).collect()
 }
 
 /// The container id of the one device named `name` in `listed` (names with container ids). A
@@ -363,6 +372,19 @@ mod tests {
         let mut inputs: Vec<Input> = (0..MAX_DEVICES).map(|n| input(&format!("Mic {n}"), None)).collect();
         inputs.push(input("HD Webcam", Some("cam")));
         assert_eq!(microphone_index("HD Webcam", Some("cam"), &inputs), None);
+    }
+
+    #[test]
+    fn devices_sent_from_another_thread_arrive_in_order_up_to_the_limit() {
+        let queue = std::sync::Arc::new(crossbeam_queue::ArrayQueue::new(MAX_DEVICES));
+        let sender = std::sync::Arc::clone(&queue);
+        // The device watcher's callback runs on a thread of the system's; one past the limit is
+        // not taken.
+        let refused = std::thread::spawn(move || (0..=MAX_DEVICES).filter(|&n| sender.push(n).is_err()).count()).join().unwrap();
+        assert_eq!(refused, 1);
+        assert_eq!(drained(&queue), (0..MAX_DEVICES).collect::<Vec<_>>());
+        assert!(queue.is_empty());
+        assert_eq!(drained(&queue), Vec::<usize>::new());
     }
 
     #[test]
