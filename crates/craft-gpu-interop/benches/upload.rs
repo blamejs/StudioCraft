@@ -2,7 +2,7 @@
 //! CPU memory, as a CPU capture is uploaded, and through the opaque copy from a texture already on
 //! the GPU, as a shared capture is drawn. The same two cases run for a 1280 × 720 and a
 //! 2560 × 1440 window picture (`window 720p`, `window 1440p`), the sizes a window capture often
-//! has. Each iteration waits until the GPU has finished. On Windows each case runs on a Direct3D
+//! has, with the GPU copy keeping the picture's alpha (`alpha GPU copy`). Each iteration waits until the GPU has finished. On Windows each case runs on a Direct3D
 //! 12 and on a Vulkan device, the two backends a shared capture is opened on, with the backend at
 //! the end of its name. On a machine without a graphics adapter nothing runs.
 //!
@@ -107,8 +107,8 @@ fn bench_dmabuf(c: &mut Criterion) {
 fn bench_on(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, suffix: &str) {
     let mut opaque = Opaque::new(device);
     // The program frames an encoder takes are the canvas's size, so only the display sizes have
-    // the NV12 cases.
-    for (size, w, h, encode) in
+    // the NV12 cases. A window's picture is drawn keeping its alpha, as a window capture draws it.
+    for (size, w, h, display) in
         [("1080p", 1920u32, 1080u32, true), ("4k", 3840, 2160, true), ("window 720p", 1280, 720, false), ("window 1440p", 2560, 1440, false)]
     {
         let label = format!("{size}{suffix}");
@@ -128,15 +128,20 @@ fn bench_on(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, suffi
         });
         let bind = opaque.bind(device, &src.create_view(&wgpu::TextureViewDescriptor::default()));
         let target = dst.create_view(&wgpu::TextureViewDescriptor::default());
-        c.bench_function(&format!("opaque GPU copy {label}"), |b| {
+        let name = if display { "opaque GPU copy" } else { "alpha GPU copy" };
+        c.bench_function(&format!("{name} {label}"), |b| {
             b.iter(|| {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                opaque.draw(device, &mut enc, &bind, &target, wgpu::TextureFormat::Bgra8Unorm);
+                if display {
+                    opaque.draw(device, &mut enc, &bind, &target, wgpu::TextureFormat::Bgra8Unorm);
+                } else {
+                    opaque.draw_keeping_alpha(device, &mut enc, &bind, &target, wgpu::TextureFormat::Bgra8Unorm);
+                }
                 queue.submit([enc.finish()]);
                 let _ = device.poll(wgpu::PollType::wait_indefinitely());
             })
         });
-        if encode {
+        if display {
             bench_encode(c, device, queue, &label, w, h);
         }
     }
@@ -158,11 +163,13 @@ fn plane(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> 
 /// A `w × h` NV12 frame to an encoder: read back through memory, and copied into an export ring.
 fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, label: &str, w: u32, h: u32) {
     let planes = [plane(device, wgpu::TextureFormat::R8Unorm, w, h), plane(device, wgpu::TextureFormat::Rg8Unorm, w / 2, h / 2)];
-    // Rows of 1920 and 3840 bytes are multiples of 256, as a texture-to-buffer copy needs.
-    let luma = u64::from(w) * u64::from(h);
+    // Both planes have rows of `w` bytes. A texture-to-buffer copy needs each row in the buffer to
+    // start on a multiple of 256 bytes, so a 1920-byte row is padded to 2048.
+    let stride = w.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let luma = u64::from(stride) * u64::from(h);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: luma + luma / 2,
+        size: luma + u64::from(stride) * u64::from(h / 2),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -171,7 +178,7 @@ fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, l
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(w), rows_per_image: Some(rows) },
+                layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(stride), rows_per_image: Some(rows) },
             },
             texture.size(),
         );

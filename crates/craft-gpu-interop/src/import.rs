@@ -271,7 +271,15 @@ impl Importer {
         }
         let Some(opened) = &mut self.opened else { return Ok(Drawn::Idle) };
         let done = self.handoff.pending().map_or(0, |f| completed(opened, f));
-        let Some(frame) = self.handoff.take_ready(done) else { return Ok(Drawn::Waiting) };
+        // A frame whose texture the capture side took back is dropped, and the next one is tried.
+        let frame = loop {
+            match self.handoff.take_ready(done) {
+                Some(frame) if frame.start_reading() => break frame,
+                Some(_) => {}
+                None if self.handoff.pending().is_some() => return Ok(Drawn::Waiting),
+                None => return Ok(Drawn::Idle),
+            }
+        };
         let Some(opaque) = &mut self.opaque else { return Ok(Drawn::Idle) };
         if let Err(reason) = prepare(opened, device, &ring, opaque, frame.slot()) {
             ring.refuse(reason);
