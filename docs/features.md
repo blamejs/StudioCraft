@@ -633,8 +633,8 @@ copy leaves out packets up to the next keyframe and counts them. A file that can
 written stops the copy, keeps what was written, and shows a notice once, and the stream goes on.
 When another file that holds data has taken the copy's name before the copy starts writing, the
 copy does not write to it and stops in the same way. When the stream stops, StudioCraft writes
-what the buffer holds and finishes the file, for up to 20 seconds; after that the file plays up to
-the last part written. A notice names the file when it is finished, with the packets left out when
+what the buffer holds and finishes the file, for up to 20 seconds. After that the copy stays
+unfinished, and the file may not play. A file that opens after those 20 seconds receives no data. A notice names the file when it is finished, with the packets left out when
 there were any. A stream with a copy can have at most 63 destinations.
 
 The copy needs a keyframe at least every 2 seconds, as a recording does. With a longer Keyframe
