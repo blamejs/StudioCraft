@@ -1,18 +1,19 @@
 # craft-gpu-interop
 
-craft-gpu-interop hands captured display pictures from the capture side to a wgpu compositor
-without copying them through CPU memory. On Windows it captures a display with DXGI desktop
-duplication into Direct3D 11 textures that are shared through NT handles, and opens those textures
-and two shared fences on a wgpu Direct3D 12 or Vulkan device. Without the `wgpu` feature the crate
+craft-gpu-interop hands captured display and window pictures from the capture side to a wgpu
+compositor without copying them through CPU memory. On Windows it captures a display with DXGI
+desktop duplication, or a window with Windows.Graphics.Capture, into Direct3D 11 textures that are
+shared through NT handles, and opens those textures and two shared fences on a wgpu Direct3D 12 or
+Vulkan device. Without the `wgpu` feature the crate
 builds for every target, WebAssembly included, and holds the types both sides exchange.
 
 It also hands the compositor's NV12 program frames to a hardware encoder in the other direction:
 an export ring of shared NV12 textures and two fences on a Direct3D 11 device of the compositor's
 adapter, written by the compositor's wgpu Direct3D 12 or Vulkan device and read by the encoder.
 
-Only the private `dxgi_ffi` (capture side), `d3d12_ffi` and `vulkan_ffi` (compositor side) modules
-contain `unsafe` code. They call Direct3D through the `windows` crate's bindings, Vulkan through
-`ash`, and wgpu through `wgpu::hal`.
+Only the private `dxgi_ffi` and `wgc_ffi` (capture side), `d3d12_ffi` and `vulkan_ffi`
+(compositor side) modules contain `unsafe` code. They call Direct3D and Windows.Graphics.Capture
+through the `windows` crate's bindings, Vulkan through `ash`, and wgpu through `wgpu::hal`.
 
 ## Contents
 
@@ -20,13 +21,15 @@ contain `unsafe` code. They call Direct3D through the `windows` crate's bindings
 |---|---|
 | `Duplication::open(device_name)` | It opens desktop duplication of the output with that GDI device name (`\\.\DISPLAY1`) and a ring of `SLOTS` (3) shared BGRA textures. Elsewhere than Windows it returns `CaptureError::Fallback(Fallback::Unsupported)`. |
 | `Duplication::grab()` | It returns at once: `Grab::Frame` with a new picture, or `Grab::Unchanged`. `CaptureError::Lost` means the desktop changed mode or was switched and the duplication must be opened again; `CaptureError::Fallback` means the pictures must go through CPU memory. |
+| `WindowCapture::open(window, display)` | It opens Windows.Graphics.Capture of the window with that handle (its `HWND` as a number) on a Direct3D 11 device of the adapter that drives the display with that GDI device name, the display the window is on, and a ring of `SLOTS` shared BGRA textures of the window's size. An older Windows without window capture into textures returns `Fallback::Unsupported`, a window the system does not let be captured that way returns `Fallback::Refused`, and a window that closed before the call returns `CaptureError::Lost`. Elsewhere than Windows it returns `Fallback::Unsupported`. |
+| `WindowCapture::grab()` | It returns at once: `Grab::Frame` with a new picture, or `Grab::Unchanged`. When the window's size changes, the capture makes the system's buffers that size and returns `Grab::Unchanged`, and the next picture goes into a new ring of the new size (`ring`). A minimized window gives `Grab::Unchanged`. `CaptureError::Lost` means the window was closed; `CaptureError::Fallback` means the pictures must go through CPU memory. |
 | `SharedRing` | It holds one capture's shared handles, its size, the adapter that owns the textures, and the reason the compositor gave for refusing them (`fallback`, `refuse`). `SharedRing::detached` makes a ring without textures for tests. |
 | `SharedFrame` | It names one texture of a ring and the ready fence value at which the copy into it is done. |
 | `SlotTable` | It is the capture side's record of which textures the compositor still reads. `pick_released` picks only a texture the reader has released, without the `RECLAIM` time limit, as an export ring needs. |
 | `Handoff` | It is the compositor side's frame waiting for its copy to finish. |
 | `check_import(backend, capture, compositor)` | It returns the `Fallback` when the compositor's device cannot open the ring: a backend other than Direct3D 12 and Vulkan, another adapter, or a Vulkan device without `VK_KHR_external_memory_win32`. |
 | `Importer` (`wgpu` feature) | It opens a ring on the compositor's device, takes the waiting frame once its copy is done, draws it into the caller's texture and signals the released fence. `Importer::poll` hands back finished textures on a frame without a draw. |
-| `Opaque` (`wgpu` feature) | It copies one texture into another of the same size with alpha set to 1. |
+| `Opaque` (`wgpu` feature) | It copies one texture into another of the same size with alpha set to 1 (`draw`), or with each texel's alpha kept and its premultiplied color made straight (`draw_keeping_alpha`). |
 | `ExportRing::open(adapter, width, height)` | It makes `SLOTS` (3) shared NV12 textures and two shared fences on a Direct3D 11 device of that adapter, the device an encoder opens its session on (`device`, `texture`). Both sides must be even and not zero (`Fallback::ImportFailed`); elsewhere than Windows it returns `Fallback::Unsupported`. `ExportRing::detached` makes a ring without textures for tests. |
 | `ExportFrame` | It names one texture of an export ring and the ready fence value at which the copy into it is done. |
 | `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished, `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
@@ -94,9 +97,18 @@ exported. One encoder session reads each export ring.
   records `Fallback::NoEncoder` on the ring, and `Exporter::copy` then returns it. The caller reads
   the frames back through CPU memory instead. `ExportRing::release` also records
   `Fallback::NoEncoder` when the released fence's signal cannot be queued.
-- The desktop's alpha channel is not reliable, so `Importer` draws the picture with alpha 1.
+- The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
+  alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
+  its color, which the system delivers multiplied by alpha, is divided by alpha.
 - Pointer-only desktop updates are not passed on as new pictures.
-- Window capture is not covered.
+- `WindowCapture` needs `GraphicsCaptureSession::IsSupported` and a free-threaded frame pool
+  (`Direct3D11CaptureFramePool::CreateFreeThreaded`); a system without them gives
+  `Fallback::Unsupported`. The pointer is not drawn into the window's picture, and the border the
+  system can draw around a captured window is turned off where the system allows it. A picture
+  taken while the window's size differs from the frame pool's buffers is dropped, and a window
+  wider or taller than 16,384 pixels gives `CaptureError::Failed`.
+- The window capture's Direct3D 11 device runs with multithread protection on, since the system
+  writes the frame pool's buffers from its own thread.
 
 ## License
 

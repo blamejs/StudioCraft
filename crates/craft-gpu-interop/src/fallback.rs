@@ -11,8 +11,8 @@ pub enum Fallback {
     OtherAdapter,
     /// Opening the shared textures or fences on the compositor's device failed.
     ImportFailed,
-    /// The system has no desktop duplication or no shared fences (Windows before 10 version 1703,
-    /// or another system).
+    /// The system has no desktop duplication, no window capture into textures or no shared fences
+    /// (an older Windows, or another system).
     Unsupported,
     /// The desktop is not in 8-bit BGRA (an HDR desktop).
     Format,
@@ -24,10 +24,13 @@ pub enum Fallback {
     /// The hardware encoder cannot open a session on the compositor's graphics adapter, so the
     /// program frames it encodes go through CPU memory.
     NoEncoder,
+    /// The system does not let this window be captured into textures (a window the capture API
+    /// does not accept, or a capture the system or the person refused).
+    Refused,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 8] = [
+    pub(crate) const ALL: [Fallback; 9] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -36,6 +39,7 @@ impl Fallback {
         Fallback::Rotated,
         Fallback::MissingExtension,
         Fallback::NoEncoder,
+        Fallback::Refused,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -48,6 +52,7 @@ impl Fallback {
             Fallback::Rotated => 6,
             Fallback::MissingExtension => 7,
             Fallback::NoEncoder => 8,
+            Fallback::Refused => 9,
         }
     }
 
@@ -67,6 +72,7 @@ impl std::fmt::Display for Fallback {
             Fallback::Rotated => "the display is rotated",
             Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
+            Fallback::Refused => "the system does not let this window be captured into textures",
         })
     }
 }

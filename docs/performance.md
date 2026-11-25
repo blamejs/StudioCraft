@@ -88,7 +88,7 @@ read-back. The bench also times `cpu nv12 1080p`, a reference conversion on the 
 without a graphics adapter only the CPU case runs. This page records no baseline for these
 benches yet.
 
-### Shared display capture
+### Shared display and window capture
 
 `cargo bench -p craft-gpu-interop --features wgpu` times how a 1080p and a 4K BGRA picture reach
 a compositor's source texture: `write_texture upload`, from CPU memory as a CPU capture is
@@ -111,6 +111,20 @@ graphics hardware, and the shared path has not been measured on Windows hardware
 
 The `write_texture` rows do not include the capture's own read-back of the desktop into CPU
 memory, which the shared path also does without.
+
+The same two cases run for a window capture's picture at 1280 × 720 and 2560 × 1440
+(`write_texture upload window 720p`, `alpha GPU copy window 1440p`). The GPU copy of a window's
+picture keeps its alpha, as a window capture draws it. On Windows a Window capture source takes
+the shared path through Windows.Graphics.Capture, and the memory path reads the window into CPU
+memory first, which these rows also do not include. Measured on 2026-11-25 on the same llvmpipe
+adapter, with the same limits:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `write_texture upload window 720p` | 312 µs | 272 to 363 µs |
+| `alpha GPU copy window 720p` | 7.97 ms | 7.61 to 8.36 ms |
+| `write_texture upload window 1440p` | 2.94 ms | 2.78 to 3.12 ms |
+| `alpha GPU copy window 1440p` | 19.77 ms | 19.29 to 20.25 ms |
 
 The same bench times how a 1080p and a 4K NV12 frame (an R8 and an RG8 plane) reach an encoder:
 `NV12 read-back`, copied into a buffer that is then mapped, and `NV12 export ring copy`, copied

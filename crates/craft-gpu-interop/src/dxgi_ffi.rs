@@ -115,12 +115,14 @@ fn find(name: &str) -> Result<(IDXGIAdapter1, IDXGIOutput, windows::Win32::Graph
     Err(CaptureError::Failed(format!("no display named {name}")))
 }
 
-/// Open desktop duplication of the display named `name`, with a ring of textures of its size.
-pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
-    let (adapter, output, desc) = find(name)?;
-    if desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
-        return Err(CaptureError::Fallback(Fallback::Rotated));
-    }
+/// The graphics adapter that drives the display named `name`.
+pub(crate) fn adapter_of(name: &str) -> Result<IDXGIAdapter1, CaptureError> {
+    find(name).map(|(adapter, _, _)| adapter)
+}
+
+/// A Direct3D 11 device with BGRA support on `adapter`, its immediate context, and the adapter's
+/// identifier.
+pub(crate) fn bgra_device(adapter: &IDXGIAdapter1) -> Result<(ID3D11Device, ID3D11DeviceContext4, AdapterId), CaptureError> {
     // SAFETY: `adapter` is valid; `GetDesc1` returns its description by value.
     let luid = unsafe { adapter.GetDesc1() }.map_err(|e| failed("reading the graphics adapter", e))?.AdapterLuid;
     let mut device: Option<ID3D11Device> = None;
@@ -129,7 +131,7 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     // type of UNKNOWN is required when an adapter is given.
     unsafe {
         D3D11CreateDevice(
-            &adapter,
+            adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
             HMODULE::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -144,26 +146,22 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     let (Some(device), Some(context)) = (device, context) else {
         return Err(CaptureError::Failed("creating a Direct3D 11 device gave no device".into()));
     };
+    let context: ID3D11DeviceContext4 = context.cast().map_err(|_| CaptureError::Fallback(Fallback::Unsupported))?;
+    Ok((device, context, AdapterId::from_parts(luid.LowPart, luid.HighPart)))
+}
+
+/// The textures and fences of a ring of shared BGRA textures, on the device that made them.
+pub(crate) struct BgraRing {
+    pub(crate) textures: [ID3D11Texture2D; SLOTS],
+    pub(crate) ready: ID3D11Fence,
+    pub(crate) released: ID3D11Fence,
+}
+
+/// `SLOTS` BGRA textures of `width × height` and the ready and released fences on `device`, all
+/// shared through NT handles.
+pub(crate) fn bgra_ring(device: &ID3D11Device, width: u32, height: u32) -> Result<(BgraRing, Handles), CaptureError> {
     let unsupported = |_| CaptureError::Fallback(Fallback::Unsupported);
     let device5: ID3D11Device5 = device.cast().map_err(unsupported)?;
-    let context: ID3D11DeviceContext4 = context.cast().map_err(unsupported)?;
-    let output1: IDXGIOutput1 = output.cast().map_err(unsupported)?;
-    // SAFETY: `output1` and `device` are valid, and `device` is on the adapter that owns the output.
-    let duplication = unsafe { output1.DuplicateOutput(&device) }.map_err(|e| {
-        if e.code() == DXGI_ERROR_UNSUPPORTED { CaptureError::Fallback(Fallback::Unsupported) } else { failed("starting desktop duplication", e) }
-    })?;
-    // SAFETY: `duplication` is valid; `GetDesc` returns its description by value.
-    let dd = unsafe { duplication.GetDesc() };
-    if dd.ModeDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
-        return Err(CaptureError::Fallback(Fallback::Format));
-    }
-    if dd.Rotation != DXGI_MODE_ROTATION_IDENTITY && dd.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
-        return Err(CaptureError::Fallback(Fallback::Rotated));
-    }
-    let (width, height) = (dd.ModeDesc.Width, dd.ModeDesc.Height);
-    if width == 0 || height == 0 {
-        return Err(CaptureError::Lost("the display reports no size".into()));
-    }
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
@@ -207,19 +205,36 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     let (released, released_handle) = fence()?;
     handles.released = released_handle;
     let textures: [ID3D11Texture2D; SLOTS] = made.try_into().map_err(|_| CaptureError::Failed("the shared textures could not be created".into()))?;
-    let output = Output {
-        _device: device,
-        context,
-        duplication,
-        textures,
-        ready,
-        released,
-        held: None,
-        first: true,
-        width,
-        height,
-        adapter: AdapterId::from_parts(luid.LowPart, luid.HighPart),
-    };
+    Ok((BgraRing { textures, ready, released }, handles))
+}
+
+/// Open desktop duplication of the display named `name`, with a ring of textures of its size.
+pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
+    let (adapter, output, desc) = find(name)?;
+    if desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
+        return Err(CaptureError::Fallback(Fallback::Rotated));
+    }
+    let (device, context, adapter) = bgra_device(&adapter)?;
+    let unsupported = |_| CaptureError::Fallback(Fallback::Unsupported);
+    let output1: IDXGIOutput1 = output.cast().map_err(unsupported)?;
+    // SAFETY: `output1` and `device` are valid, and `device` is on the adapter that owns the output.
+    let duplication = unsafe { output1.DuplicateOutput(&device) }.map_err(|e| {
+        if e.code() == DXGI_ERROR_UNSUPPORTED { CaptureError::Fallback(Fallback::Unsupported) } else { failed("starting desktop duplication", e) }
+    })?;
+    // SAFETY: `duplication` is valid; `GetDesc` returns its description by value.
+    let dd = unsafe { duplication.GetDesc() };
+    if dd.ModeDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+        return Err(CaptureError::Fallback(Fallback::Format));
+    }
+    if dd.Rotation != DXGI_MODE_ROTATION_IDENTITY && dd.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
+        return Err(CaptureError::Fallback(Fallback::Rotated));
+    }
+    let (width, height) = (dd.ModeDesc.Width, dd.ModeDesc.Height);
+    if width == 0 || height == 0 {
+        return Err(CaptureError::Lost("the display reports no size".into()));
+    }
+    let (BgraRing { textures, ready, released }, handles) = bgra_ring(&device, width, height)?;
+    let output = Output { _device: device, context, duplication, textures, ready, released, held: None, first: true, width, height, adapter };
     Ok((output, handles))
 }
 
@@ -316,6 +331,8 @@ pub(crate) struct Nv12Ring {
     textures: [ID3D11Texture2D; SLOTS],
     ready: ID3D11Fence,
     released: ID3D11Fence,
+    /// Only the exporter (the `wgpu` feature) opens them.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
     pub(crate) handles: Handles,
 }
 

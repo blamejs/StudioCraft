@@ -3,8 +3,11 @@
 use crate::fallback::Fallback;
 use crate::ring::{Handoff, SharedFrame};
 
-/// The pass that copies a texture into another of the same size with alpha set to 1. The
-/// desktop's alpha channel is not reliable, so a captured display is drawn opaque.
+/// The pass that copies a texture into another of the same size with alpha set to 1 (`fs`), or
+/// with its alpha kept (`fs_alpha`). The desktop's alpha channel is not reliable, so a captured
+/// display is drawn opaque. A captured window keeps its alpha, as its copy through memory does;
+/// the system delivers its pixels with the color multiplied by alpha, and `fs_alpha` divides it
+/// out, since the compositor reads source textures with straight alpha.
 const SHADER: &str = r"
 @group(0) @binding(0) var src: texture_2d<f32>;
 
@@ -19,16 +22,27 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c = textureLoad(src, vec2<i32>(pos.xy), 0);
     return vec4<f32>(c.rgb, 1.0);
 }
+
+@fragment
+fn fs_alpha(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let c = textureLoad(src, vec2<i32>(pos.xy), 0);
+    if c.a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(min(c.rgb / c.a, vec3<f32>(1.0)), c.a);
+}
 ";
 
 /// An opaque copy between two textures of the same size: one full-screen triangle that reads
-/// each source texel and writes it with alpha 1. The pipeline for a target format is built on
-/// first use and kept.
+/// each source texel and writes it with alpha 1, or with its own alpha
+/// ([`Opaque::draw_keeping_alpha`]). The pipeline for a target format is built on first use and
+/// kept.
 pub struct Opaque {
     layout: wgpu::BindGroupLayout,
     module: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
-    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    /// The target format, whether alpha is kept, and the pipeline.
+    pipelines: Vec<(wgpu::TextureFormat, bool, wgpu::RenderPipeline)>,
 }
 
 impl Opaque {
@@ -56,8 +70,8 @@ impl Opaque {
         Opaque { layout, module, pipeline_layout, pipelines: Vec::new() }
     }
 
-    fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
-        let at = match self.pipelines.iter().position(|(f, _)| *f == format) {
+    fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, alpha: bool) -> &wgpu::RenderPipeline {
+        let at = match self.pipelines.iter().position(|(f, a, _)| *f == format && *a == alpha) {
             Some(at) => at,
             None => {
                 let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -74,18 +88,18 @@ impl Opaque {
                     multisample: wgpu::MultisampleState::default(),
                     fragment: Some(wgpu::FragmentState {
                         module: &self.module,
-                        entry_point: Some("fs"),
+                        entry_point: Some(if alpha { "fs_alpha" } else { "fs" }),
                         compilation_options: Default::default(),
                         targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                     }),
                     multiview_mask: None,
                     cache: None,
                 });
-                self.pipelines.push((format, pipeline));
+                self.pipelines.push((format, alpha, pipeline));
                 self.pipelines.len() - 1
             }
         };
-        &self.pipelines[at].1
+        &self.pipelines[at].2
     }
 
     /// A bind group that reads `source`.
@@ -98,7 +112,7 @@ impl Opaque {
     }
 
     /// Record the copy of the texture `source` reads into `target`, a render attachment of the
-    /// same size in `format`.
+    /// same size in `format`, with alpha set to 1.
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -107,7 +121,32 @@ impl Opaque {
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) {
-        let pipeline = self.pipeline(device, format);
+        self.record(device, encoder, source, target, format, false);
+    }
+
+    /// Record the copy as [`Opaque::draw`] does, with each texel's alpha kept and its color, which
+    /// `source` holds multiplied by alpha, divided by alpha. A texel with alpha 0 is written as 0.
+    pub fn draw_keeping_alpha(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::BindGroup,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) {
+        self.record(device, encoder, source, target, format, true);
+    }
+
+    fn record(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::BindGroup,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        alpha: bool,
+    ) {
+        let pipeline = self.pipeline(device, format, alpha);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("opaque copy"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -252,7 +291,11 @@ impl Importer {
         // that pass the texture between the two sides are command buffers of their own.
         let before = acquire(opened, device, frame.slot());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shared capture") });
-        opaque.draw(device, &mut encoder, bind, &target, format);
+        if ring.keeps_alpha() {
+            opaque.draw_keeping_alpha(device, &mut encoder, bind, &target, format);
+        } else {
+            opaque.draw(device, &mut encoder, bind, &target, format);
+        }
         let after = hand_back(opened, device, frame.slot());
         queue.submit(before.into_iter().chain([encoder.finish()]).chain(after));
         if let Err(reason) = release(opened, frame.ready()) {
