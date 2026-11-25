@@ -436,7 +436,7 @@ fn a_dropped_mixer_command_is_followed_by_a_whole_input_list() {
     let gain = out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"));
     s.mixer = Mixer::detached();
     while s.mixer.control_dropped() == 0 {
-        s.mixer.send(MixerCmd::Hold(false));
+        s.mixer.send(MixerCmd::SyncOffset { source: SourceId(u64::MAX), ms: 0 });
     }
     let dropped = s.mixer.control_dropped();
     s.tick();
