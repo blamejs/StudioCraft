@@ -108,6 +108,8 @@
 	Filters…	Filtres…
 	Finishing Recording…	Fin de l'enregistrement…
 	Fit to Screen	Ajuster à l'écran
+	Flip Horizontal	Retourner horizontalement
+	Flip Vertical	Retourner verticalement
 	Font	Police
 	Font family	Famille de police
 	Format	Format
@@ -140,6 +142,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (intégré)
 	VA-API H.264 (built in)	VA-API H.264 (intégré)
 	VA-API HEVC (built in)	VA-API HEVC (intégré)
+	VA-API AV1 (built in)	VA-API AV1 (intégré)
 	Height	Hauteur
 	Help	Aide
 	Hide	Masquer
@@ -573,3 +576,5 @@ menu	Transform	Transformer
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Remplir l'écran
 @msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}
+	Filter delay	Délai des filtres
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Les filtres audio de cette source retardent son son de {frames} échantillons à 48 kHz

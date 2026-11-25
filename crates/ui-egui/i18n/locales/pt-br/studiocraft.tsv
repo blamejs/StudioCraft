@@ -107,6 +107,8 @@
 	Filters…	Filtros…
 	Finishing Recording…	Finalizando a gravação…
 	Fit to Screen	Ajustar à tela
+	Flip Horizontal	Inverter horizontalmente
+	Flip Vertical	Inverter verticalmente
 	Font	Fonte tipográfica
 	Font family	Família tipográfica
 	Format	Formato
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrado)
 	VA-API H.264 (built in)	VA-API H.264 (integrado)
 	VA-API HEVC (built in)	VA-API HEVC (integrado)
+	VA-API AV1 (built in)	VA-API AV1 (integrado)
 	Height	Altura
 	Help	Ajuda
 	Hide	Ocultar
@@ -562,3 +565,5 @@ menu	Transform	Transformar
 	Custom	Personalizado
 	Fill Screen	Preencher a tela
 @msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}
+	Filter delay	Atraso dos filtros
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Os filtros de áudio desta fonte atrasam o som em {frames} amostras a 48 kHz

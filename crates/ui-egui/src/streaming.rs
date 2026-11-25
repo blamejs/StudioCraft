@@ -2,18 +2,21 @@
 //! off setting, the streaming service it is set up for with the service's logo where the service
 //! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
 //! what it is doing. Each change runs one of the window's `stream.destination*` commands. Check
-//! Connection runs `stream.diagnose` and shows what the check found under the destination.
+//! Connection runs `stream.diagnose` and shows what the check found under the destination. For a
+//! service that publishes a list of its ingest servers, List Servers runs `stream.ingest_servers`
+//! and the details then offer the servers of that list.
 
 use std::time::{Duration, UNIX_EPOCH};
 
 use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, MAX_ENCODER_ID, PRIMARY_DESTINATION};
-use studiocraft_model::services::{self, SERVICES};
+use studiocraft_model::services::{self, SERVICES, Service};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings, VIDEO_BITRATE_KBPS};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
-use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
+use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Handshake, Outcome, Verdict};
+use studiocraft_studio::ingests::{self, IngestServer, ListState};
 
 use crate::i18n::Msg;
 use crate::kit::tokens::Palette;
@@ -290,19 +293,27 @@ pub(crate) struct View<'a> {
     pub(crate) held: &'a dyn Fn(&str) -> bool,
     /// The connection check of each destination that has had one in this session, by id.
     pub(crate) checks: &'a [(String, CheckState)],
+    /// The list of ingest servers of each service whose list has been asked for, by service id.
+    pub(crate) ingests: &'a [(&'static str, ListState)],
 }
 
 /// What a check of a destination found, in the interface language.
 pub(crate) fn verdict_msg(d: &Diagnosis) -> Msg {
     let (template, mut args) = d.message();
-    if let Some(c) = d.reason {
-        for (k, v) in &mut args {
-            if *k == "reason" {
-                *v = cause_text(c).to_string();
-            }
+    for (k, v) in &mut args {
+        match (*k, d.reason, &d.handshake) {
+            ("reason", Some(c), _) => *v = cause_text(c).to_string(),
+            ("detail", _, Some(h)) => *v = handshake_text(h),
+            _ => {}
         }
     }
     Msg::new(template, args)
+}
+
+/// What a port answered to the RTMP handshake, in the interface language.
+pub(crate) fn handshake_text(h: &Handshake) -> String {
+    let (template, args) = h.message();
+    Msg::new(template, args).shown()
 }
 
 /// What one evidence line checked, in the interface language.
@@ -314,6 +325,7 @@ pub(crate) fn check_text(c: Check) -> &'static str {
         Check::Lookup => tl!("Name lookup of"),
         Check::Connect => tl!("Connection to"),
         Check::SecureConnect => tl!("Secure connection to"),
+        Check::Handshake => tl!("Stream server handshake with"),
         Check::Connect443 => tl!("Secure connection on port 443 to"),
         Check::IngestList => tl!("The service's list of ingest servers"),
         Check::OtherIngest => tl!("Secure connection to the service's ingest server"),
@@ -328,6 +340,7 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
         Outcome::Failed(c) => cause_text(c),
         Outcome::Set => tl!("set"),
         Outcome::Problem => tl!("reports a problem"),
+        Outcome::NotRtmp => tl!("answers, but not as a stream server"),
         Outcome::Unknown => tl!("this computer could not say"),
         Outcome::Unfinished => tl!("not finished in time"),
     }
@@ -335,7 +348,9 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
 
 /// One evidence line of a check, in the interface language.
 pub(crate) fn evidence_text(e: &Evidence) -> String {
-    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", e.detail.as_str())];
+    let answered = e.handshake.as_ref().map(handshake_text);
+    let detail = answered.as_deref().unwrap_or(e.detail.as_str());
+    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", detail)];
     let template = match (e.target.is_empty(), e.detail.is_empty()) {
         (true, true) => tl!("{check}: {outcome}"),
         (true, false) => tl!("{check}: {outcome} ({detail})"),
@@ -585,6 +600,72 @@ fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
     ui.add_space(l.header_gap(tile));
 }
 
+/// The servers the details offer for `svc` from its list `list`: the service's documented server
+/// first, named Default, when the list does not hold it, then the list's servers in its order.
+fn ingest_choices<'a>(svc: &'static Service, list: &'a [IngestServer]) -> impl Iterator<Item = (&'a str, &'a str)> {
+    let default = svc.server.filter(|server| !list.iter().any(|s| s.server == *server)).map(|server| (tl!("Default"), server));
+    default.into_iter().chain(list.iter().map(|s| (s.name.as_str(), s.server.as_str())))
+}
+
+/// The choice of one of the ingest servers `svc` publishes, which sets the server of `e`; a typed
+/// server is kept until a server of the list is chosen. Until the list is read, List Servers asks
+/// for it.
+fn ingest_choice(ui: &mut Ui, e: &mut Edit, svc: &'static Service, state: Option<&ListState>, acts: &mut Vec<Act>) {
+    let list_button = |ui: &mut Ui, acts: &mut Vec<Act>| {
+        let button = ui.button(tl!("List Servers")).on_hover_text(tl!(
+            "Reads the service's list of its ingest servers from the service's site, which sees this computer's address. It sends no stream key."
+        ));
+        if button.clicked() {
+            acts.push(Act::run("stream.ingest_servers", json!({"service": svc.id, "retry": true})));
+        }
+    };
+    match state {
+        Some(ListState::Ready(list)) => {
+            let current = e.server.trim();
+            let chosen = ingest_choices(svc, list).find(|(_, server)| *server == current).map(|(name, _)| name.to_string());
+            let typed = if current.is_empty() { tl!("Choose a server") } else { tl!("Typed server") };
+            let shown = chosen.unwrap_or_else(|| typed.to_string());
+            let mut pick = None;
+            craft_ui::ComboBox::from_id_salt("destination-ingest").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                for (name, server) in ingest_choices(svc, list) {
+                    if ui.selectable_label(server == current, name).on_hover_text(server).clicked() {
+                        pick = Some(server.to_string());
+                    }
+                }
+            });
+            if let Some(server) = pick {
+                e.server = server;
+            }
+        }
+        Some(ListState::Loading) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(tl!("Reading the list of servers…"));
+            });
+        }
+        Some(ListState::Failed(error)) => {
+            ui.vertical(|ui| {
+                list_button(ui, acts);
+                let text = craft_i18n::fmt(tl!("The list could not be read: {error}"), &[("error", error)]);
+                ui.colored_label(theme::palette(ui.ctx()).warn, RichText::new(text).small());
+            });
+        }
+        None => list_button(ui, acts),
+    }
+}
+
+/// A service's list of ingest servers as `stream.ingest_servers` returns it.
+fn listed_ingests(svc: &Service, state: &ListState) -> Value {
+    match state {
+        ListState::Loading => json!({"service": svc.id, "state": "loading"}),
+        ListState::Ready(list) => {
+            let servers: Vec<Value> = list.iter().map(|s| json!({"name": s.name, "server": s.server})).collect();
+            json!({"service": svc.id, "state": "ready", "servers": servers})
+        }
+        ListState::Failed(error) => json!({"service": svc.id, "state": "failed", "error": error}),
+    }
+}
+
 /// The open details of a destination; whether they closed.
 fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
     let mut close = false;
@@ -635,6 +716,13 @@ fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut
                 }
             });
             ui.end_row();
+            // A service that publishes a list of its ingest servers offers them once it is read.
+            if let Some(svc) = preset.filter(|svc| svc.ingests.is_some()) {
+                ui.label(tl!("Ingest server"));
+                let state = view.ingests.iter().find(|(id, _)| *id == svc.id).map(|(_, s)| s);
+                ingest_choice(ui, e, svc, state, acts);
+                ui.end_row();
+            }
             ui.label(tl!("Stream key"));
             craft_ui::ComboBox::from_id_salt("key-choice").selected_text(tl!(e.key.label())).show_ui(ui, |ui| {
                 for c in KeyChoice::ALL {
@@ -878,13 +966,17 @@ fn listed_reconnect(r: &ReconnectSettings) -> Value {
 
 /// An id no destination uses, and that the running stream (`live`) does not use either, so a new
 /// destination is never started as one that was removed: `main` for the first one, otherwise
-/// the first free `destination-N`.
+/// the first free `destination-N`. The running stream keeps destinations that were removed, up
+/// to its own limit, so the search covers one more name than the profile and the stream use
+/// together.
 fn new_id(s: &StreamSettings, live: &[DestinationState]) -> String {
     let free = |id: &str| s.destination(id).is_none() && !live.iter().any(|d| d.id == id);
     if s.destinations.is_empty() && free(PRIMARY_DESTINATION) {
         return PRIMARY_DESTINATION.to_string();
     }
-    (2..=2 * MAX_DESTINATIONS + 1).map(|n| format!("destination-{n}")).find(|id| free(id)).unwrap_or_else(|| "destination".to_string())
+    let used = s.destinations.len().saturating_add(live.len());
+    let name = |n: usize| format!("destination-{n}");
+    (2..).take(used.saturating_add(1)).map(name).find(|id| free(id)).unwrap_or_else(|| name(used.saturating_add(2)))
 }
 
 /// A destination as `stream.destinations` lists it.
@@ -1141,6 +1233,21 @@ impl StudioApp {
                 self.studio.check_stream_destination(&id).map_err(|e| e.to_string())?;
                 Ok(json!({"id": id, "started": true}))
             }
+            "stream.ingest_servers" => {
+                let id = opt_str(cmd, "service")?.ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = "service"))?;
+                let Some(svc) = services::service(id).filter(|svc| svc.ingests.is_some()) else {
+                    let ids: Vec<&str> = SERVICES.iter().filter(|svc| svc.ingests.is_some()).map(|svc| svc.id).collect();
+                    return Err(tmsg!(
+                        "`{command}`: `service` is a service that publishes a list of its ingest servers ({ids}), not `{service}`",
+                        command = cmd.id,
+                        ids = ids.join(", "),
+                        service = id
+                    ));
+                };
+                let retry = opt_bool(cmd, "retry")?.unwrap_or(false);
+                let state = ingests::lists().request(svc, retry, || {}).map_err(Msg::plain)?;
+                Ok(listed_ingests(svc, &state))
+            }
             "stream.destination_add" => {
                 let name = name_param(cmd)?;
                 let service = service_param(cmd, None)?.unwrap_or_default();
@@ -1283,14 +1390,18 @@ impl StudioApp {
         let running = self.stream_running();
         let live = self.live_destinations();
         let checks = self.destination_checks();
-        // A check reports from its own thread, so the window looks again while one runs.
-        if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) {
+        // A check reports from its own thread, and so does the fetch of a list of ingest servers,
+        // so the window looks again while one runs.
+        let lists = ingests::lists();
+        let ingests: Vec<(&'static str, ListState)> =
+            SERVICES.iter().filter(|svc| svc.ingests.is_some()).filter_map(|svc| lists.state(svc.id).map(|s| (svc.id, s))).collect();
+        if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) || ingests.iter().any(|(_, s)| *s == ListState::Loading) {
             ctx.request_repaint_after(CHECK_REPAINT);
         }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);
         let own = studio.stream_profile() == Some(studio.profile().name.as_str());
-        let view = View { stream: &studio.profile().stream, running, own, live: &live, held: &held, checks: &checks };
+        let view = View { stream: &studio.profile().stream, running, own, live: &live, held: &held, checks: &checks, ingests: &ingests };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             egui::Window::new(tid!("view.streaming", "Streaming"))

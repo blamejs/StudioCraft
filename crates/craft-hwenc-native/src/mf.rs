@@ -11,6 +11,10 @@
 //! - The encoder is asked for no B-frames, and each packet's decoding time is its presentation
 //!   time. A frame that comes out before one that went in earlier is an error.
 //! - The media types say BT.709 at limited range.
+//! - A frame is copied into an input sample made for an earlier frame once the encoder has
+//!   released it, and up to four released samples are kept. When none is free, a new one is made
+//!   instead of waiting. The output sample this side gives the encoder is made once for each
+//!   output type and reused.
 //! - When the encoder's output type carries no parameter sets, [`Encoder::new`] encodes one gray
 //!   frame in a second instance of the encoder and takes them from its output. A keyframe whose
 //!   own parameter sets differ from the record is an error.
@@ -351,6 +355,50 @@ mod tests {
 
     fn track() -> Track {
         Track::new(Codec::H264, (30000, 1001), vec![SPS.to_vec(), PPS.to_vec()])
+    }
+
+    #[test]
+    fn input_samples_are_made_for_the_frames_the_encoder_holds_and_not_for_every_frame() {
+        // An encoder that holds the last three frames it was given and releases the oldest when a
+        // new one goes in, as one with lookahead does. Its releases stop for 50 frames in the
+        // middle of the run, and frames keep going in meanwhile.
+        let samples = mf_ffi::Recycler::new(mf_ffi::FREE_INPUTS);
+        let back = samples.returner();
+        let (mut held, mut made) = (VecDeque::new(), 0u32);
+        for frame in 0..1000u32 {
+            let mut sample = samples.take().unwrap_or_else(|| {
+                made += 1;
+                vec![0u8; 64]
+            });
+            sample[0] = frame as u8;
+            held.push_back(sample);
+            let late = (400..450).contains(&frame);
+            while !late && held.len() > 3 {
+                if let Some(s) = held.pop_front() {
+                    back.give_back(s);
+                }
+            }
+        }
+        // Four at the start (three held and one being filled), and 50 more while the releases are
+        // late. After the stall the encoder releases 51 at once, the recycler keeps four, and no
+        // more are made until the end of the run.
+        assert_eq!(made, 4 + 50, "{made} samples made for 1000 frames");
+    }
+
+    #[test]
+    fn values_come_back_from_other_threads_and_are_dropped_when_the_recycler_is_full_or_gone() {
+        let samples = mf_ffi::Recycler::new(2);
+        let back = samples.returner();
+        let given = std::thread::spawn(move || [1, 2, 3].map(|v| back.give_back(v))).join().unwrap();
+        assert_eq!(given, [true, true, false], "the third finds the recycler full");
+        assert_eq!((samples.take(), samples.take(), samples.take()), (Some(1), Some(2), None));
+        let back = samples.returner();
+        drop(samples);
+        assert!(!back.give_back(4), "the recycler is gone");
+        // A capacity of 0 holds one free value.
+        let one = mf_ffi::Recycler::new(0);
+        assert!(one.returner().clone().give_back(5));
+        assert_eq!(one.take(), Some(5));
     }
 
     #[test]

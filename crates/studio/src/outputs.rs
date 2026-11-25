@@ -12,6 +12,7 @@ use craft_hwenc::{
     Prober, SystemClock, Target, Vendor,
 };
 use studiocraft_encode::SessionError;
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_encode::hardware::{self, Hardware};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
@@ -225,9 +226,9 @@ struct Stopping {
     /// Whether the user was already told the output failed while it ran.
     failed: bool,
     handle: JoinHandle<Result<(), PluginError>>,
-    /// Where the stop thread puts the state of a stream's copy, and whether the copy's failure
-    /// was already shown while the stream ran.
-    copy: Option<(CopySlot, bool)>,
+    /// Where the stop thread puts the state of a stream's copy, whether the copy's failure was
+    /// already shown while the stream ran, and the stream's number ([`Outputs::streams`]).
+    copy: Option<(CopySlot, bool, u64)>,
     /// The file of the stream's copy, for [`Outputs::copy_ended`].
     copy_path: Option<PathBuf>,
 }
@@ -310,6 +311,9 @@ pub(crate) struct Outputs {
     /// The last [`MAX_UNFINISHED`] copies of streams that ended, each file and whether it was
     /// finished, oldest first, for [`Outputs::copy_ended`].
     ended_copies: Vec<(PathBuf, bool)>,
+    /// How many streams have started; the last one's number. Only the copy of that stream
+    /// becomes [`Outputs::last_copy`] when its stop finishes.
+    streams: u64,
 }
 
 /// Where a stop thread puts the state of the stream's copy once the stream has ended.
@@ -547,12 +551,12 @@ impl Outputs {
         }
         let before = a.instance.stream_copy();
         let copy_path = before.as_ref().map(|c| c.path.clone());
-        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed)));
+        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed), self.streams));
         if before.is_some() {
             // Shown while the copy finishes, until the stop's state replaces it.
             self.last_copy = before;
         }
-        let slot = copy.as_ref().map(|(s, _)| Arc::clone(s));
+        let slot = copy.as_ref().map(|(s, _, _)| Arc::clone(s));
         // The instance stays reachable here, so it can be stopped on this thread when no thread
         // can be started for it.
         let cell = Arc::new(Mutex::new(Some(a.instance)));
@@ -565,7 +569,7 @@ impl Outputs {
             Ok(handle) => self.stopping.push(Stopping { kind, target, failed, handle, copy, copy_path }),
             Err(e) => {
                 log::error!("no thread to finish the {}: {e}", kind.noun());
-                let slot = copy.as_ref().map(|(s, _)| s);
+                let slot = copy.as_ref().map(|(s, _, _)| s);
                 let r = match cell.lock() {
                     Ok(mut i) => i.take().map_or(Ok(()), |mut i| stop_instance(i.as_mut(), slot)),
                     Err(_) => Err(PluginError::Unavailable("the output was lost".into())),
@@ -649,23 +653,25 @@ impl Outputs {
     }
 
     /// Keep the state a stop thread put in `copy`'s slot as the last stream's copy, and its
-    /// notice.
-    fn take_copy(&mut self, copy: Option<(CopySlot, bool)>) -> Option<Notice> {
-        let (slot, noticed) = copy?;
+    /// notice. The state of a stream that a newer stream followed is not kept.
+    fn take_copy(&mut self, copy: Option<(CopySlot, bool, u64)>) -> Option<Notice> {
+        let (slot, noticed, stream) = copy?;
         let state = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
         let notice = copy_notice(&state, noticed);
-        self.note_copy_ended(state);
+        self.note_copy_ended(state, stream == self.streams);
         notice
     }
 
-    /// Keep `state`, the copy of a stream that ended, as the last stream's copy and among the
-    /// ended copies.
-    fn note_copy_ended(&mut self, state: StreamCopyState) {
+    /// Keep `state`, the copy of a stream that ended, among the ended copies, and as the last
+    /// stream's copy when `latest`, that stream being the last one that started.
+    fn note_copy_ended(&mut self, state: StreamCopyState, latest: bool) {
         if self.ended_copies.len() >= MAX_UNFINISHED {
             self.ended_copies.remove(0);
         }
         self.ended_copies.push((state.path.clone(), state.finished));
-        self.last_copy = Some(state);
+        if latest {
+            self.last_copy = Some(state);
+        }
     }
 
     /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
@@ -685,6 +691,16 @@ impl Outputs {
     /// seen it. It reads no state from the stream, so it can run each frame.
     pub(crate) fn running_copy_failure(&self) -> Option<&str> {
         self.copy_failure.as_deref()
+    }
+
+    /// Note that a stream starts: it has no copy failure shown yet, no copy file until the caller
+    /// sets [`Outputs::copy_path`], and no earlier stream's copy is shown as its own.
+    fn stream_started(&mut self) {
+        self.copy_noticed = false;
+        self.copy_failure = None;
+        self.copy_path = None;
+        self.last_copy = None;
+        self.streams += 1;
     }
 
     /// The copy of the running stream, or else of the last stream that ended, when it had one.
@@ -821,7 +837,7 @@ impl Outputs {
             let _ = self.take_copy(s.copy);
         }
         for c in copies {
-            self.note_copy_ended(c);
+            self.note_copy_ended(c, true);
         }
         for (kind, target, clean) in ended {
             self.note_finish(kind, &target, clean);
@@ -1043,6 +1059,7 @@ impl Plan {
             stats,
             start,
             other_encoders: Vec::new(),
+            captions: None,
         }
     }
 }
@@ -1817,6 +1834,10 @@ impl Studio {
             self.outputs.stream_encoder_id = Some(planned.encoder_id.clone());
             self.outputs.stream_encoder = Some((self.profile.stream.video_encoder.clone(), self.profile.stream.video_bitrate()));
         }
+        if kind == OutputKind::Streaming {
+            // Phrases live captions finish while the stream runs go out as closed captions.
+            job.captions = Some(self.caption_feed());
+        }
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
@@ -1829,18 +1850,33 @@ impl Studio {
             }
             OutputKind::Streaming | OutputKind::Replay => None,
         };
-        // The stream's copy: a file that cannot be made leaves the stream without one.
+        // The stream's copy: a keyframe interval longer than a recording's, or a file that cannot be
+        // made, leaves the stream without one.
+        let copy_keyframe_s = match job.rate {
+            RateControl::Bitrate { keyframe_s, .. } if keyframe_s > RECORDING_KEYFRAME_S => Some(keyframe_s),
+            _ => None,
+        };
         let copy = if kind == OutputKind::Streaming && self.profile.stream.save_copy {
             let folder = recording_folder(&self.profile.output.folder);
-            match stream_copy_path(&folder) {
-                Ok(path) => {
-                    settings = settings.with("copy", path.to_string_lossy().as_ref());
-                    Some(path)
-                }
-                Err(e) => {
-                    let args = vec![("folder", folder.display().to_string()), ("error", e.to_string())];
-                    self.notices.push(Notice::new("The stream starts without a copy: no file could be made in {folder}: {error}", args, true));
-                    None
+            if let Some(keyframe_s) = copy_keyframe_s {
+                let args = vec![("limit", RECORDING_KEYFRAME_S.to_string()), ("interval", keyframe_s.to_string())];
+                self.notices.push(Notice::new(
+                    "The stream starts without a copy: a copy needs a keyframe at least every {limit} seconds, not every {interval}; set the Keyframe interval in Settings › Stream",
+                    args,
+                    true,
+                ));
+                None
+            } else {
+                match stream_copy_path(&folder) {
+                    Ok(path) => {
+                        settings = settings.with("copy", path.to_string_lossy().as_ref());
+                        Some(path)
+                    }
+                    Err(e) => {
+                        let args = vec![("folder", folder.display().to_string()), ("error", e.to_string())];
+                        self.notices.push(Notice::new("The stream starts without a copy: no file could be made in {folder}: {error}", args, true));
+                        None
+                    }
                 }
             }
         } else {
@@ -1868,10 +1904,8 @@ impl Studio {
         self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
         let target = instance.target();
         if kind == OutputKind::Streaming {
-            self.outputs.copy_noticed = false;
-            self.outputs.copy_failure = None;
+            self.outputs.stream_started();
             self.outputs.copy_path = instance.stream_copy().map(|c| c.path);
-            self.outputs.last_copy = None;
         }
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
         if let Some(key) = check_key {
@@ -2198,6 +2232,7 @@ pub(crate) mod tests {
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
@@ -2697,12 +2732,12 @@ pub(crate) mod tests {
 
     #[test]
     fn a_streams_copy_is_named_for_the_stream_and_its_time() {
-        let dir = std::env::temp_dir().join(format!("studiocraft-copy-names-{}", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("Videos");
         let path = stream_copy_path(&dir).unwrap();
         assert!(path.exists(), "the folder is made and the name taken");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("Stream ") && name.ends_with(".mkv") && name.len() == "Stream 2026-11-23 10-00-00.mkv".len(), "{name}");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A stream with a copy whose state the test sets: `failure` while it runs, `ended` once it
@@ -2780,8 +2815,7 @@ pub(crate) mod tests {
         let failure = Arc::new(Mutex::new(None));
         let instance = Box::new(CopyingStream { failure: Arc::clone(&failure), ended, stopped: false, gate });
         let active = Active { id: 1, instance, stats, started: Instant::now(), start, target: String::new(), hardware: None };
-        o.copy_noticed = false;
-        o.copy_failure = None;
+        o.stream_started();
         o.copy_path = active.instance.stream_copy().map(|c| c.path);
         o.active.insert(OutputKind::Streaming, active);
         failure
@@ -2872,17 +2906,37 @@ pub(crate) mod tests {
             let _ = wait.recv();
             Ok(())
         });
-        let copy = Some((CopySlot::default(), false));
+        let copy = Some((CopySlot::default(), false, o.streams));
         o.stopping.push(Stopping { kind: OutputKind::Streaming, target: String::new(), failed: false, handle, copy, copy_path: Some(other.clone()) });
         assert_eq!((o.copy_ended(&third), o.copy_ended(&other)), (Some(true), None));
         release.send(()).unwrap();
         let _ = notices_until_idle(&mut o);
         // Only the last ones are kept.
         for n in 0..MAX_UNFINISHED {
-            o.note_copy_ended(StreamCopyState { path: PathBuf::from(format!("/videos/{n}.mkv")), finished: true, ..StreamCopyState::default() });
+            o.note_copy_ended(
+                StreamCopyState { path: PathBuf::from(format!("/videos/{n}.mkv")), finished: true, ..StreamCopyState::default() },
+                true,
+            );
         }
         assert_eq!(o.copy_ended(&path), Some(false), "forgotten");
         assert_eq!(o.ended_copies.len(), MAX_UNFINISHED);
+    }
+
+    #[test]
+    fn an_older_streams_stop_does_not_show_its_copy_as_the_newer_streams() {
+        let path = PathBuf::from("/videos/Stream 2026-11-23 10-00-00.mkv");
+        let mut o = Outputs::default();
+        let saved = StreamCopyState { path: path.clone(), bytes: 9, finished: true, ..StreamCopyState::default() };
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let _ = copying_gated(&mut o, saved, Some(gate));
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        // A stream without a copy starts and ends while the first one's stop still waits.
+        o.stream_started();
+        assert_eq!(o.stream_copy(), None);
+        drop(release);
+        let texts = notices_until_idle(&mut o);
+        assert_eq!(texts[1], (format!("Stream copy saved to {}", path.display()), false), "the older copy's notice still shows");
+        assert_eq!(o.stream_copy(), None, "the newer stream had no copy");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Displays: listing and capture.
 
+use craft_gpu_interop::{CaptureError, Duplication, Grab, SharedFrame};
 use studiocraft_media::video::VideoFrame;
 
 use crate::PlatformError;
@@ -33,20 +34,81 @@ pub fn prefetch() {
 /// A display being captured.
 pub struct DisplayCapture {
     inner: imp::Capture,
+    /// The capture into textures shared with the compositor, while it runs.
+    gpu: Option<Duplication>,
+}
+
+/// What [`DisplayCapture::grab_shared`] gave.
+#[derive(Debug)]
+pub enum SharedGrab {
+    /// A new picture in a texture shared with the compositor.
+    Frame(SharedFrame),
+    /// The display has not changed since the last picture.
+    Unchanged,
+    /// The capture does not run on the GPU (any more); [`DisplayCapture::grab`] copies the
+    /// picture into memory.
+    Memory,
+}
+
+/// What the GPU capture does after one grab.
+#[derive(Debug)]
+enum Step {
+    Give(SharedGrab),
+    /// The desktop changed mode or was switched: open the duplication again.
+    Reopen,
+    /// Stop the GPU capture and copy through memory from now on.
+    Stop,
+}
+
+fn step(grab: Result<Grab, CaptureError>) -> Step {
+    match grab {
+        Ok(Grab::Frame(f)) => Step::Give(SharedGrab::Frame(f)),
+        Ok(Grab::Unchanged) => Step::Give(SharedGrab::Unchanged),
+        Err(CaptureError::Lost(_)) => Step::Reopen,
+        Err(CaptureError::Fallback(_) | CaptureError::Failed(_)) => Step::Stop,
+    }
 }
 
 impl DisplayCapture {
     /// Capture the display with `id`; an empty or unknown id captures the primary display. On
     /// Linux this opens the desktop's picker and returns without waiting for the choice.
     pub fn open(id: &str) -> Result<DisplayCapture, PlatformError> {
-        Ok(DisplayCapture { inner: imp::Capture::open(id, true)? })
+        Ok(DisplayCapture { inner: imp::Capture::open(id, true)?, gpu: None })
     }
 
     /// Capture the display with `id`, or fail with [`PlatformError::NotFound`] when no connected
     /// display has that id. On Linux this opens the desktop's picker, as [`DisplayCapture::open`]
     /// does.
     pub fn open_exact(id: &str) -> Result<DisplayCapture, PlatformError> {
-        Ok(DisplayCapture { inner: imp::Capture::open(id, false)? })
+        Ok(DisplayCapture { inner: imp::Capture::open(id, false)?, gpu: None })
+    }
+
+    /// Capture into textures shared with the compositor where the system allows it (Windows, with
+    /// desktop duplication and shared fences). Returns whether the GPU capture runs; elsewhere it
+    /// does not, and [`DisplayCapture::grab_shared`] returns [`SharedGrab::Memory`].
+    pub fn share_on_gpu(&mut self) -> bool {
+        if self.gpu.is_none() {
+            self.gpu = self.inner.device_name().and_then(|name| Duplication::open(&name).ok());
+        }
+        self.gpu.is_some()
+    }
+
+    /// The newest picture in a shared texture, without waiting. Once the compositor has reported
+    /// that it cannot take the shared textures, or the GPU capture fails, this returns
+    /// [`SharedGrab::Memory`] from then on.
+    pub fn grab_shared(&mut self) -> SharedGrab {
+        let Some(gpu) = &mut self.gpu else { return SharedGrab::Memory };
+        match step(gpu.grab()) {
+            Step::Give(g) => g,
+            Step::Reopen => {
+                self.gpu = None;
+                if self.share_on_gpu() { SharedGrab::Unchanged } else { SharedGrab::Memory }
+            }
+            Step::Stop => {
+                self.gpu = None;
+                SharedGrab::Memory
+            }
+        }
     }
 
     /// The current picture into `frame` (RGBA, or BGRA on Linux). On Linux the picture arrives
@@ -131,6 +193,18 @@ mod imp {
             let img = self.monitor.capture_image().map_err(PlatformError::failed)?;
             fill(frame, img.width(), img.height(), img.as_raw())
         }
+
+        /// The display's device name (`\\.\DISPLAY1`), which desktop duplication looks the
+        /// display up by.
+        #[cfg(windows)]
+        pub fn device_name(&self) -> Option<String> {
+            self.monitor.name().ok()
+        }
+
+        #[cfg(target_os = "macos")]
+        pub fn device_name(&self) -> Option<String> {
+            None
+        }
     }
 }
 
@@ -158,6 +232,10 @@ mod imp {
         pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
             self.0.grab(frame)
         }
+
+        pub fn device_name(&self) -> Option<String> {
+            None
+        }
     }
 }
 
@@ -182,6 +260,10 @@ mod imp {
         pub fn grab(&mut self, _frame: &mut VideoFrame) -> Result<(), PlatformError> {
             Err(PlatformError::Unsupported)
         }
+
+        pub fn device_name(&self) -> Option<String> {
+            None
+        }
     }
 }
 
@@ -199,6 +281,31 @@ mod tests {
         let mut f = VideoFrame::default();
         if cap.grab(&mut f).is_ok() {
             assert!(f.is_consistent());
+        }
+    }
+
+    #[test]
+    fn the_gpu_capture_stops_on_a_fallback_and_reopens_after_a_mode_change() {
+        let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+        let frame = SharedFrame::new(ring, 0, 1).unwrap();
+        assert!(matches!(step(Ok(Grab::Frame(frame))), Step::Give(SharedGrab::Frame(f)) if f.ready() == 1));
+        assert!(matches!(step(Ok(Grab::Unchanged)), Step::Give(SharedGrab::Unchanged)));
+        assert!(matches!(step(Err(CaptureError::Lost("mode".into()))), Step::Reopen));
+        for e in [CaptureError::Fallback(craft_gpu_interop::Fallback::NotDx12), CaptureError::Failed("x".into())] {
+            assert!(matches!(step(Err(e)), Step::Stop));
+        }
+    }
+
+    #[test]
+    fn without_a_gpu_capture_pictures_are_copied_through_memory() {
+        // Machines without a display (build servers) have nothing to capture.
+        if displays().is_empty() {
+            return;
+        }
+        let Ok(mut cap) = DisplayCapture::open("") else { return };
+        assert!(matches!(cap.grab_shared(), SharedGrab::Memory), "nothing shared before share_on_gpu");
+        if !cap.share_on_gpu() {
+            assert!(matches!(cap.grab_shared(), SharedGrab::Memory));
         }
     }
 

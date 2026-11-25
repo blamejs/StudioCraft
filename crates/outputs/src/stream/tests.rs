@@ -37,8 +37,9 @@ enum Plan {
 enum Seen {
     /// The publish command, with the stream's name.
     Publish(String),
-    /// An audio or video message: video or not, its first two bytes, and its timestamp.
-    Media { video: bool, head: [u8; 2], timestamp: u32 },
+    /// An audio or video message: video or not, its first two bytes, its timestamp, and the
+    /// closed-caption pairs of a video message's SEI.
+    Media { video: bool, head: [u8; 2], timestamp: u32, captions: Vec<[u8; 2]> },
     /// The connection ended.
     Closed,
 }
@@ -161,7 +162,13 @@ impl Conn {
             let video = m.header.type_id == msg_type::VIDEO;
             if video || m.header.type_id == msg_type::AUDIO {
                 let head = [m.payload.first().copied().unwrap_or(0), m.payload.get(1).copied().unwrap_or(0)];
-                let _ = seen.send(Seen::Media { video, head, timestamp: m.header.timestamp });
+                // A video tag's NAL units follow its five bytes of frame type, packet type and
+                // composition time.
+                let captions = match m.payload.get(5..) {
+                    Some(au) if video && head[1] == 1 => sei::read_sei(Codec::H264, au),
+                    _ => Vec::new(),
+                };
+                let _ = seen.send(Seen::Media { video, head, timestamp: m.header.timestamp, captions });
                 media += 1;
                 if matches!(plan, Plan::DropAfter(n) if media >= n) {
                     return Ok(());
@@ -1131,7 +1138,7 @@ fn after_a_video_packet_is_left_out_video_waits_for_a_keyframe() {
         StreamRates { video_packets_per_second: 30, audio_packets_per_second: 47, bits_per_second: 1_000_000, ticks_per_second: 1_000_000_000 };
     let mut rx = control.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
     let refused = Arc::new(AtomicU64::new(0));
-    let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false };
+    let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false, captions: None };
     let item = |track, at: i64, keyframe, data: Vec<u8>| Item { track, order_ns: at, pts_ns: at, dts_ns: at, keyframe, data };
     let mut write = |i: Item| sink.write(i).unwrap();
     write(item(Track::Video, 0, true, vec![1]));
@@ -1936,7 +1943,7 @@ fn rest_of_media(rx: &mpsc::Receiver<Seen>, mut got: Vec<Seen>) -> Vec<Seen> {
 fn coded(m: &[Seen], want_video: bool) -> Vec<u32> {
     m.iter()
         .filter_map(|s| match s {
-            Seen::Media { video, head, timestamp } if *video == want_video && head[1] == 1 => Some(*timestamp),
+            Seen::Media { video, head, timestamp, .. } if *video == want_video && head[1] == 1 => Some(*timestamp),
             _ => None,
         })
         .collect()
@@ -2067,6 +2074,73 @@ fn a_copy_that_cannot_be_written_stops_alone() {
 }
 
 #[test]
+fn a_copy_needs_the_keyframe_interval_of_a_recording() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let opened = Arc::new(AtomicBool::new(false));
+    let o = Arc::clone(&opened);
+    let open: copy::Open = Box::new(move || {
+        o.store(true, Ordering::SeqCst);
+        Err(io::Error::other("opened"))
+    });
+    let keyframe_s = studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1;
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    let feed = Feed::new(&out);
+    // The copy is refused before it starts, so its state says so at once.
+    let state = out.stream_copy().unwrap();
+    let failure = state.failure.unwrap_or_default();
+    assert!(failure.contains("keyframe") && failure.contains(&format!("every {keyframe_s}")), "{failure}");
+    assert!(!state.finished);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    media(&seen, 30);
+    assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    assert!(!opened.load(Ordering::SeqCst), "the refused copy made no file");
+}
+
+/// What a CEA-608 decoder shows after the caption pairs of `video`, one message per frame.
+fn captions_shown(video: &[Vec<[u8; 2]>]) -> String {
+    let pairs = video.iter().enumerate().flat_map(|(f, p)| p.iter().map(move |p| (f as i64, p[0], p[1])));
+    craft_captions::scc::decode_pairs(pairs, craft_captions::FrameRate::FPS_29_97).last().map(|c| c.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn finished_phrases_go_out_as_closed_captions_and_a_late_phrase_holds_nothing_up() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let mut job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let phrases = Arc::new(Fifo::new(8));
+    job.captions = Some(Arc::clone(&phrases));
+    let mut out = Streaming::start_timed(&job, vec![target("a", &url, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    // No phrase comes for a while, and the stream goes on without it.
+    let video = |m: Vec<Seen>| -> Vec<Vec<[u8; 2]>> {
+        m.into_iter()
+            .filter_map(|s| match s {
+                Seen::Media { video: true, head: [_, 1], captions, .. } => Some(captions),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = video(media(&seen, 60));
+    assert!(before.len() >= 5, "{}", before.len());
+    assert!(before.iter().all(Vec::is_empty), "{before:?}");
+    phrases.push("hello from the stream".to_string());
+    let mut after = Vec::new();
+    for _ in 0..2000 {
+        after.extend(video(media(&seen, 1)));
+        if captions_shown(&after) == "hello from the stream" {
+            break;
+        }
+    }
+    assert_eq!(captions_shown(&after), "hello from the stream");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
 fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let targets: Vec<Target> = (0..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
@@ -2077,6 +2151,36 @@ fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
     let mut out = Streaming::start_copying(&job, targets[1..].to_vec(), quick(), "/videos/Stream.mkv".into(), open).unwrap();
     assert!(out.stream_copy().is_some_and(|c| c.failure.is_none_or(|f| f.contains("not opened"))));
     let _ = out.stop();
+    // A copy refused for its keyframe interval takes no subscription, so all the destinations start.
+    let long = crate::native::tests::job(RateControl::Bitrate { kbps: 400, keyframe_s: studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1 });
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let mut out = Streaming::start_copying(&long, targets, quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("keyframe")));
+    let _ = out.stop();
+}
+
+#[test]
+fn phrases_from_before_the_stream_are_not_sent() {
+    let phrases = Arc::new(Fifo::new(8));
+    phrases.push("said before the stream started".to_string());
+    let mut c = Captions::new(Arc::clone(&phrases), 30, 1).unwrap();
+    assert!(phrases.is_empty());
+    let slice = [0, 0, 0, 2, 0x65, 0x88];
+    let mut au = slice.to_vec();
+    c.add(&mut au);
+    assert_eq!(au, slice, "nothing was due, so the access unit is unchanged");
+    // A phrase given after the start goes out with the next picture.
+    phrases.push("now".to_string());
+    c.add(&mut au);
+    assert!(!sei::read_sei(Codec::H264, &au).is_empty());
+    assert!(au.ends_with(&slice), "the SEI goes before the slice");
+}
+
+#[test]
+fn a_stream_at_a_frame_rate_of_zero_is_refused_with_captions() {
+    let phrases = Arc::new(Fifo::new(8));
+    let Err(e) = Captions::new(phrases, 0, 1) else { panic!("a zero frame rate was taken") };
+    assert!(e.to_string().contains("frame rate"), "{e}");
 }
 
 /// The built-in H.264 encoder at `kbps` with `preset`, as a destination runs it for itself.

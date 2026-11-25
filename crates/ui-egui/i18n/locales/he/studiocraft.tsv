@@ -110,6 +110,8 @@
 	Filters…	מסננים…
 	Finishing Recording…	ההקלטה מסתיימת…
 	Fit to Screen	התאמה למסך
+	Flip Horizontal	היפוך אופקי
+	Flip Vertical	היפוך אנכי
 	Font	גופן
 	Font family	משפחת גופנים
 	Format	פורמט
@@ -142,6 +144,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (מובנה)
 	VA-API H.264 (built in)	VA-API H.264 (מובנה)
 	VA-API HEVC (built in)	VA-API HEVC (מובנה)
+	VA-API AV1 (built in)	VA-API AV1 (מובנה)
 	Height	גובה
 	Help	עזרה
 	Hide	הסתרה
@@ -544,3 +547,5 @@ menu	Transform	שינוי צורה
 	Custom	מותאם אישית
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}
+	Filter delay	השהיית המסננים
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	מסנני השמע של מקור זה משהים את הצליל שלו ב-{frames} דגימות ב-48 קילוהרץ

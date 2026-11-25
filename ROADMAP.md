@@ -7,7 +7,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Sources
 
-- Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
+- Scenes, sources and scene items can be moved, resized, rotated, flipped, locked, hidden and undone ([Sources](docs/features.md#sources)).
 - Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
 - A Staged windows source keeps up to six windows or displays capturing and presents one, swapped by `present.window`, `present.next`, `present.previous` or their hotkeys, with a placeholder while the presented window is closed or minimized or the presented display is disconnected, on Windows and macOS ([Staged windows](docs/features.md#staged-windows)).
 - The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
@@ -31,6 +31,7 @@ description in [docs/features.md](docs/features.md).
 - The Application Audio dock lists the microphones and the running applications that have audio as lanes with live meters, and routes an application into the program in every scene, together with the microphone ([Application Audio dock](docs/features.md#application-audio-dock)).
 - The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
+- Audio input and output capture stay in step with the mix when the device's clock runs a little fast or slow ([Audio](docs/features.md#audio)).
 
 ### Recording
 
@@ -45,7 +46,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Streaming
 
-- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, the status bar and notices say when destinations lose their connection and reconnect, each try looks the server's name up again with a 10 s limit that a stop does not wait for, one refused right after a lost connection is tried again up to 3 times, and with no network route a destination waits and tries as soon as the route returns; Check Connection, and a check after a destination's third failed try or its giving up, test the route, the lookup and the connection to the server and name one cause ([Streaming](docs/features.md#streaming)).
+- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, the status bar and notices say when destinations lose their connection and reconnect, each try looks the server's name up again with a 10 s limit that a stop does not wait for, one refused right after a lost connection is tried again up to 3 times, and with no network route a destination waits and tries as soon as the route returns; Check Connection, and a check after a destination's third failed try or its giving up, test the route, the lookup, the connection to the server and its RTMP handshake (with no command or key) and name one cause, telling a port that takes the connection but does not answer as a stream server from one that cannot be reached ([Streaming](docs/features.md#streaming)).
 - A destination added while the stream runs, or one whose server or key changed, is started from the Streaming window or `stream.destination_start` without restarting the stream ([Streaming](docs/features.md#streaming)).
 - A destination can send with a video encoder and bitrate of its own instead of the stream's, destinations with the same encoder and bitrate share one, and Settings › Stream and the Streaming window list which destinations share which encoder ([Destination encoders](docs/features.md#destination-encoders)).
 - A stream can also save a copy of what it sends to an MKV file in the recording folder, without another encoder, for posting as a video; the copy never holds back the stream, and a stream's take of audio tracks is listed as the copy's for editing ([Copy of the stream](docs/features.md#copy-of-the-stream)).
@@ -56,10 +57,11 @@ description in [docs/features.md](docs/features.md).
 
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- On Windows a Display capture source's pictures stay on the GPU into the compositor, with a copy through CPU memory when the compositor cannot open them (`craft-gpu-interop`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - `scene.thumbnails` names the scenes whose pictures are drawn, 2 times a second by default, and stops them with an empty list ([Control protocol](docs/control-protocol.md#scenethumbnails)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
-- NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in), and VA-API AV1 (built in), record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
 ### Interface
 
@@ -69,10 +71,12 @@ description in [docs/features.md](docs/features.md).
 - The interface fonts come from `craft-ui`'s font stack ([Fonts](docs/features.md#fonts)).
 - Nineteen interface languages are built in, and Arabic and Hebrew run right to left ([Languages](docs/features.md#languages)).
 - Profiles and scene collections can be switched, and Scene Collection › Import… and Export… read and write collection files ([Profiles and scene collections](docs/features.md#profiles-and-scene-collections)).
+- A browser editor opens a scene collection file, adds, renames, reorders and removes its scenes, places, renames, reorders and removes the sources in each scene, undoes and redoes each edit, and saves the result as a download ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)).
 - The stats window and View › Scopes show the program's timing and levels ([Stats and scopes](docs/features.md#stats-and-scopes)).
 - Help › Check for Updates…, the check at start and the step that finishes installing a downloaded update on Windows run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
 - Help › About StudioCraft shows the credits, with a choice of username, display name or real name, and the license texts ([Help and updates](docs/features.md#help-and-updates)).
 - The app icon in `assets/app-icon` is the window icon, the picture in the update prompt and the icon of the AppImage menu entry ([Help and updates](docs/features.md#help-and-updates)).
+- After a session that ended without closing, the next start offers Safe Mode, and `--safe-mode` starts in it: no source runs and remote control is off until Leave Safe Mode is clicked ([Safe Mode](docs/features.md#safe-mode)).
 
 ### Hotkeys
 
@@ -103,10 +107,15 @@ description in [docs/features.md](docs/features.md).
    use them yet, and a stream still goes to one server through `ffmpeg`. The list of
    destinations, publishing from StudioCraft's own process and the virtual camera are still to
    be built.
-3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
-   scene collections is the first step.
-4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until
-   the encoder reads them.
+3. **Web build (partly done).** The browser editor in `apps/studiocraft-web` edits the scenes and
+   sources of a scene collection file
+   ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)). Adding
+   new sources, source settings, filters and transitions in the browser are still to be built.
+4. **Frames on the GPU from capture to the encoder (partly done).** On Windows a Display capture
+   source hands its pictures to the compositor's Direct3D 12 device in shared textures, and copies
+   them through CPU memory when the compositor cannot open them
+   ([Hardware acceleration](docs/features.md#hardware-acceleration)). Window capture, cameras,
+   macOS and Linux, and the path from the compositor to the encoders are still to be built.
 5. **Application Audio panel (partly done).** The Application audio capture source records one
    application's audio on Windows 11 and Windows Server 2022
    ([Application audio capture](docs/features.md#application-audio-capture)). The Application
@@ -134,10 +143,11 @@ description in [docs/features.md](docs/features.md).
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.
-11. **Live captions.** Speech from an audio source or the mix will be turned into text on the
+11. **Live captions (partly done).** Speech in the program audio is turned into text on the
     computer while a recording or the stream runs. A Live Captions source shows the text on the
-    program, or on the preview only, the stream carries it as closed captions, and `.srt` and
-    `.vtt` files are written beside the recording.
+    program, the stream carries it as closed captions, and `.srt`, `.vtt` and `.txt` files are
+    written beside the recording ([Live captions](docs/features.md#live-captions)). Captions of one
+    audio source instead of the mix, and captions on the preview only, are still to be built.
 12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
     areas and other items, Settings › Video sets the canvas to a chosen display's size and the
     output to a share of the canvas, and scenes are laid out again when the canvas size changes.

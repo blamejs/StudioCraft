@@ -812,6 +812,7 @@ mod tests {
             stats: Arc::new(EncoderStats::default()),
             start: Tick(0),
             other_encoders: Vec::new(),
+            captions: None,
         };
         let args = input_args(&job);
         let inputs: Vec<&str> = args.windows(2).filter(|w| w[0] == "-i").map(|w| w[1].as_str()).collect();

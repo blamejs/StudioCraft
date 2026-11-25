@@ -107,6 +107,8 @@
 	Filters…	Фильтры…
 	Finishing Recording…	Завершение записи…
 	Fit to Screen	Вписать в экран
+	Flip Horizontal	Отразить по горизонтали
+	Flip Vertical	Отразить по вертикали
 	Font	Шрифт
 	Font family	Семейство шрифтов
 	Format	Формат
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (встроенный)
 	VA-API H.264 (built in)	VA-API H.264 (встроенный)
 	VA-API HEVC (built in)	VA-API HEVC (встроенный)
+	VA-API AV1 (built in)	VA-API AV1 (встроенный)
 	Height	Высота
 	Help	Справка
 	Hide	Скрыть
@@ -573,3 +576,5 @@ menu	Transform	Преобразование
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Заполнить экран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}
+	Filter delay	Задержка фильтров
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Аудиофильтры этого источника задерживают его звук на {frames} сэмплов при 48 кГц

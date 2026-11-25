@@ -40,6 +40,9 @@ pub struct OutputJob {
     /// The video encoders a stream's destinations may send with in place of `video_encoder`
     /// ([`OwnEncoder`]); empty for other outputs.
     pub other_encoders: Vec<Arc<dyn Encoder>>,
+    /// Finished caption phrases for a stream to carry as closed captions; `None` sends none.
+    /// Phrases already in the queue when the stream starts are discarded.
+    pub captions: Option<Arc<Fifo<String>>>,
 }
 
 /// A video encoder a stream's destination runs for itself, in place of the stream's encoder. It

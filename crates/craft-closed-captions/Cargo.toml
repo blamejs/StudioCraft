@@ -1,0 +1,14 @@
+[package]
+name = "craft-closed-captions"
+description = "Closed captions in a live H.264 or HEVC stream: text a phrase at a time to CEA-608 roll-up captions, paced at the field 1 rate, carried as ATSC A/53 cc_data in a user_data_registered_itu_t_t35 SEI message, and read back"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# The CEA-608 character sets, control codes and preamble address codes.
+craft-captions = { workspace = true }

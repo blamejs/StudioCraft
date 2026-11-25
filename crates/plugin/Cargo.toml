@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 craft-ease = { workspace = true }
+# The shared GPU frames a display capture publishes.
+craft-gpu-interop = { workspace = true }
 studiocraft-model = { workspace = true }
 studiocraft-media = { workspace = true }
 serde_json = { workspace = true }

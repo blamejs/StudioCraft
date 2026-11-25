@@ -88,6 +88,28 @@ read-back. The bench also times `cpu nv12 1080p`, a reference conversion on the 
 without a graphics adapter only the CPU case runs. This page records no baseline for these
 benches yet.
 
+### Shared display capture
+
+`cargo bench -p craft-gpu-interop --features wgpu` times how a 1080p and a 4K BGRA picture reach
+a compositor's source texture: `write_texture upload`, from CPU memory as a CPU capture is
+uploaded, and `opaque GPU copy`, from a texture already on the GPU as a shared capture is drawn.
+Each iteration waits until the GPU has finished. The bench prints the adapter it ran on, and on a
+machine without a graphics adapter it measures nothing.
+
+Measured on 2026-11-23 on Linux, in a release build, on the llvmpipe software adapter (Vulkan,
+LLVM 21.1.8). That adapter draws on the CPU, so these numbers do not show the GPU copy's cost on
+graphics hardware, and the shared path has not been measured on Windows hardware yet:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `write_texture upload 1080p` | 892 µs | 864 to 928 µs |
+| `opaque GPU copy 1080p` | 1.94 ms | 1.78 to 2.13 ms |
+| `write_texture upload 4k` | 18.26 ms | 18.14 to 18.39 ms |
+| `opaque GPU copy 4k` | 18.31 ms | 17.06 to 19.55 ms |
+
+The `write_texture` rows do not include the capture's own read-back of the desktop into CPU
+memory, which the shared path also does without.
+
 ### Audio tracks
 
 Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run
@@ -297,6 +319,33 @@ At the 4096-byte chunk size, chunking one second of stream costs 4.5 µs of one 
 per message, and allocates nothing. Sending it over loopback TCP costs 1.25 ms, 0.13% of one core,
 almost all of it in the system calls. An earlier run on the same host measured 1.505 ms for the
 TCP bench.
+
+### Face tracking
+
+Measured on 2026-11-24 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-face-track
+--bench tracker` with `CRAFT_FACE_LANDMARKER` set to the Face Landmarker bundle runs the models on
+a 1280 × 720 picture. The detector reads the whole picture and the mesh a 420-pixel crop of it. A
+followed picture is one crop and mesh run and the head pose fit. The tracker also works out the
+expression weights, smooths them and fills its output for each followed picture; the bench does
+not measure that part.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `detector_1_threads` | 5.194 ms | 5.161 to 5.229 ms |
+| `mesh_1_threads` | 22.04 ms | 21.89 to 22.19 ms |
+| `followed_picture_1_threads` | 22.56 ms | 22.45 to 22.68 ms |
+| `detector_2_threads` | 4.476 ms | 4.449 to 4.503 ms |
+| `mesh_2_threads` | 23.08 ms | 22.50 to 23.68 ms |
+| `followed_picture_2_threads` | 21.52 ms | 21.22 to 21.82 ms |
+
+At 30 fps a picture arrives every 33.3 ms. The crop, mesh and pose fit of a followed picture take
+21.5 ms on 2 threads, which leaves 11.8 ms for the expression weights, the smoothing and the
+output. A picture in which the detector
+checks a weakly held face takes about 26 ms. A search, which runs while no face is followed, takes
+the detector and two mesh runs, about 49 ms. The second thread saves 1 ms on a followed picture.
+`tests/no_alloc.rs` counts
+no allocation in the models, the pose fit or a search once their buffers are warm, on 1 thread and
+on 2.
 
 ## Measuring
 
