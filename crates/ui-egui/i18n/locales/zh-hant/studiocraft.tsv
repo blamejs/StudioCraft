@@ -107,6 +107,8 @@
 	Filters…	濾鏡…
 	Finishing Recording…	正在完成錄影…
 	Fit to Screen	縮放至符合畫面
+	Flip Horizontal	水平翻轉
+	Flip Vertical	垂直翻轉
 	Font	字型
 	Font family	字型系列
 	Format	格式
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（內建）
 	VA-API H.264 (built in)	VA-API H.264（內建）
 	VA-API HEVC (built in)	VA-API HEVC（內建）
+	VA-API AV1 (built in)	VA-API AV1（內建）
 	Height	高度
 	Help	說明
 	Hide	隱藏
@@ -368,7 +371,7 @@
 	Video	視訊
 	Video bitrate	視訊位元率
 	Video encoder	視訊編碼器
-	Video settings can't change while recording, streaming or running the replay buffer.	錄影、直播或執行重播緩衝時無法變更視訊設定。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	錄影、直播或執行重播緩衝、虛擬攝影機時無法變更視訊設定。
 	View	檢視
 	waiting for a choice in the system picker	正在等待在系統選擇器中選擇
 	waiting for the camera	正在等待攝影機

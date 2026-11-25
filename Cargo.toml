@@ -32,12 +32,15 @@ craft-gpu-device = { path = "crates/craft-gpu-device" }
 craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 craft-hwenc = { path = "crates/craft-hwenc" }
 craft-hwenc-native = { path = "crates/craft-hwenc-native" }
+craft-gpu-interop = { path = "crates/craft-gpu-interop" }
 craft-app-audio = { path = "crates/craft-app-audio" }
 craft-transitions = { path = "crates/craft-transitions" }
 craft-flv = { path = "crates/craft-flv" }
 craft-packet = { path = "crates/craft-packet" }
 craft-rtmp = { path = "crates/craft-rtmp" }
 craft-speech = { path = "crates/craft-speech" }
+craft-face-track = { path = "crates/craft-face-track" }
+craft-closed-captions = { path = "crates/craft-closed-captions" }
 
 # foundation
 thiserror = "2"
@@ -136,6 +139,13 @@ x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 egui = "0.37"
 eframe = { version = "0.37", default-features = false }
 egui-wgpu = "0.37"
+
+# web (apps/studiocraft-web, wasm32 only): the page's elements and events, files the user picks,
+# and downloads.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
 
 # Shared Craft crates: storytold/craft-libs, MIT OR Apache-2.0, pinned to one rev.
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd", features = ["serde"] }

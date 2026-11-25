@@ -1464,6 +1464,17 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
 
 [[package]]
+name = "craft-avatar"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-ease",
+ "serde",
+ "serde_json",
+ "stats_alloc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
@@ -1471,6 +1482,13 @@ dependencies = [
  "craft-timeline",
  "craft-xml",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-closed-captions"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-captions",
 ]
 
 [[package]]
@@ -1539,6 +1557,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-face-track"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "criterion",
+ "rayon",
+ "sha2",
+ "stats_alloc",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-flv"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -1582,6 +1612,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-interop"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "pollster 0.4.0",
+ "wgpu",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "craft-gpu-yuv"
 version = "0.1.0"
 dependencies = [
@@ -1608,6 +1648,7 @@ dependencies = [
  "objc2-core-video",
  "objc2-video-toolbox",
  "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -1773,6 +1814,13 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "stats_alloc",
+]
+
+[[package]]
+name = "craft-rtp"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
@@ -6539,6 +6587,8 @@ name = "studiocraft-outputs"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
+ "craft-captions",
+ "craft-closed-captions",
  "craft-flv",
  "craft-hwenc",
  "craft-media",
@@ -6565,6 +6615,7 @@ dependencies = [
  "ashpd",
  "comedy",
  "cpal",
+ "craft-gpu-interop",
  "crossbeam-queue",
  "futures-channel",
  "futures-util",
@@ -6591,6 +6642,7 @@ name = "studiocraft-plugin"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-ease",
+ "craft-gpu-interop",
  "serde_json",
  "studiocraft-media",
  "studiocraft-model",
@@ -6603,6 +6655,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "bytemuck",
  "craft-gpu-device",
+ "craft-gpu-interop",
  "craft-gpu-yuv",
  "craft-transitions",
  "criterion",
@@ -6627,12 +6680,14 @@ dependencies = [
  "craft-color",
  "craft-color-transform",
  "craft-font-catalog",
+ "craft-gpu-interop",
  "craft-image-codecs",
  "craft-media",
  "craft-speech",
  "criterion",
  "image",
  "jpeg-encoder",
+ "libc",
  "log",
  "serde_json",
  "stats_alloc",
@@ -6650,6 +6705,7 @@ dependencies = [
  "chrono",
  "craft-atomic",
  "craft-captions",
+ "craft-face-track",
  "craft-hwenc",
  "craft-speech",
  "dirs",
@@ -6704,6 +6760,22 @@ dependencies = [
  "studiocraft-render",
  "studiocraft-studio",
  "wgpu",
+]
+
+[[package]]
+name = "studiocraft-web"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-i18n",
+ "js-sys",
+ "serde_json",
+ "studiocraft-engine",
+ "studiocraft-model",
+ "studiocraft-plugin",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

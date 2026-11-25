@@ -59,6 +59,105 @@ impl MonitorMode {
     }
 }
 
+/// How many mix tracks there are. Each is a mix of the sources assigned to it, and a recording
+/// writes each mix track it is set to carry as an audio stream of its own.
+pub const MIX_TRACKS: usize = 6;
+
+/// A set of the mix tracks 1 to [`MIX_TRACKS`]. Files and commands write it as a list of track
+/// numbers in increasing order, such as `[1, 3]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MixTracks(u8);
+
+impl MixTracks {
+    /// Every track.
+    pub const ALL: MixTracks = MixTracks((1 << MIX_TRACKS) - 1);
+    /// No track.
+    pub const NONE: MixTracks = MixTracks(0);
+    /// Track 1 alone.
+    pub const FIRST: MixTracks = MixTracks(1);
+
+    /// The tracks numbered `numbers` (1 to [`MIX_TRACKS`]). A number out of range or given twice
+    /// is refused.
+    pub fn from_numbers(numbers: &[u64]) -> Result<MixTracks, String> {
+        numbers.iter().try_fold(MixTracks::NONE, |set, &n| set.with(n))
+    }
+
+    /// `self` with track `n` added; an error when `n` is out of range or already in the set.
+    fn with(self, n: u64) -> Result<MixTracks, String> {
+        if n == 0 || n > MIX_TRACKS as u64 {
+            return Err(format!("mix track {n} does not exist; the tracks are 1 to {MIX_TRACKS}"));
+        }
+        let bit = 1u8 << (n - 1);
+        if self.0 & bit != 0 {
+            return Err(format!("mix track {n} is listed twice"));
+        }
+        Ok(MixTracks(self.0 | bit))
+    }
+
+    /// The set with track `n` for each bit `n - 1` of `bits`; bits past the last track are left
+    /// out.
+    pub fn from_bits(bits: u8) -> MixTracks {
+        MixTracks(bits & MixTracks::ALL.0)
+    }
+
+    /// Bit `n - 1` is set for each track `n` in the set.
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Whether track `n` (1 to [`MIX_TRACKS`]) is in the set.
+    pub fn contains(self, n: usize) -> bool {
+        (1..=MIX_TRACKS).contains(&n) && self.0 & (1 << (n - 1)) != 0
+    }
+
+    /// The track numbers in the set, lowest first.
+    pub fn numbers(self) -> impl Iterator<Item = usize> {
+        (1..=MIX_TRACKS).filter(move |&n| self.contains(n))
+    }
+
+    pub fn len(self) -> usize {
+        self.0.count_ones() as usize
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl Default for MixTracks {
+    fn default() -> Self {
+        MixTracks::ALL
+    }
+}
+
+impl Serialize for MixTracks {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.numbers())
+    }
+}
+
+impl<'de> Deserialize<'de> for MixTracks {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<MixTracks, D::Error> {
+        struct List;
+        impl<'de> serde::de::Visitor<'de> for List {
+            type Value = MixTracks;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a list of mix track numbers from 1 to {MIX_TRACKS}")
+            }
+            // Each number is checked as it is read, so a long list is refused by its seventh
+            // number without being held in memory.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<MixTracks, A::Error> {
+                let mut set = MixTracks::NONE;
+                while let Some(n) = seq.next_element::<u64>()? {
+                    set = set.with(n).map_err(serde::de::Error::custom)?;
+                }
+                Ok(set)
+            }
+        }
+        d.deserialize_seq(List)
+    }
+}
+
 /// Volume, mute, sync offset and monitoring of a source's audio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -75,6 +174,8 @@ pub struct AudioState {
     /// it when its monitoring setting sends it to the program mix, so a monitor-only source is
     /// left out until it is set to `Some(true)`.
     pub record_track: Option<bool>,
+    /// The mix tracks the source's audio goes to; every track by default.
+    pub mix_tracks: MixTracks,
 }
 
 /// Longest audio sync offset accepted, in milliseconds.
@@ -88,7 +189,7 @@ pub const MAX_GAIN: f32 = 10.0;
 
 impl Default for AudioState {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off, record_track: None }
+        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off, record_track: None, mix_tracks: MixTracks::ALL }
     }
 }
 

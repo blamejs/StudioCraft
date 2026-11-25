@@ -107,6 +107,8 @@
 	Filters…	Filtros…
 	Finishing Recording…	Finalizando a gravação…
 	Fit to Screen	Ajustar à tela
+	Flip Horizontal	Inverter horizontalmente
+	Flip Vertical	Inverter verticalmente
 	Font	Fonte tipográfica
 	Font family	Família tipográfica
 	Format	Formato
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrado)
 	VA-API H.264 (built in)	VA-API H.264 (integrado)
 	VA-API HEVC (built in)	VA-API HEVC (integrado)
+	VA-API AV1 (built in)	VA-API AV1 (integrado)
 	Height	Altura
 	Help	Ajuda
 	Hide	Ocultar
@@ -367,7 +370,7 @@
 	Video	Vídeo
 	Video bitrate	Taxa de bits do vídeo
 	Video encoder	Codificador de vídeo
-	Video settings can't change while recording, streaming or running the replay buffer.	As configurações de vídeo não podem mudar durante uma gravação, uma transmissão ou com o buffer de replay ativo.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	As configurações de vídeo não podem mudar durante uma gravação, uma transmissão ou com o buffer de replay ou a câmera virtual ativos.
 	View	Exibir
 	Waiting for the program picture…	Aguardando a imagem do programa…
 	waiting for a choice in the system picker	aguardando uma escolha no seletor do sistema

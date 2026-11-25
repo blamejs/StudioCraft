@@ -17,6 +17,12 @@ carry the session token from the `STUDIOCRAFT_CONTROL_TOKEN` environment variabl
 started with (64 hexadecimal characters). The app does not start when `--control` is given without
 a valid token.
 
+In [Safe Mode](features.md#safe-mode), from `--safe-mode` or after a session that ended without
+closing, the app checks the token at start but does not listen on the port. It starts listening
+when the user leaves Safe Mode: Leave Safe Mode in the banner, or Start Normally when the window
+asks after an unclean shutdown. When the port can't be used then, the status
+bar shows the error and the app keeps running without the control channel.
+
 In a POSIX shell, make a token and start the app with it:
 
 ```sh
@@ -59,7 +65,7 @@ answer.
 | --- | --- | --- |
 | `engine.execute` | `{"command": "<id>", "params"?: {...}}` | The command's result. |
 | `engine.commands` | `{"filter"?: "<text>"}` | Every command, or those whose id or label contains `filter` (case is ignored). |
-| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream and replay buffer state (`recording`, `streaming`, `replay`), frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
+| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream, replay buffer and virtual camera state (`recording`, `streaming`, `replay`, `virtual_camera`), frame statistics and canvas. `virtual_camera` is `{"active": false}`, or while it runs `active`, `status`, `target` (the device), `seconds` and `bytes` (the picture bytes sent). `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
 | `render.preview` | `{"view"?: "program" \| "preview", "max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the program, or of the preview in studio mode. |
 | `ui.inspect` | none | The window's layout and open dialogs ([`ui.inspect`](#uiinspect)). |
 | `ui.menu.list` | none | The menu bar as the window shows it, as a tree ([`ui.menu.list`](#uimenulist)). |
@@ -84,7 +90,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `source.mix_tracks`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `marker.rename`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -340,6 +346,16 @@ delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in samp
 the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
 are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
 
+### `source.mix_tracks`
+
+`source.mix_tracks` takes `{"source", "tracks"}` and assigns the source's audio to the mix tracks
+listed in `tracks`, numbers from 1 to 6 in any order; `[]` takes the source off every track. A
+number out of range, a number listed twice, a value that is not a list of whole numbers, or a
+source without audio is an error and changes nothing. Giving the tracks the source already has is
+no change and adds no undo step. The scene collection saves each source's tracks as
+`audio.mix_tracks`, and a new source is on all six. A recording writes the tracks in its profile's
+`output.recording_tracks` ([Recording](features.md#recording)).
+
 ### `filter.meter`
 
 `filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
@@ -561,15 +577,59 @@ files are written once the phrases up to the recording's end are finished, when 
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
 
+### `avatar.models` and the face tracking model
+
+The face tracking model is kept in the speech models' `models_dir`, as
+`<models_dir>/face-landmarker/face_landmarker.task` (3,758,596 bytes).
+
+`avatar.models` takes no params and returns `models_dir`, `models` (each with `id`, `name`,
+`description`, `bytes`, `installed`, `license`, `license_url`, `author` and `source`), `job` (the
+`model` being downloaded or installed, its `kind`, `download` or `install`, and `done` and `total`
+bytes, or null) and `failure` (why the last download or install failed, or null; it is cleared
+when the next one starts). `installed` says whether the model's file is in place with its pinned
+size; over MCP with roots it is null for a file outside the read roots.
+
+`avatar.model_download` takes `{"model"?}` and downloads that model, by default `face-landmarker`,
+on a background thread. It returns `{"model", "downloading": true, "bytes"}` at once. A file
+already there with its pinned size and SHA-256 sum is kept; otherwise the file is downloaded into
+`face_landmarker.task.part`, checked against them, and renamed into place. A file that fails the
+check is deleted.
+
+`avatar.model_install` takes `{"path", "model"?}` and copies the model file at `path` into the
+models folder. Its size is checked at once, and a file of another size is an error. Its SHA-256 sum
+is checked on a background thread while it is copied, and a file that fails the check is deleted
+without changing a model already in place. It returns `{"model", "installing": true, "bytes"}`.
+
+A status message reports the end of a download or install. `avatar.model_download_cancel` stops
+the one that runs and deletes its partial file. An unknown model, an empty `model` or `path`, a
+missing file, a folder, and a second download or install while one runs are errors.
+
 ### `pause.*`
 
-`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
-program with the scene collection's transition. Each value given replaces its profile setting for
-this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
-seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
-is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
-out of range are errors. While paused, the values given apply at once without a new transition,
-and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+`pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,
+"size_pct"?, "fit"?, "background"?, "mute_scene"?}` and shows the pause screen in the program with
+the scene collection's transition. Each value given replaces its profile setting for this pause
+only:
+
+| Param | Value |
+|-------|-------|
+| `media` | A picture or video file, `""` for none. |
+| `countdown_s` | 0 to 43,200 seconds, 0 for no countdown. |
+| `text` | The countdown text, at most 200 characters with exactly one `{time}`. |
+| `zero_text` | The text shown in place of the countdown at zero, at most 200 characters. |
+| `at_zero` | `keep` or `resume`. |
+| `anchor` | Where the text sits: `top_left`, `top_center`, `top_right`, `middle_left`, `center`, `middle_right`, `bottom_left`, `bottom_center` or `bottom_right`. |
+| `size_pct` | The text's height, 2 to 15 percent of the canvas height. |
+| `fit` | How the picture or video is sized to the canvas: `fit`, `fill` or `stretch`. |
+| `background` | The color under the picture or video, `#rrggbb` or `#rrggbbaa`. |
+| `mute_scene` | `true` fades the program mix out while paused, `false` keeps it. |
+
+A `null` value, a value of the wrong type, a file type that is not a picture or video, a path
+longer than 4,096 bytes or holding a NUL character, a name that is not one of the listed ones, and
+a value out of range are errors. While paused, the values given apply at once without a new
+transition, and a given `countdown_s` starts the countdown again. A changed `mute_scene` fades the
+program mix out or back in over the scene collection's transition length. It returns what
+`pause.status` returns.
 
 `pause.stop` takes no params and shows the program scene again with the scene collection's
 transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
@@ -663,8 +723,13 @@ under that name now. `status` is `idle` while no stream runs, `not_in_stream` fo
 added after the stream started, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
-`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
-`cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `max_tries`,
+`next_try_ms`, `error` and `cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`attempt` is the number of the next try and `max_tries` the failed tries in a row the running
+stream allows, so the tries left, the next one included, are `max_tries - attempt + 1`.
+`next_try_ms` is the time in milliseconds until the next try starts. It is `null` while a try runs,
+and for a `waiting_for_network` destination whose server is given as an IP address, which tries
+when a route to the server returns.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |
@@ -728,13 +793,20 @@ or trying to is not removed until it is stopped.
 `stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
 that destination of the running stream; the others go on. They return `{"id", "on"}`.
 
+`stream.retry_now` takes `{"id"}` and starts the next try of that destination of the running stream
+at once, as Try Now in the Streaming window does, when it is `retrying` and waits for its next try or
+is `waiting_for_network`; a destination waiting for the network tries without a route. It returns
+`{"id", "started"}`, where `started` is `false` for a destination that was not waiting, which it
+leaves as it is. Unlike a stop and start, the try counts toward the failed tries in a row.
+
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
 that is not empty and is not a streaming service id, a parameter
-of the wrong type, a start or stop while no stream runs or while the running stream was started with
-another profile, and a start of a destination whose held key is not set. While a stream of another
+of the wrong type, a start, stop or `stream.retry_now` while no stream runs or while the running
+stream was started with another profile, a `stream.retry_now` of a destination that is not in the
+running stream, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.
@@ -780,7 +852,7 @@ A destination that has been checked at its current server and service in this se
 "verdict", "message", "template", "args", "evidence", "at_ms"}`. `automatic` is `true` for a check
 that ran by itself after a failure. `message` is the verdict in English, `template` the same text
 with `{name}` placeholders and `args` their values, and `at_ms` the time the check reported, in
-milliseconds since 1970. `evidence` lists every step, at most 22, each `{"check", "target", "outcome",
+milliseconds since 1970. `evidence` lists every step, at most 26, each `{"check", "target", "outcome",
 "detail"}`, where `target` is the host, address or variable the step looked at and `detail` what the
 system or the server reported, in English.
 
@@ -790,9 +862,10 @@ system or the server reported, in English.
 | `name_not_found` | Windows only: the DNS server answered that the server's name does not exist. |
 | `dns_no_answer` | The lookup gave no answer within 10 s. |
 | `lookup_failed` | The server's name could not be looked up for another reason. |
-| `rejected` | The server takes connections, and the last failure was a refusal of `connect` or `publish`. |
+| `rejected` | The server takes connections and does not fail the RTMP handshake, and the last failure was a refusal of `connect` or `publish`. |
 | `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
 | `service_reports_problem` | The service's status summary reports a problem. |
+| `not_stream_server` | The server's port takes the connection (and the secure handshake for `rtmps://`), and every address that connected finished the RTMP handshake without completing it. `args.detail` says what the port did instead. |
 | `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
 | `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
 | `refused` | An address of the server refused the TCP connection. |
@@ -812,14 +885,17 @@ The first verdict in the table that fits is the one given.
 | `lookup` | The lookup of the server's name; `detail` lists up to 8 of the addresses found and how many more there are. |
 | `connect` | A TCP connection to the server's port, for `rtmp://`. |
 | `secure_connect` | A TCP connection and secure handshake to the server's port, for `rtmps://`. |
+| `rtmp_handshake` | The RTMP handshake (C0 and C1 out, S0 and S1 in, C2 out, S2 in) over a connection to the server's port that opened; no command and no stream key follow it. |
 | `connect_443` | A TCP connection and secure handshake to port 443 of the server. |
 | `ingest_list` | The service's list of ingest servers; `detail` names the two other servers chosen. |
 | `other_ingest` | A lookup, TCP connection and secure handshake to another ingest server of the service. |
 | `status_page` | The service's status summary; `detail` holds the status it reports. |
 
 `outcome` is `ok`, `set` (a proxy variable is set), `problem` (the status summary reports a
-problem), `unknown` (the system could not say), `unfinished` (the step had not finished when the
-check reported), or the `cause` id of a failure from the table above.
+problem), `not_rtmp` (the port answered the RTMP handshake with other data), `unknown` (the system
+could not say), `unfinished` (the step had not finished when the check reported), or the `cause` id
+of a failure from the table above. An `rtmp_handshake` step whose server closed the connection is
+`closed_during_setup`, and one that sent nothing in time is `setup_timed_out`.
 
 ### `video.displays` and `video.canvas_from_display`
 
@@ -867,7 +943,7 @@ Video, from `video.canvas_from_display`, or by switching to a profile with anoth
 
 - An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
   inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
-  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  The crop and the flips are kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
   set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
   it.
 - Any other item keeps its center at the same place in proportion to the canvas. Its size is

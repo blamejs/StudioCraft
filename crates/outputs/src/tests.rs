@@ -7,6 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, block_pool};
 use studiocraft_media::clock::tick_of;
 use studiocraft_media::pool::Pool;
+use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, VideoFrame};
 use studiocraft_platform::ffmpeg;
@@ -122,6 +123,68 @@ fn containers_follow_the_extension() {
 }
 
 #[test]
+fn an_ffmpeg_recording_of_several_mix_tracks_has_an_audio_stream_for_each() {
+    let Ok(program) = ffmpeg::locate("") else { return };
+    for ext in ["mkv", "mp4"] {
+        let dir = temp_dir(&format!("tracks-{ext}"));
+        let file = dir.join(format!("take.{ext}"));
+        let mut j = job(program.clone(), RateControl::Quality(23));
+        j.audio_streams = ["Track 1", "Track 2", "Track 4"].map(String::from).to_vec();
+        let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), j).unwrap();
+        assert_eq!(out.audio_streams().len(), 3);
+        // The first two tracks get tones of different levels, and the third gets no blocks and is
+        // written as silence beside them.
+        feed_levels(out.as_ref(), 1.0, &[0.2, 0.05]);
+        let r = out.stop();
+        // The root mean square of a stream's decoded samples.
+        let level = |map: &str| {
+            let out = ffmpeg::command(&program)
+                .args(["-hide_banner", "-v", "error", "-i"])
+                .arg(&file)
+                .args(["-map", map, "-f", "f32le", "-ac", "2", "-ar", "48000", "-"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{ext}: {map} decodes");
+            let samples: Vec<f32> = out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+            assert!(!samples.is_empty(), "{ext}: {map} has samples");
+            (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+        };
+        let decodes = |map: &str| {
+            ffmpeg::command(&program)
+                .args(["-hide_banner", "-v", "error", "-i"])
+                .arg(&file)
+                .args(["-map", map, "-f", "null", "-"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let streams: Vec<bool> = ["0:a:0", "0:a:1", "0:a:2", "0:a:3"].into_iter().map(decodes).collect();
+        let levels: Vec<f32> =
+            if r.is_ok() && streams[..3] == [true; 3] { ["0:a:0", "0:a:1", "0:a:2"].into_iter().map(level).collect() } else { Vec::new() };
+        let names = (ext == "mkv").then(|| {
+            let bytes = std::fs::read(&file).unwrap();
+            let d = craft_media::matroska::Demuxer::from_slice(&bytes).unwrap();
+            d.tracks().iter().filter(|t| t.codec_id.starts_with("A_")).map(|t| t.name.clone()).collect::<Vec<_>>()
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(r.is_ok(), "{ext}: {r:?}");
+        assert_eq!(streams, [true, true, true, false], "{ext}: three audio streams");
+        // A tone of peak p has a root mean square of p / sqrt(2): about 0.141 and 0.035.
+        let [first, second, third] = levels[..] else { panic!("{ext}: levels {levels:?}") };
+        assert!((0.1..0.18).contains(&first), "{ext}: the first stream holds the first track's tone: {levels:?}");
+        assert!((0.02..0.05).contains(&second), "{ext}: the second stream holds the second track's tone: {levels:?}");
+        assert!(third < 0.005, "{ext}: the third stream is silent: {levels:?}");
+        if let Some(names) = names {
+            assert_eq!(names, ["Track 1", "Track 2", "Track 4"], "each stream is titled with its track");
+        }
+    }
+}
+
+#[test]
 fn lossless_recordings_keep_lossless_audio_in_every_container() {
     assert_eq!(lossless_audio_codec("matroska"), "flac");
     assert_eq!(lossless_audio_codec("mp4"), "alac");
@@ -150,26 +213,36 @@ fn job(program: PathBuf, rate: RateControl) -> OutputJob {
         video_encoder_settings: Settings::new().with("preset", "ultrafast"),
         rate,
         audio_bitrate_kbps: 128,
+        audio_streams: Vec::new(),
         ffmpeg: program,
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
+        captions: None,
     }
 }
 
 /// Feed `seconds` of gray frames at 10 per second and a tone, stamped as the pipeline would.
 fn feed(out: &dyn OutputInstance, seconds: f64) {
+    feed_levels(out, seconds, &[0.2]);
+}
+
+/// [`feed`] with a tone of peak `levels[k]` on the output's audio stream `k`. A stream with a
+/// level of 0, or past the end of `levels`, gets no blocks.
+fn feed_levels(out: &dyn OutputInstance, seconds: f64, levels: &[f32]) {
     let frames = Pool::new(8, VideoFrame::default);
     let blocks = block_pool();
-    let (video, audio) = (out.video(), out.audio());
+    let (video, audio) = (out.video(), out.audio_streams());
     let total_blocks = (seconds * 48_000.0 / BLOCK_FRAMES as f64) as u64;
     let mut sent_frames = 0u64;
     for b in 0..total_blocks {
         let t = b as f64 * BLOCK_FRAMES as f64 / 48_000.0;
-        let mut block = blocks.take();
-        block.samples.clear();
-        block.samples.extend((0..BLOCK_SAMPLES).map(|i| ((i as f32) * 0.05).sin() * 0.2));
-        block.pts = tick_of(Duration::from_secs_f64(t));
-        audio.push(block);
+        for (queue, &level) in audio.iter().zip(levels).filter(|(_, l)| **l != 0.0) {
+            let mut block = blocks.take();
+            block.samples.clear();
+            block.samples.extend((0..BLOCK_SAMPLES).map(|i| ((i as f32) * 0.05).sin() * level));
+            block.pts = tick_of(Duration::from_secs_f64(t));
+            queue.push(block);
+        }
         while (sent_frames as f64) / 10.0 <= t {
             let mut f = frames.take();
             assert!(f.reshape(64, 48, PixelFormat::Nv12));
@@ -265,8 +338,9 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
         "vt_native_hevc",
         "vaapi_native_h264",
         "vaapi_native_hevc",
+        "vaapi_native_av1",
     ];
-    assert_eq!(ids[ids.len().saturating_sub(12)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
+    assert_eq!(ids[ids.len().saturating_sub(13)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
     for id in built_in {
         assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
     }
@@ -351,8 +425,14 @@ fn streams_over_rtmp_to_a_local_server() {
         .spawn()
         .unwrap();
     std::thread::sleep(Duration::from_millis(700));
-    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), stream_job(1)).unwrap();
+    let mut job = stream_job(1);
+    let phrases = Arc::new(Fifo::new(8));
+    job.captions = Some(Arc::clone(&phrases));
+    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), job).unwrap();
     assert_eq!(out.target(), url, "the key is not shown");
+    // The second phrase wraps to a new line, so the first line is complete.
+    phrases.push("checked by another decoder".to_string());
+    phrases.push("second line".to_string());
     feed(out.as_ref(), 1.5);
     out.stop().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -361,7 +441,17 @@ fn streams_over_rtmp_to_a_local_server() {
     }
     let _ = server.kill();
     let (frames, has_audio) = probe(&program, &received);
+    // ffmpeg reads the closed captions out of the H.264 stream it received.
+    let srt = ffmpeg::command(&program)
+        .current_dir(&dir)
+        .args(["-hide_banner", "-v", "error", "-f", "lavfi", "-i", "movie=received.flv[out0+subcc]", "-map", "0:s", "-f", "srt", "-"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    let srt = String::from_utf8_lossy(&srt.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(frames >= 10, "{frames}");
     assert!(has_audio);
+    assert!(srt.contains("checked by another decoder"), "{srt}");
 }

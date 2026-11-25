@@ -48,6 +48,7 @@ static VT_H264: VideoToolbox = VideoToolbox::H264;
 static VT_HEVC: VideoToolbox = VideoToolbox::HEVC;
 static VAAPI_H264: VaApi = VaApi::H264;
 static VAAPI_HEVC: VaApi = VaApi::HEVC;
+static VAAPI_AV1: VaApi = VaApi::AV1;
 
 /// The built-in encoder that runs `candidate` (a `craft_hwenc` candidate id) in this process, if
 /// any.
@@ -62,6 +63,7 @@ pub fn for_candidate(candidate: &str) -> Option<&'static dyn Hardware> {
         "vt_hevc" => Some(&VT_HEVC),
         "vaapi_h264" => Some(&VAAPI_H264),
         "vaapi_hevc" => Some(&VAAPI_HEVC),
+        "vaapi_av1" => Some(&VAAPI_AV1),
         _ => None,
     }
 }
@@ -199,8 +201,9 @@ mod tests {
         assert_eq!(ids("vt_hevc"), Some(("vt_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("vaapi_h264"), Some(("vaapi_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("vaapi_hevc"), Some(("vaapi_native_hevc", studiocraft_plugin::Codec::Hevc)));
+        assert_eq!(ids("vaapi_av1"), Some(("vaapi_native_av1", studiocraft_plugin::Codec::Av1)));
         assert_eq!(ids("nvenc_av1"), Some(("nvenc_native_av1", studiocraft_plugin::Codec::Av1)));
-        for none in ["amf_h264", "qsv_hevc", "qsv_av1", "vaapi_av1", "x264"] {
+        for none in ["amf_h264", "qsv_hevc", "qsv_av1", "x264"] {
             assert!(for_candidate(none).is_none(), "{none}");
         }
     }

@@ -107,6 +107,8 @@
 	Filters…	Фильтры…
 	Finishing Recording…	Завершение записи…
 	Fit to Screen	Вписать в экран
+	Flip Horizontal	Отразить по горизонтали
+	Flip Vertical	Отразить по вертикали
 	Font	Шрифт
 	Font family	Семейство шрифтов
 	Format	Формат
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (встроенный)
 	VA-API H.264 (built in)	VA-API H.264 (встроенный)
 	VA-API HEVC (built in)	VA-API HEVC (встроенный)
+	VA-API AV1 (built in)	VA-API AV1 (встроенный)
 	Height	Высота
 	Help	Справка
 	Hide	Скрыть
@@ -368,7 +371,7 @@
 	Video	Видео
 	Video bitrate	Битрейт видео
 	Video encoder	Кодировщик видео
-	Video settings can't change while recording, streaming or running the replay buffer.	Настройки видео нельзя менять во время записи, трансляции или работы буфера повтора.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Настройки видео нельзя менять во время записи, трансляции, работы буфера повтора или виртуальной камеры.
 	View	Вид
 	waiting for a choice in the system picker	ожидание выбора в системном окне выбора
 	waiting for the camera	ожидание камеры

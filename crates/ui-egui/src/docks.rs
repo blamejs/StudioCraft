@@ -355,6 +355,8 @@ pub fn item_menu(
             ("selection.reset", "Reset Transform"),
             ("selection.rotate_cw", "Rotate 90° Clockwise"),
             ("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
+            ("selection.flip_horizontal", "Flip Horizontal"),
+            ("selection.flip_vertical", "Flip Vertical"),
             ("selection.fit", "Fit to Screen"),
             ("selection.fill", "Fill Screen"),
             ("selection.stretch", "Stretch to Screen"),

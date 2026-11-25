@@ -107,6 +107,8 @@
 	Filters…	フィルター…
 	Finishing Recording…	録画の終了処理中…
 	Fit to Screen	画面に合わせる
+	Flip Horizontal	左右反転
+	Flip Vertical	上下反転
 	Font	フォント
 	Font family	フォントファミリー
 	Format	形式
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (内蔵)
 	VA-API H.264 (built in)	VA-API H.264 (内蔵)
 	VA-API HEVC (built in)	VA-API HEVC (内蔵)
+	VA-API AV1 (built in)	VA-API AV1 (内蔵)
 	Height	高さ
 	Help	ヘルプ
 	Hide	非表示
@@ -368,7 +371,7 @@
 	Video	映像
 	Video bitrate	映像ビットレート
 	Video encoder	映像エンコーダー
-	Video settings can't change while recording, streaming or running the replay buffer.	録画中、配信中、リプレイバッファーの実行中は映像の設定を変更できません。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	録画中、配信中、リプレイバッファーや仮想カメラの実行中は映像の設定を変更できません。
 	View	表示
 	waiting for a choice in the system picker	システムの選択画面での選択を待っています
 	waiting for the camera	カメラを待っています

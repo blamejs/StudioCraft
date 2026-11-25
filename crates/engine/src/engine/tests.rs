@@ -555,6 +555,9 @@ fn runtime_commands_are_handed_to_the_app() {
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
+        ("vcam.start", RuntimeAction::StartVirtualCamera),
+        ("vcam.stop", RuntimeAction::StopVirtualCamera),
+        ("vcam.toggle", RuntimeAction::ToggleVirtualCamera),
         ("audio.loudness", RuntimeAction::AudioLoudness),
         ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
         ("audio_tracks.open_last", RuntimeAction::AudioTracksOpenLast),
@@ -656,16 +659,56 @@ fn pause_commands_are_handed_to_the_app_with_checked_values() {
     let mut e = engine();
     let rev = e.revision();
     for (id, params, action) in [
-        ("pause.start", json!({}), RuntimeAction::PauseStart { media: None, countdown_s: None, at_zero: None }),
+        ("pause.start", json!({}), RuntimeAction::PauseStart(PauseValues::default())),
         (
             "pause.start",
             json!({"media": "", "countdown_s": 0, "at_zero": "keep"}),
-            RuntimeAction::PauseStart { media: Some(String::new()), countdown_s: Some(0), at_zero: Some(PauseAtZero::Keep) },
+            RuntimeAction::PauseStart(PauseValues {
+                media: Some(String::new()),
+                countdown_s: Some(0),
+                at_zero: Some(PauseAtZero::Keep),
+                ..PauseValues::default()
+            }),
         ),
         (
             "pause.start",
             json!({"media": "C:/break.png", "countdown_s": 43_200, "at_zero": "resume"}),
-            RuntimeAction::PauseStart { media: Some("C:/break.png".into()), countdown_s: Some(43_200), at_zero: Some(PauseAtZero::Resume) },
+            RuntimeAction::PauseStart(PauseValues {
+                media: Some("C:/break.png".into()),
+                countdown_s: Some(43_200),
+                at_zero: Some(PauseAtZero::Resume),
+                ..PauseValues::default()
+            }),
+        ),
+        (
+            "pause.start",
+            json!({
+                "text": "Back at {time}", "zero_text": "", "anchor": "top_right", "size_pct": 2, "fit": "stretch",
+                "background": "#00000000", "mute_scene": false
+            }),
+            RuntimeAction::PauseStart(PauseValues {
+                text: Some("Back at {time}".into()),
+                zero_text: Some(String::new()),
+                anchor: Some(PauseAnchor::TopRight),
+                size_pct: Some(2),
+                fit: Some(FitMode::Stretch),
+                background: Some("#00000000".into()),
+                mute_scene: Some(false),
+                ..PauseValues::default()
+            }),
+        ),
+        (
+            "pause.start",
+            json!({"text": "{time}", "anchor": "center", "size_pct": 15, "fit": "fill", "background": "#ff8000", "mute_scene": true}),
+            RuntimeAction::PauseStart(PauseValues {
+                text: Some("{time}".into()),
+                anchor: Some(PauseAnchor::Center),
+                size_pct: Some(15),
+                fit: Some(FitMode::Fill),
+                background: Some("#ff8000".into()),
+                mute_scene: Some(true),
+                ..PauseValues::default()
+            }),
         ),
         ("pause.stop", json!({}), RuntimeAction::PauseStop),
         ("pause.toggle", json!({}), RuntimeAction::PauseToggle),
@@ -690,11 +733,43 @@ fn pause_commands_are_handed_to_the_app_with_checked_values() {
         ("pause.start", json!({"media": 5})),
         ("pause.start", json!({"media": "a\u{0}b.png"})),
         ("pause.start", json!({"meda": "x.png"})),
+        ("pause.start", json!({"text": "Back soon"})),
+        ("pause.start", json!({"text": "{time} or {time}"})),
+        ("pause.start", json!({"text": format!("{}{{time}}", "x".repeat(195))})),
+        ("pause.start", json!({"text": null})),
+        ("pause.start", json!({"zero_text": "x".repeat(201)})),
+        ("pause.start", json!({"zero_text": 1})),
+        ("pause.start", json!({"anchor": "middle"})),
+        ("pause.start", json!({"anchor": "Center"})),
+        ("pause.start", json!({"anchor": ""})),
+        ("pause.start", json!({"size_pct": 1})),
+        ("pause.start", json!({"size_pct": 16})),
+        ("pause.start", json!({"size_pct": 6.5})),
+        ("pause.start", json!({"fit": "contain"})),
+        ("pause.start", json!({"fit": "Fit"})),
+        ("pause.start", json!({"background": "red"})),
+        ("pause.start", json!({"background": "#12345"})),
+        ("pause.start", json!({"background": ""})),
+        ("pause.start", json!({"mute_scene": "yes"})),
+        ("pause.start", json!({"mute_scene": 1})),
+        ("pause.start", json!({"mute_scene": null})),
         ("pause.extend", json!({"seconds": 0})),
         ("pause.extend", json!({"seconds": 43_201})),
         ("pause.extend", json!({})),
     ] {
         assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+    // Each error names the parameter and what it must be.
+    for (bad, words) in [
+        (json!({"size_pct": 16}), ["size_pct", "2 to 15"]),
+        (json!({"anchor": "middle"}), ["anchor", "bottom_center"]),
+        (json!({"fit": "contain"}), ["fit", "stretch"]),
+        (json!({"background": "red"}), ["background", "#rrggbbaa"]),
+        (json!({"text": "Back soon"}), ["countdown text", "{time}"]),
+        (json!({"zero_text": "x".repeat(201)}), ["text at zero", "200"]),
+    ] {
+        let err = run(&mut e, "pause.start", bad.clone()).map(|_| ()).unwrap_err().to_string();
+        assert!(words.iter().all(|w| err.contains(w)), "{bad}: {err}");
     }
 }
 
@@ -748,6 +823,43 @@ fn caption_commands_are_handed_to_the_app() {
 }
 
 #[test]
+fn face_tracking_model_commands_are_handed_to_the_app() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (id, params, action) in [
+        ("avatar.models", json!({}), RuntimeAction::AvatarModels),
+        ("avatar.model_download", json!({}), RuntimeAction::AvatarModelDownload { model: None }),
+        ("avatar.model_download", json!({"model": "face-landmarker"}), RuntimeAction::AvatarModelDownload { model: Some("face-landmarker".into()) }),
+        ("avatar.model_download_cancel", json!({}), RuntimeAction::AvatarModelDownloadCancel),
+        ("avatar.model_install", json!({"path": "/m/f.task"}), RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: None }),
+        (
+            "avatar.model_install",
+            json!({"path": "/m/f.task", "model": "face-landmarker"}),
+            RuntimeAction::AvatarModelInstall { path: "/m/f.task".into(), model: Some("face-landmarker".into()) },
+        ),
+    ] {
+        let o = run(&mut e, id, params).unwrap();
+        assert_eq!(o.runtime, Some(action), "{id}");
+        assert!(!o.changed);
+    }
+    assert_eq!(e.revision(), rev, "nothing in the collection changed");
+    for (id, bad) in [
+        ("avatar.model_download", json!({"model": ""})),
+        ("avatar.model_download", json!({"model": " "})),
+        ("avatar.model_download", json!({"model": 3})),
+        ("avatar.model_download", json!({"modle": "face-landmarker"})),
+        ("avatar.model_install", json!({})),
+        ("avatar.model_install", json!({"path": ""})),
+        ("avatar.model_install", json!({"path": "  "})),
+        ("avatar.model_install", json!({"path": 3})),
+        ("avatar.model_install", json!({"path": "/m/f.task", "model": ""})),
+        ("avatar.models", json!({"model": "face-landmarker"})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
 fn a_source_is_set_to_record_its_own_track_or_not() {
     let mut e = engine();
     run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
@@ -774,6 +886,41 @@ fn a_source_is_set_to_record_its_own_track_or_not() {
     let silent = run(&mut e, "source.set_record_track", json!({"source": "Video", "on": true}));
     assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
     assert!(matches!(run(&mut e, "source.set_record_track", json!({"source": "ghost", "on": true})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
+fn a_source_is_assigned_to_mix_tracks() {
+    let mut e = engine();
+    run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let tracks = |e: &Engine| e.collection().source_by_name("Mic").map(|s| s.audio.mix_tracks.numbers().collect::<Vec<_>>());
+    assert_eq!(tracks(&e), Some(vec![1, 2, 3, 4, 5, 6]), "a new source goes to every track");
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [3, 1]})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "the order given does not matter");
+    assert_eq!(e.undo_label(), Some("Mix Tracks"));
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": [1, 3]})).unwrap().changed, "the same tracks are no change");
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "source.mix_tracks", json!({"source": "Mic", "tracks": []})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![]), "a source can be on no track");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(tracks(&e), Some(vec![1, 3]), "one undo step");
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"source": "Mic", "tracks": [0]}),
+        json!({"source": "Mic", "tracks": [7]}),
+        json!({"source": "Mic", "tracks": [2, 2]}),
+        json!({"source": "Mic", "tracks": [1.5]}),
+        json!({"source": "Mic", "tracks": 1}),
+        json!({"source": "Mic", "tracks": null}),
+        json!({"source": "Mic", "tracks": ["1"]}),
+    ] {
+        assert!(run(&mut e, "source.mix_tracks", bad.clone()).is_err(), "{bad}");
+        assert_eq!(tracks(&e), Some(vec![1, 3]), "{bad} changes nothing");
+    }
+    add_color(&mut e, "Video");
+    let silent = run(&mut e, "source.mix_tracks", json!({"source": "Video", "tracks": [1]}));
+    assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
+    assert!(matches!(run(&mut e, "source.mix_tracks", json!({"source": "ghost", "tracks": [1]})), Err(EngineError::NoSource(_))));
 }
 
 #[test]
@@ -1645,8 +1792,10 @@ fn every_spec_is_reachable() {
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
+            "source.mix_tracks" => json!({"source": 1, "tracks": [1, 2]}),
             "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
+            "avatar.model_install" => json!({"path": "x.task"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),

@@ -8,8 +8,9 @@
 //! other scenes, for scene lists, at a capped rate (see [`ThumbnailRequest`]).
 //!
 //! Frames stay on the GPU from upload to the canvas. The interface shows the canvas textures
-//! directly; only encoders read pixels back, through a ring of buffers that never makes the
-//! compositor wait for the GPU.
+//! directly. The encoders and the scopes read pixels back through a ring of buffers that never
+//! makes the compositor wait for the GPU. A still capture is read back into a buffer of its own and
+//! answered on a later frame, so it does not make the compositor wait either.
 //!
 //! [`Gpu::open`] chooses the adapter with `craft-gpu-device` (re-exported as [`device`]): the
 //! user's adapter preference, fixes for drivers that crash and a software fallback. Every device

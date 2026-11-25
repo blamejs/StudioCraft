@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use studiocraft_media::Tick;
 use studiocraft_media::audio::PooledBlock;
@@ -32,11 +33,18 @@ pub struct OutputJob {
     pub video_encoder_settings: Settings,
     pub rate: RateControl,
     pub audio_bitrate_kbps: u32,
+    /// The name of each audio stream a recording writes, in order, such as `Track 1`; one
+    /// unnamed stream when empty. Outputs that write one stream (the stream and the replay
+    /// buffer) leave it empty. [`OutputInstance::audio_streams`] gives a queue for each.
+    pub audio_streams: Vec<String>,
     /// The ffmpeg program to run.
     pub ffmpeg: PathBuf,
     pub stats: Arc<EncoderStats>,
     /// The master-clock time the output starts at: earlier frames and audio are not written.
     pub start: Tick,
+    /// Finished caption phrases for a stream to carry as closed captions; `None` sends none.
+    /// Phrases already in the queue when the stream starts are discarded.
+    pub captions: Option<Arc<Fifo<String>>>,
 }
 
 /// An output type.
@@ -61,6 +69,12 @@ pub enum OutputStatus {
 pub trait OutputInstance: Send {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>>;
     fn audio(&self) -> Arc<Fifo<PooledBlock>>;
+    /// A queue for each audio stream the output writes, in the order of
+    /// [`OutputJob::audio_streams`]; the first is [`OutputInstance::audio`]. An output that
+    /// writes one stream returns that one.
+    fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        vec![self.audio()]
+    }
     fn status(&self) -> OutputStatus;
     /// Where it writes: a file path, or the server without the key.
     fn target(&self) -> String;
@@ -100,6 +114,13 @@ pub trait OutputInstance: Send {
     }
     /// Stop sending to the destination `id` of a running stream; the others go on.
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
+    }
+    /// Start the next try of the destination `id` of a running stream at once, when it waits to
+    /// try again or waits for the network. The try counts toward its failed tries in a row as a
+    /// try at the usual time does. Returns whether it was waiting; one that is connecting, live,
+    /// trying, stopped or failed is left as it is.
+    fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
 }
@@ -269,6 +290,13 @@ pub struct DestinationState {
     pub dropped: u64,
     /// Connections lost and made again.
     pub reconnects: u32,
+    /// While it waits to try again: how long until its next try starts. `None` otherwise, while
+    /// the try runs, and while it waits for the network with no time set, when the try starts
+    /// once a route to the server returns.
+    pub next_try: Option<Duration>,
+    /// The failed tries in a row the stream allows before a destination gives up; 0 for outputs
+    /// that are not streams.
+    pub max_tries: u32,
 }
 
 /// The video and sound a replay buffer held when it was asked for them. Writing the clip does not

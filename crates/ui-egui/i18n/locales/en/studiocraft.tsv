@@ -20,11 +20,13 @@
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
 	Alpha mask (color channel)	Alpha mask (color channel)
 	AMD AMF H.264	AMD AMF H.264
+	Amount (%)	Amount (%)
 	Apache 2.0	Apache 2.0
 	Apply	Apply
 	Application	Application
 	Application audio capture	Application audio capture
 	Apply Dock Layout	Apply Dock Layout
+	Apply LUT	Apply LUT
 	Attack (ms)	Attack (ms)
 	Audio	Audio
 	Audio bitrate	Audio bitrate
@@ -74,6 +76,7 @@
 	Color	Color
 	Color correction	Color correction
 	Color key	Color key
+	Color lookup tables	Color lookup tables
 	Community	Community
 	Compact (small files)	Compact (small files)
 	Compressor	Compressor
@@ -131,6 +134,8 @@
 	Finishing Recording…	Finishing Recording…
 	First wait	First wait
 	Fit to Screen	Fit to Screen
+	Flip Horizontal	Flip Horizontal
+	Flip Vertical	Flip Vertical
 	Font	Font
 	Font family	Font family
 	Forget	Forget
@@ -180,11 +185,13 @@
 	Key for this session	Key for this session
 	Keyframe interval	Keyframe interval
 	Language	Language
+	Leave Safe Mode	Leave Safe Mode
 	Left	Left
 	Licenses	Licenses
 	Limit height	Limit height
 	Limit width	Limit width
 	Limiter	Limiter
+	LUT file	LUT file
 	Linear	Linear
 	List Stream Destinations	List Stream Destinations
 	LIVE	LIVE
@@ -237,6 +244,7 @@
 	No key is held for this session yet	No key is held for this session yet
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No server set	No server set
+	No source is running and remote control is off. Leave Safe Mode to start them.	No source is running and remote control is off. Leave Safe Mode to start them.
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
@@ -256,6 +264,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)
 	VA-API HEVC (built in)	VA-API HEVC (built in)
+	VA-API AV1 (built in)	VA-API AV1 (built in)
 	OK	OK
 	Opacity (%)	Opacity (%)
 	Open above (dB)	Open above (dB)
@@ -305,6 +314,7 @@
 	Redo	Redo
 	Refresh Lists	Refresh Lists
 	Release (ms)	Release (ms)
+	Remote control could not start: {error}	Remote control could not start: {error}
 	Remove	Remove
 	Remove Dock Layout	Remove Dock Layout
 	Remove Layout	Remove Layout
@@ -336,6 +346,8 @@
 	Rotate 90° Counterclockwise	Rotate 90° Counterclockwise
 	Running	Running
 	s	s
+	Safe Mode	Safe Mode
+	Safe Mode is off: the sources have started	Safe Mode is off: the sources have started
 	Saturation	Saturation
 	Save	Save
 	Save Dock Layout	Save Dock Layout
@@ -374,13 +386,17 @@
 	Sources set to monitoring in their Properties window play on this device.	Sources set to monitoring in their Properties window play on this device.
 	Speed	Speed
 	Start	Start
+	Start in Safe Mode	Start in Safe Mode
+	Start Normally	Start Normally
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
+	Start or Stop Virtual Camera	Start or Stop Virtual Camera
 	Start Recording	Start Recording
 	Start Replay Buffer	Start Replay Buffer
 	Start Stream Destination	Start Stream Destination
 	Start Streaming	Start Streaming
+	Start Virtual Camera	Start Virtual Camera
 	Starting…	Starting…
 	Stats	Stats
 	Status Bar	Status Bar
@@ -390,6 +406,7 @@
 	Stop Replay Buffer	Stop Replay Buffer
 	Stop Stream Destination	Stop Stream Destination
 	Stop Streaming	Stop Streaming
+	Stop Virtual Camera	Stop Virtual Camera
 	Stop this destination before removing it	Stop this destination before removing it
 	Stopped	Stopped
 	Stopping Replay Buffer…	Stopping Replay Buffer…
@@ -409,6 +426,7 @@
 	Studio	Studio
 	Studio Mode	Studio Mode
 	StudioCraft is available under either license, at your option.	StudioCraft is available under either license, at your option.
+	StudioCraft may not have closed properly	StudioCraft may not have closed properly
 	superfast	superfast
 	Swipe	Swipe
 	Switch at once	Switch at once
@@ -439,6 +457,7 @@
 	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
 	earlier lookups of server names have not finished	earlier lookups of server names have not finished
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
+	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key
 	The scope could not be computed: {error}	The scope could not be computed: {error}
@@ -473,8 +492,13 @@
 	Tries before giving up	Tries before giving up
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
-	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
-	Waiting for the network (try {attempt}): {error}	Waiting for the network (try {attempt}): {error}
+	Trying again (try {attempt} of {max}): {error}	Trying again (try {attempt} of {max}): {error}
+	Waiting for the network (try {attempt} of {max}): {error}	Waiting for the network (try {attempt} of {max}): {error}
+	Next try in {seconds} s	Next try in {seconds} s
+	Next try when a network route to the server returns	Next try when a network route to the server returns
+	Try Now	Try Now
+	Start the next try at once. It counts toward the tries as one at the usual time does.	Start the next try at once. It counts toward the tries as one at the usual time does.
+	Try Stream Destination Now	Try Stream Destination Now
 	Check Connection	Check Connection
 	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.
 	Set a server for this destination first	Set a server for this destination first
@@ -487,6 +511,7 @@
 	Name lookup of	Name lookup of
 	Connection to	Connection to
 	Secure connection to	Secure connection to
+	Stream server handshake with	Stream server handshake with
 	Secure connection on port 443 to	Secure connection on port 443 to
 	The service's list of ingest servers	The service's list of ingest servers
 	Secure connection to the service's ingest server	Secure connection to the service's ingest server
@@ -494,6 +519,7 @@
 	works	works
 	set	set
 	reports a problem	reports a problem
+	answers, but not as a stream server	answers, but not as a stream server
 	this computer could not say	this computer could not say
 	not finished in time	not finished in time
 	{check}: {outcome}	{check}: {outcome}
@@ -529,8 +555,9 @@
 	Video	Video
 	Video bitrate	Video bitrate
 	Video encoder	Video encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.
 	View	View
+	Virtual Camera	Virtual Camera
 	waiting for a choice in the system picker	waiting for a choice in the system picker
 	waiting for the camera	waiting for the camera
 	Waiting for the program picture…	Waiting for the program picture…
@@ -639,6 +666,12 @@
 @msg	The server refused the stream; check the stream key and the server address	The server refused the stream; check the stream key and the server address
 @msg	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections
 @msg	{service} reports a problem with {component}: {status}. This server may also be affected	{service} reports a problem with {component}: {status}. This server may also be affected
+@msg	{host} takes a secure connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place	{host} takes a secure connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place
+@msg	{host} takes a connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place	{host} takes a connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place
+@msg	the server's first byte is {byte}, where an RTMP server sends its version, 0x03	the server's first byte is {byte}, where an RTMP server sends its version, 0x03
+@msg	the server closed the connection after {received} of the {expected} bytes of its handshake	the server closed the connection after {received} of the {expected} bytes of its handshake
+@msg	the server sent {received} of the {expected} bytes of its handshake within {seconds} s	the server sent {received} of the {expected} bytes of its handshake within {seconds} s
+@msg	the handshake failed: {error}	the handshake failed: {error}
 @msg	{host} cannot be reached from this network, but {other} can	{host} cannot be reached from this network, but {other} can
 @msg	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}
 @msg	{host} refused the connection on port {port}; nothing on that server accepts connections on that port	{host} refused the connection on port {port}; nothing on that server accepts connections on that port
@@ -668,6 +701,8 @@
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended
 @msg	The stream stopped: {error}	The stream stopped: {error}
+@msg	The virtual camera could not be stopped: {error}	The virtual camera could not be stopped: {error}
+@msg	The virtual camera stopped: {error}	The virtual camera stopped: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
 	Record as its own track	Record as its own track
@@ -832,6 +867,16 @@ menu	Transform	Transform
 @msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
+	Face Tracking Models	Face Tracking Models
+	Download Face Tracking Model	Download Face Tracking Model
+	Cancel Face Tracking Model Download	Cancel Face Tracking Model Download
+	Install Face Tracking Model from File	Install Face Tracking Model from File
+@msg	Face tracking model {model} downloaded	Face tracking model {model} downloaded
+@msg	Face tracking model {model} installed	Face tracking model {model} installed
+@msg	The download of face tracking model {model} was canceled	The download of face tracking model {model} was canceled
+@msg	The install of face tracking model {model} was canceled	The install of face tracking model {model} was canceled
+@msg	Face tracking model {model} could not be downloaded: {error}	Face tracking model {model} could not be downloaded: {error}
+@msg	Face tracking model {model} could not be installed: {error}	Face tracking model {model} could not be installed: {error}
 @msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}
 	Pause Program	Pause Program
 	Resume Program	Resume Program
@@ -898,3 +943,30 @@ menu	Transform	Transform
 @msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters
 	Filter delay	Filter delay
 	The audio filters on this source delay its sound by {frames} samples at 48 kHz	The audio filters on this source delay its sound by {frames} samples at 48 kHz
+	StudioCraft scene collection editor	StudioCraft scene collection editor
+	New	New
+	Open…	Open…
+	Unsaved changes	Unsaved changes
+	New scene name	New scene name
+	Add to Scene	Add to Scene
+	Source to place in this scene	Source to place in this scene
+	Program	Program
+	Up	Up
+	Down	Down
+	Scene name	Scene name
+	Source name	Source name
+	the browser gave no reason	the browser gave no reason
+@msg	Undo {step}	Undo {step}
+@msg	Redo {step}	Redo {step}
+@msg	Sources in {scene}	Sources in {scene}
+@msg	Discard the unsaved changes and start a new collection?	Discard the unsaved changes and start a new collection?
+@msg	Discard the unsaved changes and open {name}?	Discard the unsaved changes and open {name}?
+@msg	Opening {name}…	Opening {name}…
+@msg	Opened {name}	Opened {name}
+@msg	{name} was not opened	{name} was not opened
+@msg	{name} could not be opened: {error}	{name} could not be opened: {error}
+@msg	{name} could not be read: {error}	{name} could not be read: {error}
+@msg	Saved {name}	Saved {name}
+@msg	The collection could not be saved: {error}	The collection could not be saved: {error}
+@msg	the file is {bytes} bytes; a scene collection file can be at most {max} bytes	the file is {bytes} bytes; a scene collection file can be at most {max} bytes
+@msg	the file is not UTF-8 text	the file is not UTF-8 text

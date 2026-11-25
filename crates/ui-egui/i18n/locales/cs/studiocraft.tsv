@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Dokončování nahrávky…
 	Fit to Screen	Přizpůsobit obrazovce
+	Flip Horizontal	Převrátit vodorovně
+	Flip Vertical	Převrátit svisle
 	Font	Písmo
 	Font family	Rodina písma
 	Format	Formát
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
 	VA-API HEVC (built in)	VA-API HEVC (vestavěný)
+	VA-API AV1 (built in)	VA-API AV1 (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt
@@ -368,7 +371,7 @@
 	Video	Video
 	Video bitrate	Datový tok videa
 	Video encoder	Kodér videa
-	Video settings can't change while recording, streaming or running the replay buffer.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu či virtuální kamery.
 	View	Zobrazení
 	waiting for a choice in the system picker	čekání na výběr v systémovém dialogu
 	waiting for the camera	čekání na kameru

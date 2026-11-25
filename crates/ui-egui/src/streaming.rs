@@ -4,7 +4,8 @@
 //! what it is doing. Each change runs one of the window's `stream.destination*` commands. Check
 //! Connection runs `stream.diagnose` and shows what the check found under the destination. For a
 //! service that publishes a list of its ingest servers, List Servers runs `stream.ingest_servers`
-//! and the details then offer the servers of that list.
+//! and the details then offer the servers of that list. A destination that waits to try again
+//! shows when its next try starts, and Try Now runs `stream.retry_now`.
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -15,7 +16,7 @@ use studiocraft_model::services::{self, SERVICES, Service};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
-use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
+use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Handshake, Outcome, Verdict};
 use studiocraft_studio::ingests::{self, IngestServer, ListState};
 
 use crate::i18n::Msg;
@@ -205,15 +206,15 @@ pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&Destinat
             DestinationStatus::Live => (tl!("Live").to_string(), Tone::Good),
             DestinationStatus::Retrying { attempt, failure } => (
                 craft_i18n::fmt(
-                    tl!("Trying again (try {attempt}): {error}"),
-                    &[("attempt", &attempt.to_string()), ("error", cause_text(failure.cause))],
+                    tl!("Trying again (try {attempt} of {max}): {error}"),
+                    &[("attempt", &attempt.to_string()), ("max", &s.max_tries.to_string()), ("error", cause_text(failure.cause))],
                 ),
                 Tone::Warn,
             ),
             DestinationStatus::WaitingForNetwork { attempt, failure } => (
                 craft_i18n::fmt(
-                    tl!("Waiting for the network (try {attempt}): {error}"),
-                    &[("attempt", &attempt.to_string()), ("error", cause_text(failure.cause))],
+                    tl!("Waiting for the network (try {attempt} of {max}): {error}"),
+                    &[("attempt", &attempt.to_string()), ("max", &s.max_tries.to_string()), ("error", cause_text(failure.cause))],
                 ),
                 Tone::Warn,
             ),
@@ -274,6 +275,35 @@ pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> O
     Some(text)
 }
 
+/// When the next try of `live` starts while the stream runs, in the interface language, for a
+/// destination that waits to try again or waits for the network: the seconds left, rounded up,
+/// or the return of a route to the server. `None` while a try runs and for every other status.
+/// Try Now is offered with this text.
+pub(crate) fn next_try_text(running: bool, live: Option<&DestinationState>) -> Option<String> {
+    let s = live.filter(|_| running)?;
+    match (&s.status, s.next_try) {
+        (DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. }, Some(left)) => {
+            Some(craft_i18n::fmt(tl!("Next try in {seconds} s"), &[("seconds", &whole_seconds(left).to_string())]))
+        }
+        (DestinationStatus::WaitingForNetwork { .. }, None) => Some(tl!("Next try when a network route to the server returns").to_string()),
+        _ => None,
+    }
+}
+
+/// `d` in whole seconds, rounded up.
+fn whole_seconds(d: Duration) -> u64 {
+    d.as_secs().saturating_add(u64::from(d.subsec_nanos() > 0))
+}
+
+/// How long until the shown seconds of the countdown `left` change: the part of a second it holds
+/// past its whole seconds, or a whole second.
+fn countdown_repaint(left: Duration) -> Duration {
+    match left.subsec_nanos() {
+        0 => Duration::from_secs(1),
+        n => Duration::from_nanos(u64::from(n)),
+    }
+}
+
 /// Whether a destination in this state is sending or trying to.
 fn sending(s: &DestinationState) -> bool {
     !matches!(s.status, DestinationStatus::Stopped | DestinationStatus::Failed(_))
@@ -297,14 +327,20 @@ pub(crate) struct View<'a> {
 /// What a check of a destination found, in the interface language.
 pub(crate) fn verdict_msg(d: &Diagnosis) -> Msg {
     let (template, mut args) = d.message();
-    if let Some(c) = d.reason {
-        for (k, v) in &mut args {
-            if *k == "reason" {
-                *v = cause_text(c).to_string();
-            }
+    for (k, v) in &mut args {
+        match (*k, d.reason, &d.handshake) {
+            ("reason", Some(c), _) => *v = cause_text(c).to_string(),
+            ("detail", _, Some(h)) => *v = handshake_text(h),
+            _ => {}
         }
     }
     Msg::new(template, args)
+}
+
+/// What a port answered to the RTMP handshake, in the interface language.
+pub(crate) fn handshake_text(h: &Handshake) -> String {
+    let (template, args) = h.message();
+    Msg::new(template, args).shown()
 }
 
 /// What one evidence line checked, in the interface language.
@@ -316,6 +352,7 @@ pub(crate) fn check_text(c: Check) -> &'static str {
         Check::Lookup => tl!("Name lookup of"),
         Check::Connect => tl!("Connection to"),
         Check::SecureConnect => tl!("Secure connection to"),
+        Check::Handshake => tl!("Stream server handshake with"),
         Check::Connect443 => tl!("Secure connection on port 443 to"),
         Check::IngestList => tl!("The service's list of ingest servers"),
         Check::OtherIngest => tl!("Secure connection to the service's ingest server"),
@@ -330,6 +367,7 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
         Outcome::Failed(c) => cause_text(c),
         Outcome::Set => tl!("set"),
         Outcome::Problem => tl!("reports a problem"),
+        Outcome::NotRtmp => tl!("answers, but not as a stream server"),
         Outcome::Unknown => tl!("this computer could not say"),
         Outcome::Unfinished => tl!("not finished in time"),
     }
@@ -337,7 +375,9 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
 
 /// One evidence line of a check, in the interface language.
 pub(crate) fn evidence_text(e: &Evidence) -> String {
-    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", e.detail.as_str())];
+    let answered = e.handshake.as_ref().map(handshake_text);
+    let detail = answered.as_deref().unwrap_or(e.detail.as_str());
+    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", detail)];
     let template = match (e.target.is_empty(), e.detail.is_empty()) {
         (true, true) => tl!("{check}: {outcome}"),
         (true, false) => tl!("{check}: {outcome} ({detail})"),
@@ -487,6 +527,15 @@ fn row(
     let status = ui.colored_label(color, text);
     if let Some(detail) = status_detail(view.running, live) {
         status.on_hover_text(detail);
+    }
+    if let Some(next) = next_try_text(view.running, live) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(next).small());
+            let button = ui.add(egui::Button::new(tl!("Try Now")).small());
+            if button.on_hover_text(tl!("Start the next try at once. It counts toward the tries as one at the usual time does.")).clicked() {
+                acts.push(Act::run("stream.retry_now", json!({"id": d.id})));
+            }
+        });
     }
     check_row(ui, view, d, acts, palette);
     let StreamingPanel { editing, logos, .. } = panel;
@@ -931,6 +980,8 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         v["reconnects"] = json!(s.reconnects);
         if let DestinationStatus::Retrying { attempt, .. } | DestinationStatus::WaitingForNetwork { attempt, .. } = s.status {
             v["attempt"] = json!(attempt);
+            v["max_tries"] = json!(s.max_tries);
+            v["next_try_ms"] = s.next_try.map_or(Value::Null, |t| json!(u64::try_from(t.as_millis()).unwrap_or(u64::MAX)));
         }
     }
     v
@@ -1249,6 +1300,14 @@ impl StudioApp {
                 self.studio.set_stream_destination(&dest, on).map_err(|e| e.to_string())?;
                 Ok(json!({"id": dest, "on": on}))
             }
+            "stream.retry_now" => {
+                let dest = param_id(cmd)?.to_string();
+                if self.stream_running() && self.studio.stream_profile() != Some(self.studio.profile().name.as_str()) {
+                    return Err(tmsg!("the running stream was started with another profile"));
+                }
+                let started = self.studio.retry_stream_destination(&dest).map_err(|e| e.to_string())?;
+                Ok(json!({"id": dest, "started": started}))
+            }
             other => Err(tmsg!("unknown command `{command}`", command = other)),
         }
     }
@@ -1269,6 +1328,10 @@ impl StudioApp {
             SERVICES.iter().filter(|svc| svc.ingests.is_some()).filter_map(|svc| lists.state(svc.id).map(|s| (svc.id, s))).collect();
         if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) || ingests.iter().any(|(_, s)| *s == ListState::Loading) {
             ctx.request_repaint_after(CHECK_REPAINT);
+        }
+        // A countdown to a destination's next try is drawn again as its seconds change.
+        if let Some(soonest) = live.iter().filter_map(|s| s.next_try).map(countdown_repaint).min().filter(|_| running) {
+            ctx.request_repaint_after(soonest);
         }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);

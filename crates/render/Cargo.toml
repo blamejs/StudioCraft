@@ -13,6 +13,8 @@ studiocraft-plugin.workspace = true
 craft-gpu-device.workspace = true
 craft-gpu-yuv.workspace = true
 craft-transitions.workspace = true
+# Display captures shared on the GPU, drawn into a source's texture.
+craft-gpu-interop = { workspace = true, features = ["wgpu"] }
 wgpu.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true

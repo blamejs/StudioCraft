@@ -14,6 +14,8 @@ crossbeam-queue.workspace = true
 # The camera list the camera watch publishes, read without a lock.
 arc-swap.workspace = true
 zune-jpeg.workspace = true
+# Display capture into textures shared with the compositor (Windows desktop duplication).
+craft-gpu-interop.workspace = true
 
 # Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
 # on Windows). Linux captures through PipeWire. Other systems build without them and report capture
