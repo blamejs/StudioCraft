@@ -4,10 +4,12 @@
 //!
 //! The capture side duplicates each buffer's descriptor the first time the stream hands the buffer
 //! over and puts it in a slot of a [`SharedRing`] made with [`SharedRing::dmabuf`]. A frame names
-//! the slot. The stream gets its buffer back as soon as the descriptor is duplicated. The compositor
-//! draws a frame only once the buffer has no pending write: [`DmabufPlane::ready`] polls the
-//! descriptor, which the kernel makes readable once the producer's writes are done (implicit
-//! synchronization), and never waits.
+//! the slot. The duplicate keeps the buffer's memory allocated, but the producer writes into a
+//! buffer again as soon as it gets it back, so the capture side keeps each buffer whose frame it
+//! hands out ([`HoldQueue`]) until the GPU has finished reading that frame or a later one, or until
+//! every copy of the frame is gone without a draw. The compositor draws a frame only once the
+//! buffer has no pending write: [`DmabufPlane::ready`] polls the descriptor, which the kernel makes
+//! readable once the producer's writes are done (implicit synchronization), and never waits.
 
 use std::sync::{Arc, Mutex};
 
@@ -63,8 +65,8 @@ impl DmabufFormat {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DmabufCaps {
     pub device: AdapterId,
-    /// Each format with the single-plane modifiers the device can sample. A format the device
-    /// cannot import has none.
+    /// Each format with the single-plane modifiers the device can sample and import as a DMA-BUF.
+    /// A format the device cannot import has none.
     pub formats: Vec<(DmabufFormat, Vec<u64>)>,
 }
 
@@ -313,7 +315,7 @@ pub(crate) fn completed_in(handoff: &Handoff) -> u64 {
 /// buffer's descriptor for the buffer's life, so the number names the buffer until the stream's
 /// buffers change.
 #[cfg(target_os = "linux")]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DmabufStream {
     format: Option<(u32, u32, DmabufLayout, AdapterId)>,
     ring: Option<Arc<SharedRing>>,
@@ -321,6 +323,22 @@ pub struct DmabufStream {
     ready: u64,
     /// What the compositor has read, shared by all of the stream's rings.
     released: Arc<std::sync::atomic::AtomicU64>,
+    /// The records of the frames' draws, made with the stream.
+    watches: crate::ring::WatchPool,
+}
+
+#[cfg(target_os = "linux")]
+impl Default for DmabufStream {
+    fn default() -> Self {
+        DmabufStream {
+            format: None,
+            ring: None,
+            known: [None; MAX_BUFFERS],
+            ready: 0,
+            released: Arc::default(),
+            watches: crate::ring::WatchPool::new(MAX_BUFFERS),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -396,6 +414,6 @@ impl DmabufStream {
             }
         };
         self.ready = self.ready.checked_add(1).ok_or(Fallback::ImportFailed)?;
-        SharedFrame::watched(ring, slot, self.ready).map(Some).ok_or(Fallback::ImportFailed)
+        SharedFrame::watched_from(ring, slot, self.ready, &mut self.watches).map(Some).ok_or(Fallback::ImportFailed)
     }
 }

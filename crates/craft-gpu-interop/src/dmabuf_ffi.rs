@@ -41,16 +41,32 @@ pub(crate) fn is_dmabuf(fd: BorrowedFd<'_>) -> bool {
 }
 
 /// Whether a plane `offset` bytes in, with rows `stride` bytes apart, can hold a `width` x `height`
-/// picture of 4-byte pixels without the sizes overflowing; a linear one (`linear`) also needs rows
-/// at least as long as the pixels.
+/// picture of 4-byte pixels within a buffer of `len` bytes. A linear one (`linear`) needs rows at
+/// least as long as the pixels and its last row's pixels within the buffer. A tiled one's layout is
+/// the driver's, so it only needs `height` rows of `stride` bytes within the buffer, which every
+/// tiled layout of that stride takes at least.
 #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
-pub(crate) fn plane_fits(width: u32, height: u32, offset: u32, stride: u32, linear: bool) -> bool {
+pub(crate) fn plane_fits(width: u32, height: u32, offset: u32, stride: u32, linear: bool, len: u64) -> bool {
     let row = u64::from(width) * 4;
     let stride = u64::from(stride);
     if width == 0 || height == 0 || stride == 0 || (linear && stride < row) {
         return false;
     }
-    stride.checked_mul(u64::from(height)).and_then(|size| size.checked_add(u64::from(offset))).is_some()
+    let end =
+        if linear { stride.checked_mul(u64::from(height - 1)).and_then(|rows| rows.checked_add(row)) } else { stride.checked_mul(u64::from(height)) };
+    end.and_then(|end| end.checked_add(u64::from(offset))).is_some_and(|end| end <= len)
+}
+
+/// The length in bytes of the buffer behind `fd`, which the kernel reports for a DMA-BUF as the
+/// end of the file; `None` when it reports none.
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) fn length(fd: BorrowedFd<'_>) -> Option<u64> {
+    // SAFETY: `fd` is open for the whole call, and `lseek` only moves the file position, which no
+    // reader of a DMA-BUF uses; it is put back at the start.
+    let end = unsafe { libc::lseek(fd.as_raw_fd(), 0, libc::SEEK_END) };
+    // SAFETY: as above.
+    unsafe { libc::lseek(fd.as_raw_fd(), 0, libc::SEEK_SET) };
+    u64::try_from(end).ok()
 }
 
 /// The argument of `UDMABUF_CREATE` (`linux/udmabuf.h`).
@@ -133,7 +149,7 @@ mod vulkan {
         let formats = DmabufFormat::ALL
             .into_iter()
             .map(|format| {
-                let vk_format = if format.blue_first() { vk::Format::B8G8R8A8_UNORM } else { vk::Format::R8G8B8A8_UNORM };
+                let vk_format = vk_format(format);
                 let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
                 {
                     let mut properties = vk::FormatProperties2::default().push_next(&mut list);
@@ -154,6 +170,7 @@ mod vulkan {
                     .filter(|e| {
                         e.drm_format_modifier_plane_count == 1
                             && e.drm_format_modifier_tiling_features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+                            && importable(raw, physical, vk_format, e.drm_format_modifier).is_some()
                     })
                     .map(|e| e.drm_format_modifier)
                     .collect();
@@ -161,6 +178,44 @@ mod vulkan {
             })
             .collect();
         Ok(DmabufCaps { device: adapter_from_uuid(id.device_uuid), formats }.tidy())
+    }
+
+    fn vk_format(format: DmabufFormat) -> vk::Format {
+        if format.blue_first() { vk::Format::B8G8R8A8_UNORM } else { vk::Format::R8G8B8A8_UNORM }
+    }
+
+    /// The largest picture `physical` can import as a DMA-BUF in `vk_format` with `modifier`, as
+    /// the import opens it (a sampled 2D image with one mip level); `None` when the device cannot
+    /// import that combination.
+    fn importable(raw: &ash::Instance, physical: vk::PhysicalDevice, vk_format: vk::Format, modifier: u64) -> Option<vk::Extent3D> {
+        let mut modifier_info =
+            vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default().drm_format_modifier(modifier).sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let mut external_info = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let info = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(vk_format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(vk::ImageUsageFlags::SAMPLED)
+            .push_next(&mut external_info)
+            .push_next(&mut modifier_info);
+        let mut external = vk::ExternalImageFormatProperties::default();
+        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut external);
+        // SAFETY: the physical device belongs to this instance, which runs Vulkan 1.1 or later
+        // (`caps` and `open` checked it), the structures are valid and chained as the call allows,
+        // and the call only fills `properties` and the `external` chained to it.
+        unsafe { raw.get_physical_device_image_format_properties2(physical, &info, &mut properties) }.ok()?;
+        let max = properties.image_format_properties.max_extent;
+        external.external_memory_properties.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE).then_some(max)
+    }
+
+    /// The largest picture `device` can import as a DMA-BUF in `format` with `modifier`; `None`
+    /// when it cannot import that combination or does not run on Vulkan.
+    fn import_extent(device: &wgpu::Device, format: DmabufFormat, modifier: u64) -> Option<vk::Extent3D> {
+        // SAFETY: the guard is only used to read the physical device's properties, and it is
+        // dropped before any other wgpu call on this device.
+        let hal = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }?;
+        let instance = hal.shared_instance();
+        importable(instance.raw_instance(), hal.raw_physical_device(), vk_format(format), modifier)
     }
 
     /// A DMA-BUF ring opened on one Vulkan device: each slot's buffer as a wgpu texture once it has
@@ -196,9 +251,16 @@ mod vulkan {
                 return self.textures.get(slot).and_then(Option::as_ref).ok_or(Fallback::ImportFailed);
             }
             let (Some(slots), Some(plane)) = (ring.dmabuf.as_deref(), ring.plane(slot)) else { return Err(Fallback::ImportFailed) };
-            // The driver is handed only a DMA-BUF whose stride and offset describe the picture.
+            // The driver is handed only a DMA-BUF whose stride and offset describe the picture
+            // within the buffer's own length, in a size the device can import.
             let linear = slots.layout.modifier == crate::dmabuf::MOD_LINEAR;
-            if !super::plane_fits(ring.width(), ring.height(), plane.offset(), plane.stride(), linear) || !super::is_dmabuf(plane.fd.as_fd()) {
+            let len = super::length(plane.fd.as_fd()).unwrap_or(0);
+            if !super::plane_fits(ring.width(), ring.height(), plane.offset(), plane.stride(), linear, len) || !super::is_dmabuf(plane.fd.as_fd()) {
+                return Err(Fallback::ImportFailed);
+            }
+            if !import_extent(device, slots.layout.format, slots.layout.modifier)
+                .is_some_and(|max| ring.width() <= max.width && ring.height() <= max.height)
+            {
                 return Err(Fallback::ImportFailed);
             }
             let format = slots.layout.format.texture_format();
@@ -234,8 +296,10 @@ mod vulkan {
                 // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`open` checked it), `fd`
                 // is a DMA-BUF (`is_dmabuf` checked it) that the stream negotiated as a single-plane
                 // `size` picture in `format` with the ring's modifier, which `check_dmabuf` found
-                // among those the device can sample, and the stride and offset are the ones the
-                // stream reported for it, checked by `plane_fits`. The call takes `fd`.
+                // among those the device can sample and import, in a size within the device's
+                // import limits (`import_extent`), and the stride and offset are the ones the stream
+                // reported for it, checked by `plane_fits` against the buffer's length. The call
+                // takes `fd`.
                 unsafe { hal.texture_from_dmabuf_fd(fd, &hal_desc, slots.layout.modifier, u64::from(plane.stride()), u64::from(plane.offset())) }
                     .map_err(|_| Fallback::ImportFailed)?
             };

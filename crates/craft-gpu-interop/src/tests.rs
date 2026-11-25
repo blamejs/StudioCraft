@@ -504,15 +504,86 @@ mod dmabuf {
         use std::os::fd::AsFd;
         let (reader, _writer) = std::io::pipe().unwrap();
         assert!(!is_dmabuf(reader.as_fd()), "a pipe is not a DMA-BUF");
-        assert!(plane_fits(1920, 1080, 0, 7680, true));
-        assert!(plane_fits(1920, 1080, 4096, 8192, true));
-        assert!(!plane_fits(1920, 1080, 0, 7676, true), "a linear row shorter than its pixels");
-        assert!(plane_fits(1920, 1080, 0, 7676, false), "a tiled layout's stride is the driver's");
-        assert!(!plane_fits(0, 1080, 0, 7680, true));
-        assert!(!plane_fits(1920, 0, 0, 7680, true));
-        assert!(!plane_fits(1920, 1080, 0, 0, false));
-        assert!(plane_fits(u32::MAX, u32::MAX, u32::MAX, u32::MAX, false), "the largest sizes do not overflow");
-        assert!(!plane_fits(u32::MAX, 1, 0, u32::MAX, true), "a row of u32::MAX pixels is longer than any stride");
+        let len = u64::MAX;
+        assert!(plane_fits(1920, 1080, 0, 7680, true, len));
+        assert!(plane_fits(1920, 1080, 4096, 8192, true, len));
+        assert!(!plane_fits(1920, 1080, 0, 7676, true, len), "a linear row shorter than its pixels");
+        assert!(plane_fits(1920, 1080, 0, 7676, false, len), "a tiled layout's stride is the driver's");
+        assert!(!plane_fits(0, 1080, 0, 7680, true, len));
+        assert!(!plane_fits(1920, 0, 0, 7680, true, len));
+        assert!(!plane_fits(1920, 1080, 0, 0, false, len));
+        assert!(plane_fits(u32::MAX, u32::MAX, u32::MAX, u32::MAX, false, len), "the largest sizes do not overflow");
+        assert!(!plane_fits(u32::MAX, 1, 0, u32::MAX, true, len), "a row of u32::MAX pixels is longer than any stride");
+        // The picture must end within the buffer: a 64 x 32 linear picture with rows 256 bytes
+        // apart ends 256 * 31 + 256 bytes in, which a 4 KiB buffer does not reach.
+        assert!(!plane_fits(64, 32, 0, 256, true, 4096));
+        assert!(plane_fits(64, 32, 0, 256, true, 8192));
+        // The last row needs only its pixels, not the whole stride.
+        assert!(plane_fits(2, 3, 0, 16, true, 40));
+        assert!(!plane_fits(2, 3, 0, 16, true, 39));
+        assert!(!plane_fits(2, 3, 1, 16, true, 40), "the offset counts");
+        // A tiled picture takes at least its rows of stride bytes.
+        assert!(plane_fits(2, 3, 0, 16, false, 48));
+        assert!(!plane_fits(2, 3, 0, 16, false, 47));
+    }
+
+    #[test]
+    fn the_length_of_a_buffer_is_the_end_of_its_descriptor() {
+        use crate::dmabuf_ffi::length;
+        use std::os::fd::AsFd;
+        let path = std::env::temp_dir().join(format!("craft-gpu-interop-length-{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(8192).unwrap();
+        assert_eq!(length(file.as_fd()), Some(8192));
+        assert_eq!(length(file.as_fd()), Some(8192), "the position goes back to the start");
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        let (reader, _writer) = std::io::pipe().unwrap();
+        assert_eq!(length(reader.as_fd()), None, "a pipe has no length");
+    }
+
+    #[test]
+    fn a_dmabuf_frame_is_not_read_once_its_buffer_may_have_gone_back() {
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        let (read, copy, newer) = (frame(&ring, 0, 2), frame(&ring, 0, 2), frame(&ring, 1, 3));
+        assert!(read.start_reading());
+        // The stream records the frame as read, and its buffer may go back to the producer: a copy
+        // of the frame left anywhere is no longer drawn, and an earlier frame neither.
+        ring.release_dmabuf(read.ready());
+        assert!(!copy.start_reading(), "a copy of a frame whose buffer may have gone back");
+        assert!(!frame(&ring, 2, 1).start_reading(), "an earlier frame");
+        assert!(newer.start_reading(), "a later frame is still read");
+    }
+
+    #[test]
+    fn a_streams_frames_reuse_their_records_once_every_copy_is_gone() {
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(1))));
+        let first = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        let record = first.record();
+        assert!(record.is_some());
+        let mut watch = first.watch().unwrap();
+        let second = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert_ne!(second.record(), record, "a record in use is not handed out again");
+        // A pooled frame dropped undrawn is seen as such, and its record is then free.
+        assert!(!watch.dropped_undrawn());
+        drop(first);
+        assert!(watch.dropped_undrawn());
+        drop(watch);
+        drop(second);
+        let third = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert_eq!(third.record(), record, "the freed record is reused");
+        // A drawn frame never counts as dropped undrawn.
+        let mut watch = third.watch().unwrap();
+        third.mark_drawn();
+        drop(third);
+        assert!(!watch.dropped_undrawn());
+        drop(watch);
+        // With every record in use, a frame has no watch, so its buffer goes back unread.
+        let held: Vec<_> = (0..MAX_BUFFERS).map(|_| stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap()).collect();
+        assert!(held.iter().all(|f| f.watch().is_some()));
+        assert!(stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap().watch().is_none());
     }
 
     #[test]

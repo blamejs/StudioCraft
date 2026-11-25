@@ -9,6 +9,9 @@ use pw::spa;
 
 use crate::pw_hold::HeldPlane;
 
+/// `SPA_CHUNK_FLAG_CORRUPTED` (`spa/buffer/buffer.h`): the chunk's data is corrupted.
+const CHUNK_FLAG_CORRUPTED: i32 = 1;
+
 /// A buffer dequeued from a stream, which belongs to the caller until [`queue`] gives it back.
 #[derive(Debug)]
 pub(crate) struct Raw(NonNull<pw::sys::pw_buffer>);
@@ -54,6 +57,7 @@ pub(crate) fn plane(buffer: &Raw) -> Option<HeldPlane> {
             mapoffset: data.mapoffset,
             offset: chunk.offset,
             size: chunk.size,
+            corrupted: chunk.flags & CHUNK_FLAG_CORRUPTED != 0,
             stride: chunk.stride,
         })
     }

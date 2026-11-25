@@ -547,10 +547,10 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
                     data.leave_gpu(stream);
                     return;
                 };
-                // A buffer whose chunk holds no whole picture goes back unread and is not shown, as
-                // in memory. Producers send an empty chunk when the picture did not change.
+                // A buffer whose chunk holds no new picture goes back unread and is not shown, as in
+                // memory. Producers send an empty chunk when the picture did not change.
                 let modifier = data.dmabuf.layout().map_or(MOD_LINEAR, |l| l.modifier);
-                if !dmabuf_chunk_holds_picture(plane.size, plane.stride, data.width, data.height, modifier) {
+                if !dmabuf_chunk_holds_picture(plane.size, plane.corrupted, plane.stride, data.width, data.height, modifier) {
                     return;
                 }
                 // The descriptor is duplicated into the ring while the buffer is dequeued; the
@@ -632,18 +632,19 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
     Ok(failed.get())
 }
 
-/// Whether a DMA-BUF chunk of `size` bytes holds a `width` x `height` picture with rows `stride`
-/// bytes apart. An empty chunk holds none. Only a linear buffer's rows are laid out where the
-/// chunk can be checked; it must reach the last row's pixels.
-fn dmabuf_chunk_holds_picture(size: u32, stride: i32, width: u32, height: u32, modifier: u64) -> bool {
-    if size == 0 || width == 0 || height == 0 {
+/// Whether a DMA-BUF chunk of `size` bytes, `corrupted` or not, holds a new `width` x `height`
+/// picture with rows `stride` bytes apart. An empty chunk and a corrupted one hold none. Producers
+/// may set any other size for a DMA-BUF, so the size is not compared with the picture; the import
+/// checks the layout against the buffer's own length. A linear buffer's rows must be at least as
+/// long as the pixels.
+fn dmabuf_chunk_holds_picture(size: u32, corrupted: bool, stride: i32, width: u32, height: u32, modifier: u64) -> bool {
+    if size == 0 || corrupted || width == 0 || height == 0 {
         return false;
     }
     if modifier != MOD_LINEAR {
         return true;
     }
-    let (Ok(stride), row) = (u64::try_from(stride), u64::from(width) * 4) else { return false };
-    stride >= row && u64::from(size) >= u64::from(height - 1) * stride + row
+    u64::try_from(stride).is_ok_and(|stride| stride >= u64::from(width) * 4)
 }
 
 #[cfg(test)]
@@ -703,18 +704,22 @@ mod tests {
     }
 
     #[test]
-    fn only_a_dmabuf_chunk_that_reaches_the_last_row_holds_a_picture() {
-        // 2 x 3 pixels, rows 16 bytes apart: the last row needs only its 8 bytes.
-        assert!(dmabuf_chunk_holds_picture(40, 16, 2, 3, MOD_LINEAR));
-        assert!(!dmabuf_chunk_holds_picture(39, 16, 2, 3, MOD_LINEAR));
-        assert!(!dmabuf_chunk_holds_picture(0, 16, 2, 3, MOD_LINEAR), "an empty chunk carries no new picture");
-        assert!(!dmabuf_chunk_holds_picture(40, 4, 2, 3, MOD_LINEAR), "rows shorter than the picture");
-        assert!(!dmabuf_chunk_holds_picture(40, -16, 2, 3, MOD_LINEAR));
-        assert!(!dmabuf_chunk_holds_picture(u32::MAX, 16, 0, 3, MOD_LINEAR));
-        assert!(!dmabuf_chunk_holds_picture(u32::MAX, i32::MAX, u32::MAX, u32::MAX, MOD_LINEAR));
-        // A tiled buffer's rows are not where the chunk says, so only an empty chunk is refused.
-        assert!(dmabuf_chunk_holds_picture(1, 16, 2, 3, 5));
-        assert!(!dmabuf_chunk_holds_picture(0, 16, 2, 3, 5));
+    fn a_dmabuf_chunk_holds_a_new_picture_unless_it_is_empty_or_corrupted() {
+        // 2 x 3 pixels, rows 16 bytes apart.
+        assert!(dmabuf_chunk_holds_picture(40, false, 16, 2, 3, MOD_LINEAR));
+        // Producers send placeholder sizes with DMA-BUFs, shorter than the picture.
+        assert!(dmabuf_chunk_holds_picture(1, false, 16, 2, 3, MOD_LINEAR), "a placeholder size");
+        assert!(dmabuf_chunk_holds_picture(9, false, 16, 2, 3, MOD_LINEAR));
+        assert!(!dmabuf_chunk_holds_picture(0, false, 16, 2, 3, MOD_LINEAR), "an empty chunk carries no new picture");
+        assert!(!dmabuf_chunk_holds_picture(40, true, 16, 2, 3, MOD_LINEAR), "a corrupted chunk");
+        assert!(!dmabuf_chunk_holds_picture(40, false, 4, 2, 3, MOD_LINEAR), "rows shorter than the picture");
+        assert!(!dmabuf_chunk_holds_picture(40, false, -16, 2, 3, MOD_LINEAR));
+        assert!(!dmabuf_chunk_holds_picture(u32::MAX, false, 16, 0, 3, MOD_LINEAR));
+        assert!(!dmabuf_chunk_holds_picture(u32::MAX, false, i32::MAX, u32::MAX, u32::MAX, MOD_LINEAR));
+        // A tiled buffer's rows are the driver's, so only an empty or corrupted chunk is refused.
+        assert!(dmabuf_chunk_holds_picture(1, false, 16, 2, 3, 5));
+        assert!(!dmabuf_chunk_holds_picture(0, false, 16, 2, 3, 5));
+        assert!(!dmabuf_chunk_holds_picture(1, true, 16, 2, 3, 5));
     }
 
     #[test]

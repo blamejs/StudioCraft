@@ -21,8 +21,11 @@ pub struct HeldPlane {
     pub mapoffset: u32,
     /// Where the picture starts, counted from `mapoffset`.
     pub offset: u32,
-    /// How many bytes of the picture are valid.
+    /// How many bytes of the picture are valid. For a DMA-BUF the producer may set any value, 0
+    /// included, so only 0 is read from it, as a picture that did not change.
     pub size: u32,
+    /// Whether the producer marked the chunk's data as corrupted.
+    pub corrupted: bool,
     /// How far apart the picture's rows are.
     pub stride: i32,
 }

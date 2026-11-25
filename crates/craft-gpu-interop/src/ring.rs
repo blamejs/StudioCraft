@@ -261,10 +261,13 @@ impl SharedRing {
     /// Mark the frame with value `ready` in texture `slot` as read by the compositor. False when
     /// the capture side took the texture back first, or the texture holds another frame. A ring of
     /// DMA-BUFs is never taken back: the capture side keeps each buffer until its frame is read or
-    /// dropped, so its frames are always readable.
+    /// every copy of the frame is dropped. A frame of a DMA-BUF ring is readable until the stream
+    /// records it, or a later frame, as read ([`SharedRing::release_dmabuf`]), after which its
+    /// buffer may go back to the producer.
     fn start_reading(&self, slot: usize, ready: u64) -> bool {
-        if self.dmabuf_layout().is_some() {
-            return slot < self.slots();
+        #[cfg(target_os = "linux")]
+        if let Some(d) = &self.dmabuf {
+            return slot < self.slots() && ready > d.released.load(Ordering::Acquire);
         }
         self.claims
             .get(slot)
@@ -290,18 +293,54 @@ pub struct SharedFrame {
     ready: u64,
     /// Whether a draw has read the picture, for a frame made with [`SharedFrame::watched`].
     drawn: Option<Arc<AtomicBool>>,
+    /// Whether `drawn` came from a [`WatchPool`], which keeps a reference of its own.
+    pooled: bool,
 }
 
-/// The capture side's view of a frame made with [`SharedFrame::watched`]: whether every copy of the
-/// frame is gone without a draw having read it, so its buffer can go back at once.
+/// The capture side's view of a frame made with [`SharedFrame::watched`] or
+/// [`SharedFrame::watched_from`]: whether every copy of the frame is gone without a draw having
+/// read it, so its buffer can go back at once.
 #[derive(Debug)]
-pub struct FrameWatch(Arc<AtomicBool>);
+pub struct FrameWatch {
+    drawn: Arc<AtomicBool>,
+    /// The references to `drawn` left once every copy of the frame is gone: this watch's, and the
+    /// pool's for a record taken from a [`WatchPool`].
+    alone: usize,
+}
 
 impl FrameWatch {
     /// Whether no copy of the frame is left and none was drawn. A draw records itself before it
     /// lets go of its copy, so a frame that was drawn never counts.
     pub fn dropped_undrawn(&mut self) -> bool {
-        Arc::get_mut(&mut self.0).is_some_and(|drawn| !*drawn.get_mut())
+        if Arc::strong_count(&self.drawn) != self.alone {
+            return false;
+        }
+        // Pairs with the release of the last copy, so a draw recorded before it is seen.
+        std::sync::atomic::fence(Ordering::Acquire);
+        !self.drawn.load(Ordering::Acquire)
+    }
+}
+
+/// The records of whether a frame was drawn, made once and reused, so that the frames of a stream
+/// allocate nothing. A record is reused once no frame and no [`FrameWatch`] holds it.
+#[derive(Debug)]
+pub struct WatchPool(Vec<Arc<AtomicBool>>);
+
+impl WatchPool {
+    /// A pool of `records` records.
+    pub fn new(records: usize) -> WatchPool {
+        WatchPool((0..records).map(|_| Arc::new(AtomicBool::new(false))).collect())
+    }
+
+    /// A free record, cleared; `None` when every record is in use.
+    fn take(&mut self) -> Option<Arc<AtomicBool>> {
+        for record in &mut self.0 {
+            if let Some(drawn) = Arc::get_mut(record) {
+                *drawn.get_mut() = false;
+                return Some(Arc::clone(record));
+            }
+        }
+        None
     }
 }
 
@@ -310,18 +349,35 @@ impl SharedFrame {
     /// Returns `None` for a slot outside the ring ([`SharedRing::slots`]).
     pub fn new(ring: Arc<SharedRing>, slot: usize, ready: u64) -> Option<SharedFrame> {
         let slot = u8::try_from(slot).ok().filter(|&s| usize::from(s) < ring.slots())?;
-        Some(SharedFrame { ring, slot, ready, drawn: None })
+        Some(SharedFrame { ring, slot, ready, drawn: None, pooled: false })
     }
 
     /// A frame like [`SharedFrame::new`] that records whether a draw read it, which
     /// [`SharedFrame::watch`] lets the capture side see.
     pub fn watched(ring: Arc<SharedRing>, slot: usize, ready: u64) -> Option<SharedFrame> {
-        SharedFrame::new(ring, slot, ready).map(|f| SharedFrame { drawn: Some(Arc::new(AtomicBool::new(false))), ..f })
+        SharedFrame::new(ring, slot, ready).map(|f| SharedFrame { drawn: Some(Arc::new(AtomicBool::new(false))), pooled: false, ..f })
+    }
+
+    /// A frame like [`SharedFrame::watched`] whose record comes from `pool`, without allocating.
+    /// When every record of the pool is in use, the frame has no watch, and a capture side that
+    /// keeps its buffer only for a watched frame gives the buffer back unread.
+    pub fn watched_from(ring: Arc<SharedRing>, slot: usize, ready: u64, pool: &mut WatchPool) -> Option<SharedFrame> {
+        let frame = SharedFrame::new(ring, slot, ready)?;
+        Some(match pool.take() {
+            Some(drawn) => SharedFrame { drawn: Some(drawn), pooled: true, ..frame },
+            None => frame,
+        })
     }
 
     /// The capture side's view of a watched frame; `None` for one made with [`SharedFrame::new`].
     pub fn watch(&self) -> Option<FrameWatch> {
-        self.drawn.as_ref().map(|d| FrameWatch(Arc::clone(d)))
+        self.drawn.as_ref().map(|d| FrameWatch { drawn: Arc::clone(d), alone: if self.pooled { 2 } else { 1 } })
+    }
+
+    /// The address of a watched frame's record, to tell records apart.
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> Option<usize> {
+        self.drawn.as_ref().map(|d| Arc::as_ptr(d).addr())
     }
 
     /// Record that a draw reads the picture. The compositor calls it once the draw is submitted.

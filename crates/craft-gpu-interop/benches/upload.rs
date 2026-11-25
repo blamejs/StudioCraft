@@ -69,7 +69,7 @@ fn bench(c: &mut Criterion) {
 /// buffers are drawn.
 #[cfg(target_os = "linux")]
 fn bench_dmabuf(c: &mut Criterion) {
-    use craft_gpu_interop::{DmabufFormat, DmabufLayout, DmabufStream, Importer, MOD_LINEAR};
+    use craft_gpu_interop::{DmabufFormat, DmabufLayout, DmabufStream, Drawn, Importer, MOD_LINEAR};
     use std::os::fd::AsRawFd;
     let Some((device, queue)) = device_with(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else {
         return eprintln!("no Vulkan adapter: no DMA-BUF import to measure");
@@ -92,15 +92,32 @@ fn bench_dmabuf(c: &mut Criterion) {
             texture(&device, w, h, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT);
         let target = dst.create_view(&wgpu::TextureViewDescriptor::default());
         let mut importer = Importer::new();
+        let mut draw = || {
+            let frame = stream.frame(buffer.as_raw_fd(), 0, stride)?.ok_or(craft_gpu_interop::Fallback::ImportFailed)?;
+            importer.offer(frame);
+            let drawn = importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| Some(target.clone()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            drawn
+        };
+        // A case whose buffer the device does not draw is not measured.
+        match draw() {
+            Ok(Drawn::Frame { .. }) => {}
+            other => {
+                eprintln!("the {size} DMA-BUF is not drawn ({other:?}): no DMA-BUF import to measure for it");
+                continue;
+            }
+        }
+        let mut missed = 0u64;
         c.bench_function(&format!("DMA-BUF import {size}"), |b| {
             b.iter(|| {
-                let Ok(Some(frame)) = stream.frame(buffer.as_raw_fd(), 0, stride) else { return };
-                importer.offer(frame);
-                let drawn = importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| Some(target.clone()));
-                std::hint::black_box(drawn.ok());
-                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                if !matches!(std::hint::black_box(draw()), Ok(Drawn::Frame { .. })) {
+                    missed += 1;
+                }
             })
         });
+        if missed > 0 {
+            eprintln!("the {size} DMA-BUF was not drawn {missed} times: its timings include those runs");
+        }
     }
 }
 

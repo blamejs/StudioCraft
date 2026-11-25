@@ -104,7 +104,7 @@ pub use fallback::{Backend, Fallback, check_export, check_import};
 pub use import::{Drawn, Importer, Opaque};
 #[cfg(all(target_os = "linux", feature = "pipewire"))]
 pub use pw_hold::{Dequeued, HeldBuffers, HeldPlane};
-pub use ring::{AdapterId, FrameWatch, Handoff, RECLAIM, SLOTS, SharedFrame, SharedRing, SlotTable};
+pub use ring::{AdapterId, FrameWatch, Handoff, RECLAIM, SLOTS, SharedFrame, SharedRing, SlotTable, WatchPool};
 
 /// Publish what the compositor's `device` can import as DMA-BUFs ([`publish_dmabuf_caps`]), for
 /// the Linux display captures that negotiate their streams after this call. A device that cannot
