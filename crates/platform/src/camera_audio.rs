@@ -115,10 +115,11 @@ fn by_id_serial(link: &str) -> Option<&str> {
 }
 
 /// The USB serial in a PipeWire input node name (`alsa_input.usb-<serial>-<interface>.<profile>`).
+/// Only the profile after the last period is removed, so a serial may contain periods.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn node_serial(node: &str) -> Option<&str> {
     let rest = node.strip_prefix("alsa_input.")?;
-    let device = rest.split_once('.').map_or(rest, |(d, _)| d);
+    let device = rest.rsplit_once('.').map_or(rest, |(d, _)| d);
     let serial = match device.rsplit_once('-') {
         Some((serial, iface)) if !iface.is_empty() && iface.bytes().all(|b| b.is_ascii_digit()) => serial,
         _ => device,
@@ -425,6 +426,10 @@ mod tests {
         assert_eq!(node_serial("alsa_input.usb-046d_HD_Pro_Webcam_C920_2F4B6A4F-02.analog-stereo"), Some("usb-046d_HD_Pro_Webcam_C920_2F4B6A4F"));
         assert_eq!(node_serial("alsa_input.usb-Some-Cam_01-03.mono-fallback"), Some("usb-Some-Cam_01"));
         assert_eq!(node_serial("alsa_input.usb-cam"), Some("usb-cam"));
+        // A period inside the USB identifier stays in the serial; only the profile is removed.
+        let dotted = "alsa_input.usb-Acme_USB_2.0_Camera_123-02.analog-stereo";
+        assert_eq!(node_serial(dotted), Some("usb-Acme_USB_2.0_Camera_123"));
+        assert_eq!(node_serial(dotted), by_id_serial("usb-Acme_USB_2.0_Camera_123-video-index0"));
         assert_eq!(node_serial("alsa_output.usb-046d_Speaker-00.analog-stereo"), None);
         assert_eq!(node_serial("alsa_input."), None);
         assert_eq!(node_serial("bluez_input.00_11_22"), None);
