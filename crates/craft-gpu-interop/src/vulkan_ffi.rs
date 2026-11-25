@@ -446,7 +446,21 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
     };
     // SAFETY: the image handles stay owned by the wgpu-hal textures, which outlive their use.
     let images = textures.iter().map(|t| unsafe { t.raw_handle() }).collect();
-    let ready = Timeline::new(vk_device.clone(), queue.clone(), ready)?;
+    let ready = match Timeline::new(vk_device.clone(), queue.clone(), ready) {
+        Ok(ready) => ready,
+        Err(reason) => {
+            // SAFETY: the guard is only used to destroy the textures, which no command has used
+            // and nothing else refers to.
+            if let Some(hal) = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() } {
+                use wgpu::hal::Device as _;
+                for texture in textures {
+                    // SAFETY: as above.
+                    unsafe { hal.destroy_texture(texture) };
+                }
+            }
+            return Err(reason);
+        }
+    };
     Ok(Exported { textures: Some(textures), images, family, device: vk_device, wgpu_device: device.clone(), queue: queue.clone(), ready })
 }
 
