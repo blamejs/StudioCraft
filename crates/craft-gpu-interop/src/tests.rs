@@ -748,18 +748,30 @@ fn a_dmabuf_export_needs_vulkan_the_extensions_timeline_semaphores_and_a_modifie
 #[test]
 fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
     // A 64 x 2 picture: two luma rows of 64 bytes, then one chroma row.
-    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], true));
-    assert!(nv12_planes_fit(64, 2, 4096, [0, 2048], [256, 256], true), "padded rows");
-    assert!(!nv12_planes_fit(64, 2, 191, [0, 128], [64, 64], true), "the chroma row ends past the buffer");
-    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [63, 64], true), "a linear row shorter than the picture");
-    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [32, 64], false), "a tiled layout's pitch is the driver's");
-    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [0, 64], false), "a pitch of 0");
-    assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], true));
-    assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], true));
-    assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], true), "a chroma plane past the end");
-    assert!(nv12_planes_fit(u32::MAX, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], true), "the largest values do not overflow");
-    assert!(nv12_planes_fit(4, 3, 64, [0, 32], [4, 4], true), "an odd height rounds the chroma rows up");
-    assert!(!nv12_planes_fit(4, 3, 39, [0, 32], [4, 4], true));
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(nv12_planes_fit(64, 2, 4096, [0, 2048], [256, 256], [512, 256], true), "padded rows");
+    assert!(!nv12_planes_fit(64, 2, 191, [0, 128], [64, 64], [128, 63], true), "the chroma row ends past the buffer");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [63, 64], [128, 64], true), "a linear row shorter than the picture");
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [32, 64], [128, 64], false), "a tiled layout's pitch is the driver's");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [0, 64], [128, 64], false), "a pitch of 0");
+    assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], [128, 64], true), "a chroma plane past the end");
+    assert!(nv12_planes_fit(u32::MAX, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [1, 1], true), "the largest values do not overflow");
+    assert!(nv12_planes_fit(4, 3, 64, [0, 32], [4, 4], [12, 8], true), "an odd height rounds the chroma rows up");
+    assert!(!nv12_planes_fit(4, 3, 39, [0, 32], [4, 4], [12, 7], true));
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [0, 64], true), "a plane of no bytes");
+}
+
+/// In a tiled layout the driver's plane sizes, not pitch x rows, are the planes' extent.
+#[test]
+fn a_tiled_nv12_picture_fits_by_the_plane_sizes_the_driver_reports() {
+    // A pitch of 4096 bytes times 2 rows ends past the 6144-byte buffer, but the driver reports a
+    // 4096-byte luma plane and a 2048-byte chroma plane, both inside it.
+    assert!(nv12_planes_fit(64, 2, 6144, [0, 4096], [4096, 4096], [4096, 2048], false), "pitch x rows is not a tiled plane's extent");
+    // Pitches that read as fitting, with reported planes that end past the buffer.
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [128, 4096], false), "the reported chroma plane ends past the buffer");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [256, 64], false), "the reported luma plane ends past the buffer");
 }
 
 #[test]
@@ -815,6 +827,32 @@ fn a_ring_reads_its_counter_while_it_exists_and_keeps_the_last_value() {
     assert_eq!(ring.ready(), 5);
     drop(counter);
     assert_eq!(ring.ready(), 5, "the value stays once the compositor side is gone");
+}
+
+/// Only the compositor's device moves a Linux ring with DMA-BUFs to a new ready value.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_ring_with_buffers_ignores_set_ready() {
+    let ring = ExportRing::of_dmabufs(AdapterId::from_parts(7, 0), 64, 2, vec![], None);
+    ring.set_ready(1);
+    assert_eq!(ring.ready(), 0, "the copy of frame 1 may still run");
+    ring.observe_ready(1);
+    assert_eq!(ring.ready(), 1);
+}
+
+/// The last ready value is the one read from the device: an unread or short value records why
+/// the later frames never become ready.
+#[test]
+fn a_ring_settles_on_the_value_its_device_reached() {
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(Some(3), 3);
+    assert_eq!((ring.ready(), ring.fallback()), (3, None));
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(Some(2), 3);
+    assert_eq!((ring.ready(), ring.fallback()), (2, Some(Fallback::DeviceLost)));
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(None, 3);
+    assert_eq!((ring.ready(), ring.fallback()), (0, Some(Fallback::DeviceLost)));
 }
 
 #[test]
@@ -1314,7 +1352,8 @@ mod gpu {
             let buffer = ring.buffer(slot).expect("a buffer in every slot");
             // The images hold whole 16 x 16 blocks.
             assert_eq!(buffer.image_size(), (64, 16));
-            assert!(nv12_planes_fit(64, 16, buffer.size(), buffer.offsets(), buffer.pitches(), buffer.modifier() == MOD_LINEAR));
+            let linear = buffer.modifier() == MOD_LINEAR;
+            assert!(nv12_planes_fit(64, 16, buffer.size(), buffer.offsets(), buffer.pitches(), buffer.plane_sizes(), linear));
             assert!(crate::dmabuf_ffi::is_dmabuf(buffer.fd()));
         }
         assert!(ring.buffer(SLOTS).is_none());

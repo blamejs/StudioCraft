@@ -550,9 +550,9 @@ mod export {
                 // SAFETY: `image` has `DRM_FORMAT_MODIFIER_EXT` tiling and its modifier has two memory
                 // planes (`nv12_modifiers`), so memory planes 0 and 1 name planes of it.
                 let l = unsafe { self.device.get_image_subresource_layout(image, sub) };
-                Some((u32::try_from(l.offset).ok()?, u32::try_from(l.row_pitch).ok()?))
+                Some((u32::try_from(l.offset).ok()?, u32::try_from(l.row_pitch).ok()?, l.size))
             };
-            let (Some((o0, p0)), Some((o1, p1))) =
+            let (Some((o0, p0, s0)), Some((o1, p1, s1))) =
                 (layout(vk::ImageAspectFlags::MEMORY_PLANE_0_EXT), layout(vk::ImageAspectFlags::MEMORY_PLANE_1_EXT))
             else {
                 return Err(Fallback::ImportFailed);
@@ -567,7 +567,8 @@ mod export {
             }
             // SAFETY: `fd` is a descriptor the call above has just opened, and nothing else owns it.
             let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-            ExportBuffer::new(fd, size, properties.drm_format_modifier, [o0, o1], [p0, p1], (self.width, self.height)).ok_or(Fallback::ImportFailed)
+            ExportBuffer::new(fd, size, properties.drm_format_modifier, [o0, o1], [p0, p1], [s0, s1], (self.width, self.height))
+                .ok_or(Fallback::ImportFailed)
         }
     }
 
@@ -898,7 +899,7 @@ mod export {
         /// Copy the value the queue has signaled on the semaphore to the ring, without waiting.
         fn poll(&self) {
             if let Some(done) = self.reached() {
-                self.ring.set_ready(done);
+                self.ring.observe_ready(done);
             }
         }
     }
@@ -925,10 +926,13 @@ mod export {
                 return;
             }
             // Work still runs: once the queue has finished the work submitted so far, the ring gets
-            // the last value and the semaphore is destroyed, without waiting here.
+            // the value the semaphore reached and the semaphore is destroyed, without waiting here.
+            // wgpu also runs the callback when the device is lost, so the value is read, not assumed.
             let (device, semaphore, ring) = (self.device.clone(), self.semaphore, Arc::clone(&self.ring));
             self.queue.on_submitted_work_done(move || {
-                ring.set_ready(target);
+                // SAFETY: as in `reached`; the semaphore is destroyed only below.
+                let reached = unsafe { device.get_semaphore_counter_value(semaphore) }.ok();
+                ring.settle_ready(reached, target);
                 // SAFETY: every submission that signals the semaphore was made before this callback
                 // was registered, so all of them have finished, and nothing uses it afterward.
                 unsafe { device.destroy_semaphore(semaphore, None) };

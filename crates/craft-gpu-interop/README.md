@@ -141,7 +141,9 @@ work, without waiting.
   when no format modifier fits, and `Fallback::ImportFailed` when an image, its memory or its
   descriptor cannot be made. A VA-API encoder that cannot import a buffer records
   `Fallback::ImportFailed` on the ring, and one that cannot open on the ring's render node records
-  `Fallback::NoEncoder`.
+  `Fallback::NoEncoder`. When the compositor's device stops before the last copy into a frame is
+  seen to finish, the ring records `Fallback::DeviceLost`, and the frames after the last finished
+  copy never become ready.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
   alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
   its color, which the system delivers multiplied by alpha, is divided by alpha.

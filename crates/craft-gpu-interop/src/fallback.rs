@@ -34,10 +34,13 @@ pub enum Fallback {
     /// program frames on Linux: the device cannot make an NV12 image of the ring's size that it
     /// can share as a DMA-BUF in any memory layout.
     Modifier,
+    /// The compositor's device stopped before a copy into a program frame was seen to finish, so
+    /// the encoder cannot tell whether the frame is complete.
+    DeviceLost,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 10] = [
+    pub(crate) const ALL: [Fallback; 11] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -48,6 +51,7 @@ impl Fallback {
         Fallback::NoEncoder,
         Fallback::Refused,
         Fallback::Modifier,
+        Fallback::DeviceLost,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -62,6 +66,7 @@ impl Fallback {
             Fallback::NoEncoder => 8,
             Fallback::Refused => 9,
             Fallback::Modifier => 10,
+            Fallback::DeviceLost => 11,
         }
     }
 
@@ -83,6 +88,7 @@ impl std::fmt::Display for Fallback {
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
             Fallback::Modifier => "the compositor's device cannot share the picture in a memory layout the other side reads",
+            Fallback::DeviceLost => "the compositor's graphics device stopped before a program frame was finished",
         })
     }
 }

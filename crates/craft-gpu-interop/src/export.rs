@@ -64,13 +64,15 @@ pub struct ExportBuffer {
     modifier: u64,
     offsets: [u32; 2],
     pitches: [u32; 2],
+    plane_sizes: [u64; 2],
     image: (u32, u32),
 }
 
 #[cfg(target_os = "linux")]
 impl ExportBuffer {
     /// A buffer of the DMA-BUF `fd` holding a `width` x `height` NV12 image, or `None` when its two
-    /// planes do not hold such an image inside `size` bytes ([`nv12_planes_fit`]).
+    /// planes, `plane_sizes` bytes long as the driver reports them, do not hold such an image
+    /// inside `size` bytes ([`nv12_planes_fit`]).
     #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
     pub(crate) fn new(
         fd: std::os::fd::OwnedFd,
@@ -78,14 +80,16 @@ impl ExportBuffer {
         modifier: u64,
         offsets: [u32; 2],
         pitches: [u32; 2],
+        plane_sizes: [u64; 2],
         (width, height): (u32, u32),
     ) -> Option<ExportBuffer> {
-        nv12_planes_fit(width, height, size, offsets, pitches, modifier == crate::dmabuf::MOD_LINEAR).then_some(ExportBuffer {
+        nv12_planes_fit(width, height, size, offsets, pitches, plane_sizes, modifier == crate::dmabuf::MOD_LINEAR).then_some(ExportBuffer {
             fd,
             size,
             modifier,
             offsets,
             pitches,
+            plane_sizes,
             image: (width, height),
         })
     }
@@ -122,6 +126,11 @@ impl ExportBuffer {
     pub fn pitches(&self) -> [u32; 2] {
         self.pitches
     }
+
+    /// The bytes of the luma and chroma planes, as the driver reports them.
+    pub fn plane_sizes(&self) -> [u64; 2] {
+        self.plane_sizes
+    }
 }
 
 /// The Linux device number (`dev_t`, as `st_rdev` reports it) of the device `major`:`minor`, in
@@ -135,11 +144,20 @@ pub(crate) fn dev_number(major: u32, minor: u32) -> u64 {
 
 /// Whether a `width` x `height` NV12 picture fits `size` bytes with its luma plane at `offsets[0]`
 /// and its chroma plane (half as many rows of the same width) at `offsets[1]`, rows `pitches`
-/// bytes apart, without the sizes overflowing. In a linear layout (`linear`) each row must hold
-/// the picture's width; in a tiled one the driver lays the rows out and only the sums are checked.
-pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], linear: bool) -> bool {
-    if width == 0 || height == 0 || pitches.contains(&0) || (linear && pitches.iter().any(|&p| p < width)) {
+/// bytes apart and `plane_sizes` bytes long as the driver reports them, without the sizes
+/// overflowing. Each plane's reported bytes must lie inside `size`. In a linear layout (`linear`)
+/// each row must also hold the picture's width and every row must lie inside `size`; in a tiled
+/// one the driver lays the rows out, and its plane sizes are the planes' extent.
+pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], plane_sizes: [u64; 2], linear: bool) -> bool {
+    if width == 0 || height == 0 || pitches.contains(&0) || plane_sizes.contains(&0) || (linear && pitches.iter().any(|&p| p < width)) {
         return false;
+    }
+    let reported = |plane: usize| u64::from(offsets[plane]).checked_add(plane_sizes[plane]).is_some_and(|end| end <= size);
+    if !reported(0) || !reported(1) {
+        return false;
+    }
+    if !linear {
+        return true;
     }
     let end = |offset: u32, pitch: u32, rows: u32| u64::from(pitch).checked_mul(u64::from(rows)).and_then(|n| n.checked_add(u64::from(offset)));
     let (Some(luma), Some(chroma)) = (end(offsets[0], pitches[0], height), end(offsets[1], pitches[1], height.div_ceil(2))) else { return false };
@@ -290,7 +308,32 @@ impl ExportRing {
         if self.nv12.is_some() {
             return;
         }
+        #[cfg(target_os = "linux")]
+        if self.dmabuf.is_some() {
+            return;
+        }
+        self.observe_ready(value);
+    }
+
+    /// Keep `value`, a ready value read from the compositor's device, for [`ExportRing::ready`]
+    /// to return once the ring's counter is gone. Values only grow.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn observe_ready(&self, value: u64) {
         self.detached_ready.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// Keep the ready value the compositor's device reached (`None` when it could not be read)
+    /// after the last copy, which signals `target`. When the value cannot be read or falls short
+    /// of `target`, the frames after it never become ready, and [`Fallback::DeviceLost`] is
+    /// recorded.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn settle_ready(&self, reached: Option<u64>, target: u64) {
+        if let Some(done) = reached {
+            self.observe_ready(done);
+        }
+        if reached.is_none_or(|done| done < target) {
+            self.refuse(Fallback::DeviceLost);
+        }
     }
 
     /// The released fence's value now, without waiting: the newest frame the encoder has read.
