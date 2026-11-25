@@ -108,10 +108,10 @@ pub fn ui_params(id: &str) -> &'static str {
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "stream.destination_add" => {
-            "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held), video_encoder?: string (an encoder id, or empty for the stream's), video_bitrate_kbps?: number (100 to 200000, or 0 for the stream's)"
+            "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held), video_encoder?: string (an encoder id, or empty for the stream's), video_bitrate_kbps?: integer (100 to 200000, or 0 for the stream's)"
         }
         "stream.destination_set" => {
-            "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held), video_encoder?: string (an encoder id, or empty for the stream's), video_bitrate_kbps?: number (100 to 200000, or 0 for the stream's)"
+            "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held), video_encoder?: string (an encoder id, or empty for the stream's), video_bitrate_kbps?: integer (100 to 200000, or 0 for the stream's)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" | "stream.retry_now" | "stream.diagnose" => "id: string",
         "stream.check_service_set" => {

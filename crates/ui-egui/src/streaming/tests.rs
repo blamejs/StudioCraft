@@ -152,6 +152,40 @@ fn a_destination_is_changed_and_an_unchanged_one_is_not_saved_again() {
 }
 
 #[test]
+fn a_destination_names_only_an_encoder_a_destination_can_run() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    assert_eq!(a.studio.profile().stream.video_encoder, "h264");
+    let unknown = "`video_encoder` is not a video encoder a destination can run: `none-such`";
+    let hardware = "`video_encoder` can be `hardware` only when the stream's encoder is `hardware`";
+    let before = a.studio.profile().clone();
+    for (id, params, want) in [
+        ("stream.destination_add", json!({"video_encoder": "none-such"}), unknown),
+        ("stream.destination_set", json!({"id": "main", "video_encoder": "none-such"}), unknown),
+        // An encoder that runs inside ffmpeg records, and a stream runs the built-in encoders only.
+        (
+            "stream.destination_set",
+            json!({"id": "main", "video_encoder": "x264"}),
+            "`video_encoder` is not a video encoder a destination can run: `x264`",
+        ),
+        ("stream.destination_add", json!({"video_encoder": "hardware"}), hardware),
+        ("stream.destination_set", json!({"id": "main", "video_encoder": "hardware"}), hardware),
+    ] {
+        let e = run(&mut a, &ctx, id, params.clone()).unwrap_err();
+        assert!(e.contains(want), "{params}: {e}");
+        assert_eq!(*a.studio.profile(), before, "{params}");
+    }
+    // With the stream on the hardware choice, a destination may name it too.
+    let mut p = a.studio.profile().clone();
+    p.stream.video_encoder = "hardware".into();
+    a.studio.set_profile(p).unwrap();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "video_encoder": "hardware", "video_bitrate_kbps": 1500})).unwrap();
+    assert_eq!(a.studio.profile().stream.destination("main").map(|d| d.video_encoder.as_str()), Some("hardware"));
+    run(&mut a, &ctx, "stream.destination_add", json!({"video_encoder": "h264"})).unwrap();
+}
+
+#[test]
 fn a_destination_gets_its_own_encoder_and_the_list_says_which_share_one() {
     let mut a = app();
     let ctx = egui::Context::default();

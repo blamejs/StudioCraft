@@ -1176,7 +1176,7 @@ fn listed_encoders<'a>(registry: &'a Registry, offered: &[String], streaming: bo
 
 /// The video encoders a destination can choose besides the stream's: the stream's list without
 /// the hardware choice, each with its name and whether it can start.
-fn destination_encoder_list(registry: &Registry, offered: &[String]) -> Vec<(String, String, bool)> {
+pub(crate) fn destination_encoder_list(registry: &Registry, offered: &[String]) -> Vec<(String, String, bool)> {
     listed_encoders(registry, offered, true)
         .into_iter()
         .filter(|(e, _)| e.id() != HARDWARE)

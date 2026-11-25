@@ -125,8 +125,17 @@ impl Split {
         if fed.len() >= MAX_ENCODERS {
             return Err(refused());
         }
-        // Full only while the thread has not yet picked up as many encoders as the count allows.
-        self.joins.push(Fed::of(input)).map_err(|_| refused())?;
+        // Full only while the thread has not yet picked up as many encoders as the count allows,
+        // dropped ones included. Those are taken out, so the encoders held always fit. Only `add`
+        // pushes, with `fed` held, so the room made stays free.
+        if let Err(back) = self.joins.push(Fed::of(input)) {
+            for _ in 0..self.joins.len() {
+                if let Some(waiting) = self.joins.pop().filter(Fed::alive) {
+                    let _ = self.joins.push(waiting);
+                }
+            }
+            self.joins.push(back).map_err(|_| refused())?;
+        }
         fed.push(Arc::downgrade(&input.video));
         Ok(())
     }
@@ -322,6 +331,25 @@ mod tests {
         // An encoder that was dropped no longer counts, so another can take its place.
         drop(held.pop());
         assert!(split.add(&one_more).is_ok());
+        let Err(PluginError::Failed(_)) = split.add(&input()) else { panic!("one encoder too many") };
+    }
+
+    #[test]
+    fn encoders_dropped_before_the_thread_picked_them_up_leave_room_for_others() {
+        let first = input();
+        let split = Split::start(&first).unwrap();
+        // No input comes, so the thread picks up none of the encoders added.
+        let mut held: Vec<Input> = (1..MAX_ENCODERS).map(|_| input()).collect();
+        for a in &held {
+            split.add(a).unwrap();
+        }
+        // Each one dropped leaves room for one more, however many were dropped.
+        for i in 0..3 {
+            drop(held.pop());
+            let again = input();
+            assert!(split.add(&again).is_ok(), "replacement {}", i + 1);
+            held.push(again);
+        }
         let Err(PluginError::Failed(_)) = split.add(&input()) else { panic!("one encoder too many") };
     }
 

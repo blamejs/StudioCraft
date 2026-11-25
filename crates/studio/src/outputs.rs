@@ -1028,14 +1028,15 @@ fn stream_settings(p: &Profile, held: &HashMap<String, String>, stream_id: Optio
         };
         let mut entry = serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled, "service": d.service });
         if let Some(stream_id) = stream_id {
-            // A destination that is off is not started, so its choice is checked when it is. It still
-            // names its encoder, so the stream can run one for it once its choice is changed.
+            // A choice the stream cannot run for this destination fails it alone: it names the
+            // choice, and the stream refuses it as the destination starts. One that is off is
+            // started later, and the stream can run an encoder for it once its choice is changed.
             let own = match own_encoder(p, d, (p.stream.video_encoder.as_str(), p.stream.video_bitrate()), stream_id) {
-                Err(_) if !d.enabled => {
+                Ok(own) => own,
+                Err(_) => {
                     let (named, kbps) = p.stream.encoder_of(d);
                     Some(OwnEncoder { encoder: named.to_string(), settings: Settings::new(), kbps })
                 }
-                own => own?,
             };
             if let Some(own) = own {
                 entry["own_encoder"] = serde_json::json!({ "id": own.encoder, "kbps": own.kbps, "settings": own.settings });
@@ -1518,10 +1519,11 @@ impl Studio {
         let own = self.outputs.stream_profile.as_deref() == Some(self.profile.name.as_str());
         if let Some(d) = self.profile.stream.destinations.iter().find(|d| own && d.id == id) {
             let Some(key) = crate::golive::destination_key(&self.profile, &self.outputs.held_keys, d) else {
-                // One that is sending keeps its server and key, so it needs none of the profile's.
-                // A key that is not held is otherwise an error, also for one asked to stop.
+                // One that is sending keeps its server and key, so it needs none of the profile's,
+                // and nothing changes. A key that is not held is otherwise an error, also for one
+                // asked to stop or whose thread has ended.
                 if a.instance.destination_sending(id) {
-                    return Ok(a.instance.start_destination(id, None)?);
+                    return Ok(());
                 }
                 let name = match &d.key {
                     KeyRef::Held(name) => name.as_str(),
@@ -1538,9 +1540,10 @@ impl Studio {
             };
             let encoder = match own_encoder(&self.profile, d, stream, stream_id) {
                 Ok(encoder) => encoder,
-                // One that is sending keeps the encoder it started with, so its choice is checked
-                // only when it next starts afresh.
-                Err(_) if a.instance.destination_sending(id) => return Ok(a.instance.start_destination(id, None)?),
+                // One that is sending keeps the encoder it started with, and nothing changes, so
+                // its choice is checked only when it next starts afresh. No start follows the
+                // check, so one whose thread ended since is not started with its old encoder.
+                Err(_) if a.instance.destination_sending(id) => return Ok(()),
                 Err(e) => return Err(e),
             };
             let setup = DestinationSetup {
@@ -2141,17 +2144,19 @@ pub(crate) mod tests {
         // Without the resolved encoder no destination names one.
         let early = stream_settings(&p, &HashMap::new(), None).unwrap();
         assert!(early.get("destinations").and_then(|l| l.as_array()).unwrap().iter().all(|d| d.get("own_encoder").is_none()));
-        // The hardware choice needs the stream to run it too.
+        // The hardware choice needs the stream to run it too. The stream still starts: the
+        // destination names the choice, and the stream fails that destination alone. One that is
+        // off is checked when it starts, and names its choice too, so the stream splits its input
+        // for it.
         p.stream.video_encoder = "h264".into();
-        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new(), Some("h264")) else { panic!("a destination's hardware choice") };
-        assert!(e.contains("destination `e` can run the hardware encoder only when the stream does"), "{e}");
-        // A destination that is off is checked when it starts, so it does not stop the others. It
-        // still names its encoder, so the stream splits its input for it.
-        p.stream.destinations[3].enabled = false;
-        let settings = stream_settings(&p, &HashMap::new(), Some("h264")).unwrap();
-        let listed = settings.get("destinations").and_then(|l| l.as_array()).unwrap();
-        assert_eq!(listed[3].get("own_encoder"), Some(&serde_json::json!({ "id": HARDWARE, "kbps": 6000, "settings": {} })));
-        assert!(listed[1].get("own_encoder").is_some());
+        own_encoder(&p, &p.stream.destinations[3], ("h264", 6000), "h264").unwrap_err();
+        for on in [true, false] {
+            p.stream.destinations[3].enabled = on;
+            let settings = stream_settings(&p, &HashMap::new(), Some("h264")).unwrap();
+            let listed = settings.get("destinations").and_then(|l| l.as_array()).unwrap();
+            assert_eq!(listed[3].get("own_encoder"), Some(&serde_json::json!({ "id": HARDWARE, "kbps": 6000, "settings": {} })), "{on}");
+            assert!(listed[1].get("own_encoder").is_some());
+        }
     }
 
     #[test]

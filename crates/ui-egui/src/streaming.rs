@@ -15,6 +15,7 @@ use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, MAX_ENCOD
 use studiocraft_model::services::{self, SERVICES, Service};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings, VIDEO_BITRATE_KBPS};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
+use studiocraft_studio::HARDWARE_ENCODER as HARDWARE;
 use studiocraft_studio::OutputKind;
 use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Handshake, Outcome, Verdict};
 use studiocraft_studio::ingests::{self, IngestServer, ListState};
@@ -22,7 +23,7 @@ use studiocraft_studio::ingests::{self, IngestServer, ListState};
 use crate::i18n::Msg;
 use crate::kit::tokens::Palette;
 use crate::logos::{self, Logos, ROW_TILE};
-use crate::settings::key_source;
+use crate::settings::{destination_encoder_list, key_source};
 use crate::theme;
 use crate::{Act, StudioApp};
 
@@ -992,6 +993,37 @@ fn encoder_params(cmd: &craft_keymap::CommandRef) -> Result<(Option<String>, Opt
     Ok((encoder, kbps))
 }
 
+/// An error for an `encoder` a destination cannot run: one that is not a built-in H.264 encoder a
+/// stream can run, or `hardware` while the stream's encoder, `stream`, is another. Empty, for the
+/// stream's encoder, and `None` are fine.
+fn check_destination_encoder(
+    cmd: &craft_keymap::CommandRef,
+    registry: &studiocraft_plugin::Registry,
+    encoder: Option<&str>,
+    stream: &str,
+) -> Result<(), Msg> {
+    let Some(encoder) = encoder.filter(|e| !e.is_empty()) else { return Ok(()) };
+    if encoder == HARDWARE {
+        if stream == HARDWARE {
+            return Ok(());
+        }
+        return Err(tmsg!(
+            "`{command}`: `{key}` can be `hardware` only when the stream's encoder is `hardware`",
+            command = cmd.id,
+            key = "video_encoder"
+        ));
+    }
+    if destination_encoder_list(registry, &[]).iter().any(|(id, _, _)| id == encoder) {
+        return Ok(());
+    }
+    Err(tmsg!(
+        "`{command}`: `{key}` is not a video encoder a destination can run: `{encoder}`",
+        command = cmd.id,
+        key = "video_encoder",
+        encoder = encoder
+    ))
+}
+
 /// The stream's encoders as `stream.destinations` lists them.
 fn listed_encoders(s: &StreamSettings) -> Value {
     let groups: Vec<Value> = s
@@ -1305,6 +1337,7 @@ impl StudioApp {
                 let (video_encoder, video_bitrate_kbps) = encoder_params(cmd)?;
                 let live = self.live_destinations();
                 let current = &self.studio.profile().stream;
+                check_destination_encoder(cmd, self.studio.registry(), video_encoder.as_deref(), &current.video_encoder)?;
                 let id = new_id(current, &live);
                 let first = current.destinations.is_empty();
                 let key_given = key_param(cmd, &id, None)?;
@@ -1362,7 +1395,9 @@ impl StudioApp {
                 let enabled = opt_bool(cmd, "enabled")?;
                 let (video_encoder, video_bitrate_kbps) = encoder_params(cmd)?;
                 let from_user = self.from_user;
+                let registry = std::sync::Arc::clone(self.studio.registry());
                 let changed = self.change_destinations(&id, |s| {
+                    check_destination_encoder(cmd, &registry, video_encoder.as_deref(), &s.video_encoder)?;
                     let d = s.destinations.iter_mut().find(|d| d.id == id).ok_or_else(|| tmsg!("there is no stream destination `{id}`", id = id))?;
                     let key = key_param(cmd, &id, Some(&d.key))?;
                     let mut next = d.clone();

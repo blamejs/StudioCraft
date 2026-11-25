@@ -697,13 +697,21 @@ disk fell behind, `finished` is whether the file was finished after the stream e
 is why the copy stopped, or `null`. `document.inspect`'s `streaming` entry has the same `copy`. `reconnect` holds the
 profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
 with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
-`max` is 16. `encoders` lists the video encoders the destinations send with, the stream's first,
-each `{"video_encoder", "video_bitrate_kbps", "shared", "destinations"}`: `shared` is `true` for the
-stream's encoder, and `destinations` holds the ids of the destinations that send what it makes.
+`max` is 16. `encoders` lists the video encoders the profile's destinations are set up to send
+with, the stream's first, each `{"video_encoder", "video_bitrate_kbps", "shared", "destinations"}`:
+`shared` is `true` for the stream's encoder, and `destinations` holds the ids of the destinations
+set up to send what it makes. The list comes from the profile as it is now, also while a stream
+runs, and holds destinations that are off. A destination that is sending keeps the encoder and
+bitrate it started with until it is stopped and started again, so the list can differ from what
+the running stream sends.
 Each destination is `{"id", "name", "enabled", "service", "server", "key", "video_encoder",
-"video_bitrate_kbps", "status"}`, where `video_encoder` is empty and `video_bitrate_kbps` is 0 when
-the destination uses the stream's,
-where `service` is the id of the streaming service it is set up for or empty for a custom server,
+"video_bitrate_kbps", "status"}`, with the profile's values: `video_encoder` is empty when the
+destination takes the stream's encoder, and `video_bitrate_kbps` is 0 when it takes the stream's
+bitrate. The two are separate: a destination can name an encoder and take the stream's bitrate,
+or the other way around. A destination that names the stream's encoder and bitrate keeps those
+values here, and still shares the stream's encoder. Neither value says whether a destination
+shares an encoder in the running stream. In each destination,
+`service` is the id of the streaming service it is set up for or empty for a custom server,
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
@@ -772,9 +780,15 @@ encoder, encoder settings and bitrate differ from the stream's runs an encoder o
 stream's picture size, frame rate, keyframe interval and sound settings; destinations that name the
 same encoder and bitrate share one. The encoder must be one of the built-in H.264 encoders a stream
 can run. `hardware` is allowed only when the stream's encoder is `hardware`, and then means the
-encoder the stream resolved to. An encoder of a destination's own that cannot start fails that
-destination alone, and one that stops while the stream runs fails its destinations with
-`cause` `other`. A destination with an encoder of its own can join a running stream only when the
+encoder the stream resolved to. `stream.destination_add` and `stream.destination_set` refuse any
+other encoder, and `hardware` while the stream's encoder is another, and change nothing. When the
+stream's encoder is changed later, a destination left on `hardware` fails alone as the stream
+starts, and the other destinations start. An encoder of a destination's own that cannot start fails
+that destination alone, and one that stops while the stream runs fails its destinations with
+`cause` `other`. The other destinations go on. When every destination of the stream has then
+stopped or failed, the stream itself fails and ends, as it does when its last sending destination
+fails for another reason, and a destination can no longer be started in it. A destination with an
+encoder of its own can join a running stream only when the
 stream started with at least one such destination, on or off; otherwise the start is an error until
 the stream is started again.
 

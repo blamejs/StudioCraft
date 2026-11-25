@@ -801,6 +801,8 @@ menu	Transform	Transform
 @msg	`{command}`: `{key}` has a control character	`{command}`: `{key}` has a control character
 @msg	`{command}`: `{key}` is longer than {max} bytes	`{command}`: `{key}` is longer than {max} bytes
 @msg	`{command}`: `{key}` is 0 for the stream's bitrate or {low} to {high}	`{command}`: `{key}` is 0 for the stream's bitrate or {low} to {high}
+@msg	`{command}`: `{key}` can be `hardware` only when the stream's encoder is `hardware`	`{command}`: `{key}` can be `hardware` only when the stream's encoder is `hardware`
+@msg	`{command}`: `{key}` is not a video encoder a destination can run: `{encoder}`	`{command}`: `{key}` is not a video encoder a destination can run: `{encoder}`
 @msg	`{command}`: `name` is longer than {max} characters	`{command}`: `name` is longer than {max} characters
 @msg	`{command}`: `server` is longer than {max} bytes	`{command}`: `server` is longer than {max} bytes
 @msg	`{command}`: `server` has a user name or password before the host, which is not supported	`{command}`: `server` has a user name or password before the host, which is not supported

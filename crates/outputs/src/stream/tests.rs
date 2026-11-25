@@ -2642,7 +2642,7 @@ fn unreachable_state() -> ! {
 #[test]
 fn a_destination_fails_when_its_own_encoder_stops_and_the_stream_goes_on() {
     let (a, seen_a) = server(vec![Plan::Accept]);
-    let (b, seen_b) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept, Plan::Accept]);
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let mut out = Streaming::start_timed(&job, vec![target("a", &a, "ka"), with_own("b", &b, "kb", own(800, "speed"))], quick()).unwrap();
     let feed = Feed::new(&out);
@@ -2666,9 +2666,105 @@ fn a_destination_fails_when_its_own_encoder_stops_and_the_stream_goes_on() {
     assert_eq!(lock(&out.own).len(), 1);
     assert!(!Arc::ptr_eq(&feed_of(&out, "b"), &old));
     assert!(!feed_of(&out, "b").control.is_ended());
+    // It sends again, from the new encoder's headers and a keyframe on.
+    assert_eq!(next(&seen_b), Seen::Publish("kb".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen_b, 3));
+    media(&seen_b, 10);
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen_a);
+    until_closed(&seen_b);
+}
+
+#[test]
+fn an_encoder_that_ended_is_dropped_without_another_start() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "ka"), with_own("b", &b, "kb", own(800, "speed"))], quick()).unwrap();
+    let feed = Feed::new(&out);
+    for seen in [&seen_a, &seen_b] {
+        let _ = next(seen);
+        media(seen, 10);
+    }
+    let queue = Arc::downgrade(&lock(&out.own)[0].1.video());
+    let _ = lock(&out.own)[0].1.stop();
+    let DestinationStatus::Failed(f) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
+    until_closed(&seen_b);
+    let _ = out.status();
+    assert!(lock(&out.own).is_empty(), "the encoder that ended is dropped");
+    // The feed no longer waits for it either.
+    feed.pace(&out);
+    // So the split no longer hands it input: it holds the queue only while it hands on an item.
+    let dropped = Instant::now();
+    while queue.upgrade().is_some() {
+        assert!(dropped.elapsed() < GUARD, "the split still hands the encoder input");
+        std::thread::yield_now();
+    }
+    // Its destination keeps the failure.
+    assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Failed(f));
+    media(&seen_a, 10);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+}
+
+#[test]
+fn a_destination_waiting_to_try_again_fails_when_its_own_encoder_stops() {
+    let (url, seen) = server(vec![Plan::DropAfter(5)]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve: Arc::new(system_resolve), route: routed() };
+    // The wait before a try again outlasts the test's waits.
+    let timing = Timing { first: GUARD * 10, longest: GUARD * 10, ..network_timing() };
+    let mut out = Streaming::start_with(&job, vec![with_own("b", &url, "k", own(800, "speed"))], timing, seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "b", |d| matches!(d.status, DestinationStatus::Retrying { .. }));
+    let _ = lock(&out.own)[0].1.stop();
+    let DestinationStatus::Failed(f) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
+    assert!(f.detail.starts_with("its video encoder stopped"), "{}", f.detail);
+    assert_eq!(f.cause, Cause::Other);
+    drop(feed);
+    let _ = out.stop();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_destination_whose_own_encoder_ends_as_the_stream_stops_does_not_connect_again() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "ka"), with_own("b", &b, "kb", own(800, "speed"))], quick()).unwrap();
+    let feed = Feed::new(&out);
+    for seen in [&seen_a, &seen_b] {
+        let _ = next(seen);
+        media(seen, 10);
+    }
+    // The stream is stopping and the stream's encoder still drains when b's encoder ends.
+    out.hub.ending.store(true, Ordering::SeqCst);
+    let _ = lock(&out.own)[0].1.stop();
+    assert_eq!(until(&out, "b", |d| d.status == DestinationStatus::Stopped).status, DestinationStatus::Stopped);
+    until_closed(&seen_b);
+    assert!(seen_b.recv_timeout(Duration::from_millis(200)).is_err(), "b connected again");
+    drop(feed);
+    let _ = out.stop();
+    until_closed(&seen_a);
+}
+
+#[test]
+fn a_destination_that_names_the_hardware_encoder_without_the_stream_fails_alone() {
+    let (a, seen) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let hardware = OwnEncoder { encoder: crate::encoders::HARDWARE.into(), settings: Settings::new(), kbps: 900 };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "ka"), with_own("h", &closed_url(), "kh", hardware)], quick()).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("ka".into()));
+    let DestinationStatus::Failed(h) = until(&out, "h", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
+    assert!(h.detail.contains("can run the hardware encoder only when the stream does"), "{}", h.detail);
+    media(&seen, 10);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }
 
 #[test]

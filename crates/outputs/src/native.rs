@@ -56,6 +56,8 @@ pub const QUEUE_BYTES: usize = 64 << 20;
 pub const QUEUE_SPAN_NS: i64 = 3_000_000_000;
 /// How long an encoder waits for room in a full packet queue.
 pub const DISK_WAIT: Duration = Duration::from_secs(2);
+/// How long the file thread of a recording that was not finished in time gets to leave its file.
+pub(crate) const END_GRACE: Duration = Duration::from_secs(2);
 /// How far one stream may run ahead in the file thread while it waits for the other, in
 /// nanoseconds. Past that the recording fails, because the other stream's encoder cannot keep up.
 pub const MAX_LAG_NS: i64 = 10_000_000_000;
@@ -471,15 +473,27 @@ impl Native {
     /// End the inputs and wait up to `timeout` for the file to be finished. A file that is not
     /// finished by then is left as it is.
     fn end(&mut self, timeout: Duration) -> Result<(), PluginError> {
+        let deadline = Instant::now() + timeout;
+        self.end_by(deadline, deadline + END_GRACE)
+    }
+
+    /// Ends the inputs without waiting, so several encoders that stop together finish at once.
+    pub(crate) fn ask_end(&self) {
+        self.shared.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// End the inputs and wait until `deadline` for the file to be finished. A file that is not
+    /// finished by then is left as it is, and its file thread gets until `grace` to leave it.
+    /// Encoders that stop together share one deadline and one grace.
+    pub(crate) fn end_by(&mut self, deadline: Instant, grace: Instant) -> Result<(), PluginError> {
         if let Some(s) = &self.finished {
             return match s {
                 OutputStatus::Failed(e) => Err(PluginError::Failed(e.clone())),
                 _ => Ok(()),
             };
         }
-        self.shared.stop.store(true, Ordering::SeqCst);
+        self.ask_end();
         let running = |threads: &[JoinHandle<()>]| threads.iter().any(|t| !t.is_finished());
-        let deadline = Instant::now() + timeout;
         while running(&self.threads) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -488,7 +502,6 @@ impl Native {
             // The file thread leaves the file as it is once it sees this; an encoder busy with a
             // frame ends when the frame is done.
             self.shared.abandon.store(true, Ordering::SeqCst);
-            let grace = Instant::now() + Duration::from_secs(2);
             while self.threads.last().is_some_and(|t| !t.is_finished()) && Instant::now() < grace {
                 std::thread::sleep(Duration::from_millis(20));
             }

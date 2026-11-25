@@ -97,7 +97,8 @@ use studiocraft_plugin::{
     OutputStatus, OwnEncoder, PluginError, RateControl, StreamCopyState,
 };
 
-use crate::native::{DISK_WAIT, FailureWatch, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
+use crate::encoders::HARDWARE;
+use crate::native::{DISK_WAIT, END_GRACE, FailureWatch, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 use crate::writer::FINISH_TIMEOUT;
 use copy::StreamCopy;
 use split::{Input, Split};
@@ -570,9 +571,10 @@ impl Dest {
         Arc::clone(&lock(&self.feed))
     }
 
-    /// Why it cannot send: the encoder it runs for itself ended while the stream goes on. `None`
-    /// while that encoder runs, and for one that sends what the stream's encoder makes.
-    fn feed_ended(&self, hub: &Hub) -> Option<Failure> {
+    /// Why it cannot send: the encoder it runs for itself ended while the stream goes on, with
+    /// that encoder. `None` while that encoder runs, and for one that sends what the stream's
+    /// encoder makes.
+    fn feed_ended(&self, hub: &Hub) -> Option<(Arc<EncoderFeed>, Failure)> {
         let feed = self.feed();
         if feed.own.is_none() || !feed.control.is_ended() || hub.ending.load(Ordering::SeqCst) || hub.control.is_ended() {
             return None;
@@ -581,7 +583,7 @@ impl Dest {
             Some(e) => format!("its video encoder stopped: {e}"),
             None => "its video encoder stopped".to_string(),
         };
-        Some(Failure::new(Cause::Other, detail))
+        Some((feed, Failure::new(Cause::Other, detail)))
     }
 
     /// Its setup now: the server, key and service from one change.
@@ -726,6 +728,13 @@ impl Dest {
         self.alive.load(Ordering::SeqCst)
     }
 
+    /// Whether its thread runs and was not asked to stop, both read with `thread` locked, so the
+    /// answer holds for one moment in which neither changed.
+    fn sending(&self) -> bool {
+        let _slot = lock(&self.thread);
+        self.running() && !self.stopping()
+    }
+
     /// Asks the thread to stop, and wakes it from a wait before a try again.
     fn ask_stop(&self) {
         let slot = lock(&self.thread);
@@ -743,11 +752,15 @@ impl Dest {
         }
     }
 
-    /// Whether the thread ends now that it was stopped or the stream ended: not when it was
-    /// started again meanwhile.
+    /// Whether the thread ends now that it was stopped or the stream ended, or the encoder it runs
+    /// for itself ended while the stream stops: not when it was started again meanwhile.
     fn ends(&self, hub: &Hub) -> bool {
         let _slot = lock(&self.thread);
-        if !self.stopping() && !hub.control.is_ended() {
+        let drained = hub.ending.load(Ordering::SeqCst) && {
+            let feed = lock(&self.feed);
+            feed.own.is_some() && feed.control.is_ended()
+        };
+        if !self.stopping() && !hub.control.is_ended() && !drained {
             return false;
         }
         self.set(DestinationStatus::Stopped);
@@ -760,6 +773,20 @@ impl Dest {
         let _slot = lock(&self.thread);
         self.set(DestinationStatus::Failed(failure));
         self.alive.store(false, Ordering::SeqCst);
+    }
+
+    /// The thread gives up because the encoder `ended.0` it ran for itself ended, with `ended.1`,
+    /// unless it was started again since or given another encoder: then it goes on, and says so
+    /// with `false`.
+    fn fail_ended(&self, ended: (Arc<EncoderFeed>, Failure)) -> bool {
+        let _slot = lock(&self.thread);
+        let (feed, failure) = ended;
+        if self.restarted.load(Ordering::SeqCst) || !Arc::ptr_eq(&lock(&self.feed), &feed) {
+            return false;
+        }
+        self.set(DestinationStatus::Failed(failure));
+        self.alive.store(false, Ordering::SeqCst);
+        true
     }
 
     fn state(&self, hub: &Hub) -> DestinationState {
@@ -1184,14 +1211,20 @@ fn fail(hub: &Hub, d: &Dest, f: Failure) {
 }
 
 /// Waits until `deadline`, or less when the destination is stopped or started again, Try Now ends
-/// the wait, or the stream ends.
+/// the wait, the stream ends, or the encoder it runs for itself ends. Nothing wakes it when that
+/// encoder ends, so it looks each [`Timing::net_poll`].
 fn wait(hub: &Hub, d: &Dest, deadline: Instant) {
     loop {
         let now = Instant::now();
         if d.stopping() || d.restarted.load(Ordering::SeqCst) || d.trying_now() || hub.control.is_ended() || now >= deadline {
             return;
         }
-        std::thread::park_timeout(deadline - now);
+        let owned = d.feed().own.is_some();
+        if owned && d.feed_ended(hub).is_some() {
+            return;
+        }
+        let left = deadline - now;
+        std::thread::park_timeout(if owned { left.min(hub.timing.net_poll) } else { left });
     }
 }
 
@@ -1249,7 +1282,7 @@ enum NetWait {
     /// The longest waits spent without a route used up the tries.
     GaveUp(Failure),
     /// The encoder the destination runs for itself ended while the stream goes on.
-    EncoderEnded(Failure),
+    EncoderEnded((Arc<EncoderFeed>, Failure)),
 }
 
 /// Waits until the system has a route to `d`'s server again or `d` is started again, or, with
@@ -1272,8 +1305,8 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
             break NetWait::Restarted;
         }
         // No route would let it send anything.
-        if let Some(f) = d.feed_ended(hub) {
-            break NetWait::EncoderEnded(f);
+        if let Some(ended) = d.feed_ended(hub) {
+            break NetWait::EncoderEnded(ended);
         }
         // Try Now: it tries at once, without a route, as the next of its tries.
         if d.trying_now() {
@@ -1523,8 +1556,13 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                     }
                     NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return fail(hub, d, f),
-                    // The connection is not at fault, so it is not checked.
-                    NetWait::EncoderEnded(f) => return d.fail(f),
+                    // The connection is not at fault, so it is not checked. Started again with
+                    // another encoder meanwhile, it goes on with that one.
+                    NetWait::EncoderEnded(ended) => {
+                        if d.fail_ended(ended) {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -1532,9 +1570,12 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             return;
         }
         // The encoder it runs for itself ended: no try can send anything. The connection is not
-        // at fault, so it is not checked.
-        if let Some(f) = d.feed_ended(hub) {
-            return d.fail(f);
+        // at fault, so it is not checked. Started again with another encoder since, it tries with
+        // that one.
+        if let Some(ended) = d.feed_ended(hub)
+            && d.fail_ended(ended)
+        {
+            return;
         }
         d.begin_try();
         // Started again while it waited: the try is shown as a first one.
@@ -1604,12 +1645,14 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // connects with the new one.
             _ if d.renew.load(Ordering::SeqCst) => {}
             // Unless it was started again meanwhile, the next turn ends the thread. When the
-            // encoder it runs for itself ended while the stream goes on, it fails.
+            // encoder it runs for itself ended while the stream goes on, it fails, unless it was
+            // started again with another encoder since.
             End::Done => {
                 if !d.stopping()
-                    && let Some(f) = d.feed_ended(hub)
+                    && let Some(ended) = d.feed_ended(hub)
+                    && d.fail_ended(ended)
                 {
-                    return d.fail(f);
+                    return;
                 }
             }
             End::Failed(e) => return fail(hub, d, e),
@@ -1826,6 +1869,13 @@ pub struct Streaming {
 /// keyframe interval and sound, from `start` on. `None` gives `job` itself.
 fn encoder_job(job: &OutputJob, own: Option<&OwnEncoder>, start: Tick) -> Result<OutputJob, PluginError> {
     let Some(own) = own else { return Ok(job.clone()) };
+    // The studio gives the hardware choice as the encoder the stream resolved it to, so one that
+    // comes here names it while the stream runs another encoder.
+    if own.encoder == HARDWARE {
+        return Err(PluginError::Failed(
+            "a destination can run the hardware encoder only when the stream does; choose an encoder by name for it in Settings › Stream".into(),
+        ));
+    }
     let RateControl::Bitrate { keyframe_s, .. } = job.rate else {
         return Err(PluginError::Failed("streams need a bitrate".into()));
     };
@@ -2097,17 +2147,7 @@ impl Streaming {
         }
         // Held while one starts, so two starts of the same encoder start it once.
         let mut groups = lock(&self.own);
-        // An encoder that ended is not used again. It is dropped, so it no longer counts toward
-        // the encoders the stream can run; a destination still holding its packets keeps them.
-        let ended: Vec<(Arc<EncoderFeed>, Native)> = {
-            let (ended, running) = std::mem::take(&mut *groups).into_iter().partition(|(f, _)| f.control.is_ended());
-            *groups = running;
-            ended
-        };
-        if !ended.is_empty() {
-            self.set_taps(&groups);
-        }
-        drop(ended);
+        self.drop_ended(&mut groups);
         if let Some((feed, _)) = groups.iter().find(|(f, _)| f.own.as_ref() == Some(own)) {
             return Ok(Arc::clone(feed));
         }
@@ -2126,6 +2166,23 @@ impl Streaming {
         groups.push((Arc::clone(&feed), native));
         self.set_taps(&groups);
         Ok(feed)
+    }
+
+    /// Drops the encoders of `groups`, held from `own`, that ended. An encoder that ended is not
+    /// used again. Once dropped, the split stops handing it input and it no longer counts toward
+    /// the encoders the stream can run. A destination still holding its packets keeps them, and
+    /// why it ended.
+    fn drop_ended(&self, groups: &mut Vec<(Arc<EncoderFeed>, Native)>) {
+        if !groups.iter().any(|(f, _)| f.control.is_ended()) {
+            return;
+        }
+        let ended: Vec<(Arc<EncoderFeed>, Native)> = {
+            let (ended, running) = std::mem::take(groups).into_iter().partition(|(f, _)| f.control.is_ended());
+            *groups = running;
+            ended
+        };
+        self.set_taps(groups);
+        drop(ended);
     }
 
     /// Makes the caption feeds of `groups`, the running encoders of `own`, the ones the stream's
@@ -2213,6 +2270,11 @@ impl OutputInstance for Streaming {
     }
 
     fn status(&self) -> OutputStatus {
+        // An encoder of a destination's own that ended gets no more input, also while no
+        // destination is started again.
+        if !self.stopped {
+            self.drop_ended(&mut lock(&self.own));
+        }
         let dests = lock(&self.hub.dests);
         let left = lock(&self.hub.left).sum().bytes;
         let total = dests.iter().map(|d| d.bytes.load(Ordering::Relaxed)).fold(left, u64::saturating_add);
@@ -2274,12 +2336,21 @@ impl OutputInstance for Streaming {
         if let Some(split) = &mut self.split {
             split.stop();
         }
-        // The encoders finish, and the last packets go to the rings; then the fan-outs end. An
-        // encoder a destination runs for itself does not fail the stream.
-        let r = self.native.stop();
-        for (_, native) in lock(&self.own).iter_mut() {
-            let _ = native.stop();
+        // The encoders finish, and the last packets go to the rings; then the fan-outs end. They
+        // all end together and share one deadline. An encoder a destination runs for itself does
+        // not fail the stream.
+        let mut own = lock(&self.own);
+        self.native.ask_end();
+        for (_, native) in own.iter() {
+            native.ask_end();
         }
+        let deadline = Instant::now() + FINISH_TIMEOUT;
+        let grace = deadline + END_GRACE;
+        let r = self.native.end_by(deadline, grace);
+        for (_, native) in own.iter_mut() {
+            let _ = native.end_by(deadline, grace);
+        }
+        drop(own);
         self.close_destinations();
         // The copy writes what its ring holds and finishes its file; its failure is in its state,
         // not in the stream's result.
@@ -2333,9 +2404,10 @@ impl OutputInstance for Streaming {
             Some(key) => d.with_key(key).config().map_err(bad)?,
             None => d.config().map_err(bad)?,
         };
-        if d.running() && !d.stopping() {
-            // It keeps what it sends with.
-            return spawn(&self.hub, &d, Given { key, ..Given::default() }).map(|_| ());
+        // It keeps what it sends with. A thread that ended since takes the start below, which
+        // finds it a usable encoder.
+        if d.sending() {
+            return Ok(());
         }
         if !d.running() {
             self.room()?;
@@ -2355,10 +2427,10 @@ impl OutputInstance for Streaming {
             return Err(PluginError::Failed("the destination has no id".into()));
         }
         let found = self.hub.find(id).ok();
-        if let Some(d) = found.as_ref().filter(|d| d.running() && !d.stopping()) {
-            // It keeps the server and key it sends with, so `setup` is not used. A stop asked for
-            // since is canceled, and it goes on with them too.
-            return spawn(&self.hub, d, Given::default()).map(|_| false);
+        if found.as_ref().is_some_and(|d| d.sending()) {
+            // It keeps the server and key it sends with, so `setup` is not used. One whose thread
+            // ended since, or that was asked to stop since, takes `setup` below.
+            return Ok(false);
         }
         let target =
             Target { id: id.to_string(), server: setup.server.clone(), key: setup.key.clone(), enabled: true, encoder: setup.encoder.clone() };
@@ -2390,7 +2462,7 @@ impl OutputInstance for Streaming {
     }
 
     fn destination_sending(&self, id: &str) -> bool {
-        self.hub.find(id).is_ok_and(|d| d.running() && !d.stopping())
+        self.hub.find(id).is_ok_and(|d| d.sending())
     }
 
     fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
