@@ -437,6 +437,7 @@ impl Model {
             return Err(AvatarError::TooLarge { what: "nodes", limit: limits.nodes });
         }
         let mut depth = vec![0usize; self.nodes.len()];
+        let mut world: Vec<Transform> = Vec::with_capacity(self.nodes.len());
         for (i, n) in self.nodes.iter().enumerate() {
             if let Some(p) = n.parent {
                 if p >= i {
@@ -453,6 +454,14 @@ impl Model {
             if !n.rest.rotation.is_unit() {
                 return Err(bad(format!("node {i} has a rotation that is not of unit length")));
             }
+            let w = match n.parent.and_then(|p| world.get(p)) {
+                Some(parent) => n.rest.then(parent),
+                None => n.rest,
+            };
+            if !w.is_finite() {
+                return Err(bad(format!("node {i} has a transform that is not finite in the model's space")));
+            }
+            world.push(w);
             if n.mesh.is_some_and(|m| m >= self.meshes.len()) {
                 return Err(bad(format!("node {i} names a mesh that does not exist")));
             }

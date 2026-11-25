@@ -43,6 +43,14 @@ fn broken_trees_are_refused() {
     refused(|m| m.nodes[3].parent = Some(3), "does not come before it");
     refused(|m| m.nodes[1].parent = Some(40), "does not come before it");
     refused(|m| m.nodes[2].rest.translation.x = f32::NAN, "not finite");
+    // Each scale fits in an f32, but the two together do not.
+    refused(
+        |m| {
+            m.nodes[1].rest.scale = Vec3::new(1e30, 1.0, 1.0);
+            m.nodes[2].rest.scale = Vec3::new(1e30, 1.0, 1.0);
+        },
+        "not finite in the model's space",
+    );
     refused(|m| m.nodes[2].rest.rotation = Quat::new(2.0, 0.0, 0.0, 0.0), "not of unit length");
     refused(|m| m.nodes[2].rest.rotation = Quat::new(0.0, 0.0, 0.0, 0.0), "not of unit length");
     refused(|m| m.nodes[2].mesh = Some(5), "mesh that does not exist");
