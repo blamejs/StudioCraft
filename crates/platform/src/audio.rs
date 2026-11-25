@@ -578,10 +578,7 @@ mod tests {
     fn an_unknown_output_device_is_reported() {
         // The device opens on the device thread, so the reason arrives on the handle.
         if let Ok(p) = SystemSink.play("no such device 1234", Box::new(|_, _| {}), Box::new(|_| {})) {
-            while p.open_error().is_none() {
-                assert!(!p.started(), "an unknown device does not play");
-                std::thread::yield_now();
-            }
+            wait_for_open_error(p.as_ref());
         }
     }
 
@@ -622,15 +619,51 @@ mod tests {
         (play(devices, open).unwrap(), release_tx, began_rx, dropped_rx)
     }
 
+    /// Waits until `p` has started, and fails at the caller if its device reports an open error.
+    #[track_caller]
+    fn wait_until_started(p: &dyn Playing) {
+        while !p.started() {
+            if let Some(e) = p.open_error() {
+                panic!("the playback failed to open: {e}");
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// Waits for `p`'s open error, and fails at the caller if it starts instead.
+    #[track_caller]
+    fn wait_for_open_error(p: &dyn Playing) {
+        while p.open_error().is_none() {
+            assert!(!p.started(), "the playback started instead of reporting an open error");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "the playback failed to open: the device is busy")]
+    fn waiting_for_a_playback_that_fails_to_open_fails_at_once() {
+        let devices = Devices::spawn().unwrap();
+        let (p, release, _began, _dropped) = held_open(&devices);
+        release.send(Err(PlatformError::Failed("the device is busy".into()))).unwrap();
+        wait_until_started(&p);
+    }
+
+    #[test]
+    #[should_panic(expected = "the playback started instead of reporting an open error")]
+    fn waiting_for_an_open_error_from_a_playback_that_starts_fails_at_once() {
+        let devices = Devices::spawn().unwrap();
+        let (p, release, _began, _dropped) = held_open(&devices);
+        release.send(Ok(STEREO_48K)).unwrap();
+        wait_for_open_error(&p);
+    }
+
     #[test]
     fn playback_returns_while_the_device_is_still_opening() {
         let devices = Devices::spawn().unwrap();
         let (p, release, _began, dropped) = held_open(&devices);
         assert_eq!((p.started(), p.open_error()), (false, None), "the device is still opening");
         release.send(Ok(STEREO_48K)).unwrap();
-        while !p.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&p);
         assert_eq!(p.format(), STEREO_48K);
         drop(p);
         dropped.recv().unwrap();
@@ -641,9 +674,7 @@ mod tests {
         let devices = Devices::spawn().unwrap();
         let (p, release, _began, _dropped) = held_open(&devices);
         release.send(Err(PlatformError::Failed("the device is busy".into()))).unwrap();
-        while p.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_for_open_error(&p);
         assert_eq!((p.started(), p.open_error()), (false, Some("the device is busy")));
     }
 
@@ -669,9 +700,7 @@ mod tests {
         assert!(devices.requests.full(), "a full queue is reported before an open is tried");
         release.send(Ok(STEREO_48K)).unwrap();
         for p in &queued {
-            while !p.started() {
-                std::thread::yield_now();
-            }
+            wait_until_started(p);
         }
         assert!(first.started());
         assert!(!devices.requests.full(), "the queue has room once the device thread has taken the opens");
@@ -682,9 +711,7 @@ mod tests {
         let devices = Devices::spawn().unwrap();
         let (kept, release, _began, kept_dropped) = held_open(&devices);
         release.send(Ok(STEREO_48K)).unwrap();
-        while !kept.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&kept);
         let (release_tx, release_rx) = sync_channel::<()>(0);
         let (began_tx, began_rx) = sync_channel(1);
         let crashing = play(
@@ -699,20 +726,14 @@ mod tests {
         began_rx.recv().unwrap();
         let queued = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
         release_tx.send(()).unwrap();
-        while crashing.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_for_open_error(&crashing);
         assert_eq!((crashing.started(), crashing.open_error()), (false, Some(OPEN_FAILED)));
-        while !queued.started() && queued.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&queued);
         assert_eq!((queued.started(), queued.open_error()), (true, None), "the open queued behind it still runs");
         assert!(kept.started());
         assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
         let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
-        while !after.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&after);
         drop(kept);
         kept_dropped.recv().unwrap();
     }
@@ -739,9 +760,7 @@ mod tests {
         drop(skipped);
         let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
         release.send(Ok(STEREO_48K)).unwrap();
-        while !after.started() && after.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&after);
         assert_eq!((after.started(), after.open_error()), (true, None));
         assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
         drop(kept);
@@ -754,14 +773,10 @@ mod tests {
         let (kept, release, _began, kept_dropped) = held_open(&devices);
         release.send(Ok(STEREO_48K)).unwrap();
         let crashing = play(&devices, opening(|| Ok((PanicOnDrop, STEREO_48K)))).unwrap();
-        while !crashing.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&crashing);
         drop(crashing);
         let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
-        while !after.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&after);
         assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
         drop(kept);
         kept_dropped.recv().unwrap();
@@ -792,9 +807,7 @@ mod tests {
         drop(skipped);
         let last = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
         release.send(Ok(STEREO_48K)).unwrap();
-        while !last.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&last);
         assert!(first.started());
         assert!(!opened.load(Ordering::SeqCst), "a dropped playback's device was opened");
     }
@@ -822,9 +835,7 @@ mod tests {
         let (finish_tx, finish_rx) = sync_channel(1);
         let stream = SlowClose { began: began_tx, finish: finish_rx, closed: Arc::clone(&closed) };
         let first = play(&devices, opening(move || Ok((stream, STEREO_48K)))).unwrap();
-        while !first.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&first);
         drop(first);
         let (seen_tx, seen_rx) = sync_channel(1);
         let was_closed = Arc::clone(&closed);
@@ -838,9 +849,7 @@ mod tests {
         assert!(!second.started());
         finish_tx.send(()).unwrap();
         assert!(seen_rx.recv().unwrap(), "the device was opened again before the old stream closed");
-        while !second.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&second);
     }
 
     /// A stand-in for a device stream that marks itself closed when it is dropped.
@@ -884,9 +893,7 @@ mod tests {
         drop(earlier);
         finish_tx.send(()).unwrap();
         assert!(seen_rx.recv().unwrap(), "the device was opened again before the earlier stream closed");
-        while !next.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&next);
         assert!(held.started());
     }
 
@@ -904,17 +911,11 @@ mod tests {
         let devices = Devices::spawn().unwrap();
         let (kept, release, _began, kept_dropped) = held_open(&devices);
         release.send(Ok(STEREO_48K)).unwrap();
-        while !kept.started() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&kept);
         let crashing = play(&devices, opening(|| -> Result<((), Format), PlatformError> { std::panic::panic_any(PanicsWhenDiscarded) })).unwrap();
-        while crashing.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_for_open_error(&crashing);
         let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
-        while !after.started() && after.open_error().is_none() {
-            std::thread::yield_now();
-        }
+        wait_until_started(&after);
         assert_eq!((after.started(), after.open_error()), (true, None), "a later open still starts");
         assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
         drop(kept);
