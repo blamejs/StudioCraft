@@ -628,9 +628,12 @@ starts at the stream's first keyframe, its times count from 0, and it keeps the 
 sound tracks. It is off by default, and a running stream keeps the setting it started with
 (`stream.save_copy_set`).
 
-For editing, turn on [Audio tracks](#audio-tracks) as well. A stream's take then keeps each
-source's sound in a WAV file of its own beside the copy, in `Stream <date> <time> Audio`, and
-`recordings.list` lists the take as the copy's.
+For editing, turn on [Audio tracks](#audio-tracks) as well, with "Write them while" set to "The
+stream runs" or "A recording or the stream runs". A stream's take then keeps each source's sound in
+a WAV file of its own beside the copy, in `Stream <date> <time> Audio`, and `recordings.list` lists
+the take as the copy's. With "A recording runs", a stream alone writes no take. With "A recording
+or the stream runs", a recording that runs during the stream takes the take, and the take's files
+go beside the recording instead.
 
 The copy reads the stream's packets from a buffer of its own that holds up to 4 seconds, and the
 encoders and destinations do not wait for it. When the disk falls further behind than that, the
@@ -640,6 +643,9 @@ When the stream stops, StudioCraft writes what the buffer holds and finishes the
 seconds; after that the file plays up to the last part written. A notice names the file when it is
 finished, with the packets left out when there were any. A stream with a copy can have at most 63
 destinations.
+
+The copy needs a keyframe at least every 2 seconds, as a recording does. With a longer Keyframe
+interval in Settings › Stream, the stream starts without the copy and a notice says why.
 
 ### Pause screen
 
