@@ -333,6 +333,7 @@
 	the audio stream failed	音频流出错
 	the camera capture could not start	无法开始摄像头采集
 	the camera is already open in another format	摄像头已以另一种格式打开
+	the camera is not connected	摄像头未连接
 	the camera is still closing	摄像头仍在关闭中
 	the camera offers no format StudioCraft reads	此摄像头没有 StudioCraft 支持的视频格式
 	the camera sends frames that cannot be read	摄像头发送的帧无法读取
@@ -370,7 +371,7 @@
 	Video	视频
 	Video bitrate	视频比特率
 	Video encoder	视频编码器
-	Video settings can't change while recording, streaming or running the replay buffer.	录制、直播或运行回放缓存时无法更改视频设置。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	录制、直播或运行回放缓存、虚拟摄像头时无法更改视频设置。
 	View	视图
 	waiting for a choice in the system picker	正在等待在系统选择器中选择
 	waiting for the camera	正在等待摄像头

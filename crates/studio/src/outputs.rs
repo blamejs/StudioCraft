@@ -302,11 +302,12 @@ pub(crate) struct Outputs {
     copy_path: Option<PathBuf>,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
-    /// The copies of streams that ended, each file, whether it was finished and its
-    /// [`StreamCopyState::start_ns`], oldest first, for [`Outputs::copy_ended`] and
-    /// [`Outputs::copy_start`]: the last [`MAX_UNFINISHED`], and every copy that ended since the
-    /// last poll began, however many there are, until the next poll.
-    ended_copies: Vec<(PathBuf, bool, u64)>,
+    /// The copies of streams that ended, each file, whether it was finished, its
+    /// [`StreamCopyState::start_ns`] and its [`StreamCopyState::last_video_ns`], oldest first,
+    /// for [`Outputs::copy_ended`], [`Outputs::copy_start`] and [`Outputs::copy_last_video`]: the
+    /// last [`MAX_UNFINISHED`], and every copy that ended since the last poll began, however many
+    /// there are, until the next poll.
+    ended_copies: Vec<(PathBuf, bool, u64, Option<u64>)>,
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
     streams: u64,
@@ -665,7 +666,7 @@ impl Outputs {
     /// Keep `state`, the copy of a stream that ended, among the ended copies, and as the last
     /// stream's copy when `latest`, that stream being the last one that started.
     fn note_copy_ended(&mut self, state: StreamCopyState, latest: bool) {
-        self.ended_copies.push((state.path.clone(), state.finished, state.start_ns));
+        self.ended_copies.push((state.path.clone(), state.finished, state.start_ns, state.last_video_ns));
         if latest {
             self.last_copy = Some(state);
         }
@@ -674,7 +675,13 @@ impl Outputs {
     /// [`StreamCopyState::start_ns`] of the copy of a stream at `path` that ended, the latest one
     /// with that file name; `None` when no such copy is known.
     pub(crate) fn copy_start(&self, path: &Path) -> Option<u64> {
-        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map(|(.., start)| *start)
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map(|(_, _, start, _)| *start)
+    }
+
+    /// [`StreamCopyState::last_video_ns`] of the copy of a stream at `path` that ended, the latest
+    /// one with that file name; `None` when no such copy is known or its file holds no video frame.
+    pub(crate) fn copy_last_video(&self, path: &Path) -> Option<u64> {
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).and_then(|(.., last)| *last)
     }
 
     /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
@@ -687,7 +694,7 @@ impl Outputs {
         if stopping || running {
             return None;
         }
-        Some(self.ended_copies.iter().rev().find(|(p, ..)| p == path).is_some_and(|(_, finished, _)| *finished))
+        Some(self.ended_copies.iter().rev().find(|(p, ..)| p == path).is_some_and(|(_, finished, ..)| *finished))
     }
 
     /// Why the running stream's copy stopped while the stream goes on, once [`Outputs::poll`] has
@@ -911,6 +918,17 @@ struct Plan {
     encoder_settings: Settings,
     rate: RateControl,
     audio_kbps: u32,
+    /// The mix tracks a recording writes, one audio stream each, in order; empty for the outputs
+    /// that take the program mix.
+    tracks: Vec<usize>,
+}
+
+/// An error when `planned` is a recording that writes no audio track.
+fn check_tracks(planned: &Plan, kind: OutputKind) -> Result<(), StudioError> {
+    if kind == OutputKind::Recording && planned.tracks.is_empty() {
+        return Err(StudioError::Output("choose at least one audio track to record in the profile's output.recording_tracks setting".into()));
+    }
+    Ok(())
 }
 
 /// How profile `p` starts the output `kind`.
@@ -923,6 +941,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
             encoder_settings: p.output.video_encoder_settings(),
             rate: p.output.quality.quality_level().map_or(RateControl::Lossless, RateControl::Quality),
             audio_kbps: 192,
+            tracks: p.output.recording_tracks.numbers().collect(),
         },
         OutputKind::Streaming => Plan {
             output_id: "rtmp",
@@ -935,6 +954,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
                 keyframe_s: p.stream.keyframe_interval_s.clamp(1, 20),
             },
             audio_kbps: p.stream.audio_bitrate_kbps,
+            tracks: Vec::new(),
         },
         OutputKind::Replay => {
             let r = p.replay.sanitized();
@@ -947,6 +967,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
                 // The recording's quality; the built-in encoder has no lossless mode, so Lossless keeps High.
                 rate: RateControl::Quality(p.output.quality.quality_level().or(RecordingQuality::High.quality_level()).unwrap_or(23)),
                 audio_kbps: 192,
+                tracks: Vec::new(),
             }
         }
     }
@@ -1008,6 +1029,11 @@ impl Plan {
             video_encoder_settings: self.encoder_settings.clone(),
             rate: self.rate,
             audio_bitrate_kbps: self.audio_kbps,
+            // One stream stays unnamed, as a recording of the program mix is.
+            audio_streams: match self.tracks.len() {
+                0 | 1 => vec![String::new(); self.tracks.len()],
+                _ => self.tracks.iter().map(|t| format!("Track {t}")).collect(),
+            },
             ffmpeg,
             stats,
             start,
@@ -1691,6 +1717,7 @@ impl Studio {
             return Err(StudioError::Output("nothing can be recorded or streamed without the graphics device".into()));
         }
         let mut planned = plan(&self.profile, kind);
+        check_tracks(&planned, kind)?;
         // The key the stream's automatic checks are kept under, recorded once the stream starts.
         let mut check_key = None;
         if kind == OutputKind::Streaming {
@@ -1772,6 +1799,7 @@ impl Studio {
             // Phrases live captions finish while the stream runs go out as closed captions.
             job.captions = Some(self.caption_feed());
         }
+        let tracks = std::mem::take(&mut planned.tracks);
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
@@ -1835,7 +1863,14 @@ impl Studio {
         };
         self.outputs.next_id += 1;
         let id = self.outputs.next_id;
-        self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
+        if tracks.is_empty() {
+            self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
+        } else {
+            // Each of the recording's audio streams takes its mix track.
+            for (track, queue) in tracks.iter().zip(instance.audio_streams()) {
+                self.mixer.send(MixerCmd::AddTrackOutput { id, track: *track, queue });
+            }
+        }
         let target = instance.target();
         if kind == OutputKind::Streaming {
             self.outputs.stream_started();
@@ -1895,6 +1930,7 @@ impl Studio {
 #[cfg(test)]
 pub(crate) mod tests {
     use studiocraft_media::audio::PooledBlock;
+    use studiocraft_model::MixTracks;
     use studiocraft_plugin::Plugin;
 
     use super::*;
@@ -2668,7 +2704,7 @@ pub(crate) mod tests {
     }
 
     /// [`stream_with_copy`], with a stop that waits on `gate` when one is given.
-    fn stream_with_copy_gated(
+    pub(crate) fn stream_with_copy_gated(
         o: &mut Outputs,
         start: Tick,
         stats: Arc<EncoderStats>,
@@ -2864,6 +2900,39 @@ pub(crate) mod tests {
             let Some(ffmpeg) = job.video_encoder.ffmpeg() else { panic!("{} runs in ffmpeg", plan.encoder_id) };
             let args = ffmpeg.ffmpeg_args(&job.video_encoder_settings, job.rate, 30.0).unwrap().join(" ");
             assert!(args.contains(preset), "{args}");
+        }
+    }
+
+    #[test]
+    fn a_recording_writes_the_profile_s_mix_tracks_and_the_other_outputs_the_program() {
+        let mut p = Profile::default();
+        let video = VideoFormat { width: 64, height: 48, fps_num: 30, fps_den: 1, pixel: PixelFormat::Nv12 };
+        let streams = |p: &Profile, kind| {
+            let plan = plan(p, kind);
+            let encoder = Arc::new(studiocraft_encode::H264);
+            let job = plan.job(encoder, video, PathBuf::new(), Arc::new(EncoderStats::default()), Tick::from_units(0, 1));
+            (plan.tracks, job.audio_streams)
+        };
+        assert_eq!(streams(&p, OutputKind::Recording), (vec![1], vec![String::new()]), "track 1, one unnamed stream, by default");
+        p.output.recording_tracks = MixTracks::from_numbers(&[2, 1, 5]).unwrap();
+        let named = ["Track 1", "Track 2", "Track 5"].map(String::from).to_vec();
+        assert_eq!(streams(&p, OutputKind::Recording), (vec![1, 2, 5], named), "in track order, each named");
+        for kind in [OutputKind::Streaming, OutputKind::Replay] {
+            assert_eq!(streams(&p, kind), (vec![], vec![]), "{kind:?} takes the program mix");
+        }
+    }
+
+    #[test]
+    fn a_recording_without_tracks_names_the_profile_setting() {
+        let mut p = Profile::default();
+        assert!(check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording).is_ok());
+        p.output.recording_tracks = MixTracks::from_bits(0);
+        let Err(StudioError::Output(m)) = check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording) else {
+            panic!("a recording without tracks started")
+        };
+        assert!(m.contains("output.recording_tracks"), "{m}");
+        for kind in [OutputKind::Streaming, OutputKind::Replay] {
+            assert!(check_tracks(&plan(&p, kind), kind).is_ok(), "{kind:?} takes the program mix");
         }
     }
 

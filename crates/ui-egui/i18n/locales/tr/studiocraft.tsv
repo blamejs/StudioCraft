@@ -333,6 +333,7 @@
 	the audio stream failed	ses akışında hata oluştu
 	the camera capture could not start	kamera yakalama başlatılamadı
 	the camera is already open in another format	kamera zaten başka bir biçimde açık
+	the camera is not connected	kamera bağlı değil
 	the camera is still closing	kamera hâlâ kapanıyor
 	the camera offers no format StudioCraft reads	kamera StudioCraft'ın okuyabildiği bir biçim sunmuyor
 	the camera sends frames that cannot be read	kamera okunamayan kareler gönderiyor
@@ -370,7 +371,7 @@
 	Video	Video
 	Video bitrate	Video bit hızı
 	Video encoder	Video kodlayıcı
-	Video settings can't change while recording, streaming or running the replay buffer.	Kayıt, yayın veya tekrar arabelleği çalışırken video ayarları değiştirilemez.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Kayıt, yayın, tekrar arabelleği veya sanal kamera çalışırken video ayarları değiştirilemez.
 	View	Görünüm
 	waiting for a choice in the system picker	sistem seçicisinde seçim bekleniyor
 	waiting for the camera	kamera bekleniyor

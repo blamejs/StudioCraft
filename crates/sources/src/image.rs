@@ -50,25 +50,50 @@ struct Instance {
 
 /// Decode `path` to straight-alpha RGBA.
 pub(crate) fn load(path: &Path) -> Result<(u32, u32, Vec<u8>), PluginError> {
+    load_within(path, MAX_FILE, MAX_PIXELS)
+}
+
+/// Open `path` for reading, refusing anything that is not a file, such as a folder, a device or
+/// a named pipe. On Unix the file is opened without waiting, so a named pipe with no writer is
+/// refused at once instead of holding the caller.
+pub(crate) fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "it is not a file"));
+    }
+    Ok(file)
+}
+
+/// Decode `path` to straight-alpha RGBA, refusing anything that is not a file, a file larger
+/// than `max_file` bytes or a picture with more than `max_pixels` pixels before reading or
+/// decoding it.
+pub(crate) fn load_within(path: &Path, max_file: u64, max_pixels: u64) -> Result<(u32, u32, Vec<u8>), PluginError> {
     let failed = |e: std::io::Error| PluginError::Failed(format!("{}: {e}", path.display()));
     let too_large = || PluginError::Failed(format!("{} is too large", path.display()));
-    let file = std::fs::File::open(path).map_err(failed)?;
-    if file.metadata().map_err(failed)?.len() > MAX_FILE {
+    let file = open_file(path).map_err(failed)?;
+    if file.metadata().map_err(failed)?.len() > max_file {
         return Err(too_large());
     }
     // The file can grow after the size check; the read stops one byte past the cap.
     let mut bytes = Vec::new();
-    file.take(MAX_FILE + 1).read_to_end(&mut bytes).map_err(failed)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_FILE {
+    file.take(max_file + 1).read_to_end(&mut bytes).map_err(failed)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_file {
         return Err(too_large());
     }
-    // The decoder refuses a picture wider or taller than a frame, or with more than MAX_PIXELS
-    // pixels, before it allocates them.
+    // The decoder refuses a picture wider or taller than a frame, or with more than
+    // `max_pixels` pixels, before it allocates them.
     let mut opts = craft_image_codecs::DecodeOptions::default();
     opts.limits.max_width = MAX_FRAME_SIDE;
     opts.limits.max_height = MAX_FRAME_SIDE;
-    opts.limits.max_pixels = MAX_PIXELS;
-    opts.limits.max_alloc = MAX_PIXELS * 8;
+    opts.limits.max_pixels = max_pixels;
+    opts.limits.max_alloc = max_pixels.saturating_mul(8);
     let img = craft_image_codecs::decode_with(&bytes, &opts).map_err(|e| PluginError::Failed(format!("{}: {e}", path.display())))?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || w > MAX_FRAME_SIDE || h > MAX_FRAME_SIDE {

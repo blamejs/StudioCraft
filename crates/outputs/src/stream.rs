@@ -1824,11 +1824,12 @@ impl Streaming {
             )
         });
         let wants_copy = copy.is_some() && copy_refused.is_none();
-        if wants_copy && targets.len() >= MAX_SUBSCRIBERS {
+        // Only the destinations that are on take a subscription.
+        let on = targets.iter().filter(|t| t.enabled).count();
+        if wants_copy && on >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!(
-                "a stream that saves a copy can have at most {} destinations, not {}",
-                MAX_SUBSCRIBERS - 1,
-                targets.len()
+                "a stream that saves a copy can have at most {} destinations turned on, not {on}",
+                MAX_SUBSCRIBERS - 1
             )));
         }
         let v = job.video;

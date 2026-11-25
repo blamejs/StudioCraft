@@ -101,8 +101,16 @@ fn test() -> Result<(), String> {
 }
 
 /// Crates with no operating-system or GPU dependency, which the web build will use.
-const WASM_CRATES: &[&str] =
-    &["studiocraft-model", "studiocraft-plugin", "craft-flv", "craft-scopes", "craft-ease", "craft-transitions", "craft-closed-captions"];
+const WASM_CRATES: &[&str] = &[
+    "studiocraft-model",
+    "studiocraft-plugin",
+    "craft-flv",
+    "craft-scopes",
+    "craft-ease",
+    "craft-transitions",
+    "craft-closed-captions",
+    "craft-avatar",
+];
 
 fn wasm() -> Result<(), String> {
     let packages: Vec<&str> = WASM_CRATES.iter().chain(WASM_APPS).copied().collect();
