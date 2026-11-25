@@ -882,6 +882,13 @@ impl Hub {
         if let Some(t) = lock(&old.thread).take() {
             let _ = t.join();
         }
+        // Its thread has ended and starts no more checks. As in `stop`, the check of one that
+        // failed for good goes on, and that of a stopped one ends.
+        if let Some((checks, auto)) = &self.auto
+            && !matches!(old.status(), DestinationStatus::Failed(_))
+        {
+            checks.cancel(&auto.profile, &old.target.id);
+        }
         Ok(d)
     }
 }
@@ -1731,9 +1738,6 @@ pub struct Streaming {
     refused: Arc<AtomicU64>,
     /// The copy written to a file, when the stream was started with one.
     copy: Option<StreamCopy>,
-    /// Whether the copy took one of the [`MAX_SUBSCRIBERS`] subscriptions: not one that was
-    /// refused or could not subscribe.
-    copy_subscribed: bool,
     stopped: bool,
 }
 
@@ -1863,12 +1867,12 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let (copy, copy_subscribed) = match (copy, copy_feed, copy_refused) {
-            (Some((path, _)), _, Some(e)) => (Some(StreamCopy::failed(path, e)), false),
-            (Some((path, open)), Some((tracks, Ok(rx))), None) => (Some(StreamCopy::start(path, open, tracks, rx)), true),
-            (Some((path, _)), Some((_, Err(e))), None) => (Some(StreamCopy::failed(path, e)), false),
-            (Some((path, _)), None, None) => (Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())), false),
-            (None, _, _) => (None, false),
+        let copy = match (copy, copy_feed, copy_refused) {
+            (Some((path, _)), _, Some(e)) => Some(StreamCopy::failed(path, e)),
+            (Some((path, open)), Some((tracks, Ok(rx))), None) => Some(StreamCopy::start(path, open, tracks, rx)),
+            (Some((path, _)), Some((_, Err(e))), None) => Some(StreamCopy::failed(path, e)),
+            (Some((path, _)), None, None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
+            (None, _, _) => None,
         };
         let counts = Arc::new(Counts::default());
         let service = |id: &str| auto.as_ref().and_then(|(_, a)| a.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s));
@@ -1891,7 +1895,7 @@ impl Streaming {
             net: NetWatch::default(),
             auto,
         });
-        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, copy_subscribed, stopped: false };
+        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, stopped: false };
         for d in dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None, None) {
                 let _ = s.stop();
@@ -1902,9 +1906,9 @@ impl Streaming {
     }
 
     /// Whether one more destination can send: each destination that sends or tries to, and a copy
-    /// that subscribed, takes one of the [`MAX_SUBSCRIBERS`] subscriptions.
+    /// that holds its subscription, takes one of the [`MAX_SUBSCRIBERS`] subscriptions.
     fn room(&self) -> Result<(), PluginError> {
-        let copy = usize::from(self.copy_subscribed);
+        let copy = usize::from(self.copy.as_ref().is_some_and(StreamCopy::subscribed));
         let taken = lock(&self.hub.dests).iter().filter(|o| o.running()).count() + copy;
         if taken >= MAX_SUBSCRIBERS {
             let most = MAX_SUBSCRIBERS - copy;

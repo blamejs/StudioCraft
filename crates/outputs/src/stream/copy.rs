@@ -127,6 +127,12 @@ impl StreamCopy {
         StreamCopy { path, shared, monitor: None, thread: None }
     }
 
+    /// Whether the copy holds its subscription: its thread runs, so its receiver is not dropped.
+    /// One that could not start, or whose thread ended after a failure, holds none.
+    pub(crate) fn subscribed(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+
     pub(crate) fn state(&self) -> StreamCopyState {
         StreamCopyState {
             path: self.path.clone(),

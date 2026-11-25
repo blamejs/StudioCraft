@@ -2098,6 +2098,43 @@ fn a_check_after_a_failure_checks_the_server_of_the_try_that_failed() {
 }
 
 #[test]
+fn a_stopped_destination_that_gives_its_place_keeps_no_check() {
+    // The check's lookup waits until the test lets it answer, so the check is still running.
+    let (release, hold) = mpsc::channel::<()>();
+    let (looking, looked) = mpsc::channel::<()>();
+    let (hold, looking) = (Mutex::new(hold), Mutex::new(looking));
+    let lookup = move |_: &str, _: u16| {
+        let _ = lock(&looking).send(());
+        let _ = lock(&hold).recv();
+        Ok(Vec::new())
+    };
+    let fake = diagnose::tests::Fake { lookup: Box::new(lookup), ..diagnose::tests::Fake::new() };
+    let (checks, _fake, auto) = auto_checks_on(fake, false);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The stream's own destination waits in its lookup, so it starts no check.
+    let (release_x, hold_x) = mpsc::channel::<()>();
+    let (resolve, _asked) = scripted(vec![Answer::After(hold_x, Vec::new())]);
+    let seams = Seams { clock: TestClock::new(), resolve, route: routed() };
+    let mut out = Streaming::start_full(&job, vec![named("x")], quick(), seams, Some((Arc::clone(&checks), auto))).unwrap();
+    for i in 1..MAX_SUBSCRIBERS {
+        out.hub.find_or_add(&format!("d{i}"), None).unwrap();
+    }
+    // d1 has not started and shows as stopped; its check runs.
+    let d1 = out.hub.find("d1").unwrap();
+    assert!(set_up(&d1, Some("k"), Some(("rtmp://check.example.test/live", None))));
+    check_after(&out.hub, &d1, &Failure::new(Cause::Refused, "refused"), &d1.setup());
+    looked.recv().unwrap();
+    assert!(matches!(checks.state("Show", "d1"), Some(diagnose::CheckState::Running { .. })));
+    // An added destination takes d1's place, and d1's check ends with it.
+    out.hub.find_or_add("new", None).unwrap();
+    assert!(out.hub.find("d1").is_err());
+    assert_eq!(checks.state("Show", "d1"), None);
+    drop(release);
+    drop(release_x);
+    let _ = out.stop();
+}
+
+#[test]
 fn a_restart_after_a_check_is_checked_again_after_its_third_failed_try() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let (checks, fake, auto) = auto_checks(false);
@@ -2609,6 +2646,25 @@ fn a_copy_that_took_no_subscription_leaves_its_place_to_a_destination() {
     assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("keyframe")));
     assert_eq!(lock(&out.hub.dests).iter().filter(|d| d.running()).count(), MAX_SUBSCRIBERS - 1);
     // The refused copy holds no subscription, so the last one is free.
+    assert!(out.start_destination_as(&setup("d0", "rtmp://127.0.0.1:1/live", "k")).unwrap());
+    assert_eq!(out.destinations().len(), MAX_SUBSCRIBERS);
+    let _ = out.stop();
+}
+
+#[test]
+fn a_copy_whose_file_failed_leaves_its_place_to_a_destination() {
+    // Each destination waits long before it tries again, so every one keeps its place.
+    let slow = Timing { first: Duration::from_secs(600), longest: Duration::from_secs(600), max_tries: 100, ..quick() };
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let targets: Vec<Target> = (1..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let mut out = Streaming::start_copying(&job, targets, slow, "/videos/Stream.mkv".into(), open).unwrap();
+    // The copy's thread ends after its file fails to open, and its receiver goes with it.
+    while out.copy.as_ref().is_some_and(StreamCopy::subscribed) {
+        std::thread::yield_now();
+    }
+    assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("not opened")));
+    assert_eq!(lock(&out.hub.dests).iter().filter(|d| d.running()).count(), MAX_SUBSCRIBERS - 1);
     assert!(out.start_destination_as(&setup("d0", "rtmp://127.0.0.1:1/live", "k")).unwrap());
     assert_eq!(out.destinations().len(), MAX_SUBSCRIBERS);
     let _ = out.stop();
