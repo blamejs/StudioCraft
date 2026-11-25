@@ -139,6 +139,23 @@ fn each_missing_packet_is_listed_for_a_nack_once() {
 }
 
 #[test]
+fn a_restart_lists_a_missing_packet_in_a_slot_listed_before() {
+    let mut jb = buffer();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    jb.push(&pkt(3, 0), ms(1));
+    let mut lost = Vec::new();
+    assert_eq!(jb.nacks(&mut lost, 10), 1);
+    assert_eq!(lost, [2]);
+    assert_eq!(jb.push(&pkt(4096, 0), ms(2)), Push::Stray);
+    assert_eq!(jb.push(&pkt(4097, 0), ms(3)), Push::Restarted);
+    jb.push(&pkt(4099, 0), ms(4));
+    // Sequence 4098 uses the slot that sequence 2 used.
+    lost.clear();
+    assert_eq!(jb.nacks(&mut lost, 10), 1);
+    assert_eq!(lost, [4098]);
+}
+
+#[test]
 fn duplicates_are_dropped() {
     let mut jb = buffer();
     assert_eq!(jb.push(&pkt(1, 0), Duration::ZERO), Push::Stored);

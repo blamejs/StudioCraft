@@ -103,6 +103,8 @@ pub struct Depacketizer {
     slice_pending: bool,
     /// AAC: the size of the access unit whose fragments are being joined.
     aac_size: Option<usize>,
+    /// AAC: the AU-Index of the access unit whose fragments are being joined.
+    aac_index: u32,
     stats: DepacketizerStats,
 }
 
@@ -137,6 +139,7 @@ impl Depacketizer {
             first_slice: None,
             slice_pending: false,
             aac_size: None,
+            aac_index: 0,
             stats: DepacketizerStats::default(),
         })
     }
@@ -227,6 +230,7 @@ impl Depacketizer {
         self.first_slice = None;
         self.slice_pending = false;
         self.aac_size = None;
+        self.aac_index = 0;
     }
 
     /// Ends the video frame being built and gives it out unless it is broken or video waits for a
@@ -465,11 +469,12 @@ impl Depacketizer {
         }
         let units = 1 + (bits - first) / other;
         let mut reader = Bits { data: headers, at: 0 };
-        // The fragments of one unit: each carries the size of the whole unit (RFC 3640
-        // section 3.2.3).
+        // The fragments of one unit: each carries the size and the AU-Index of the whole unit
+        // (RFC 3640 section 3.2.3).
         if let Some(size) = self.aac_size {
             let au = reader.read(c.size_length).ok_or(Error::Truncated("an AU-header"))? as usize;
-            if units != 1 || au != size {
+            let index = reader.read(c.index_length).ok_or(Error::Truncated("an AU-header"))?;
+            if units != 1 || au != size || index != self.aac_index {
                 return Err(Error::Invalid("an AAC fragment does not continue the access unit before it"));
             }
             if self.buf.len() + data.len() > size {
@@ -511,6 +516,7 @@ impl Depacketizer {
                 self.buf.clear();
                 self.append(&[data])?;
                 self.aac_size = Some(size);
+                self.aac_index = index;
                 self.timestamp = Some(timestamp);
                 return Ok(());
             }

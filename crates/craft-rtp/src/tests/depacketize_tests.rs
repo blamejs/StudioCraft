@@ -448,6 +448,19 @@ fn aac_the_last_fragment_has_the_marker_bit() {
 }
 
 #[test]
+fn aac_a_fragment_with_another_au_index_does_not_continue_the_unit() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::HBR)).unwrap();
+    let a = aac_hbr(&[&[1, 2]], Some(4));
+    let mut b = aac_hbr(&[&[3, 4]], Some(4));
+    // The AU-Index of the second fragment is 1.
+    b[3] |= 1;
+    let (frames, errors) = run(&mut d, &[(0, false, &a), (0, true, &b)]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("an AAC fragment does not continue the access unit before it")]);
+    assert_eq!(d.stats().dropped, 1);
+}
+
+#[test]
 fn aac_complete_units_over_the_limit_are_dropped() {
     let mut d = Depacketizer::with_max_frame(Codec::Aac(AacConfig::HBR), 2).unwrap();
     let (frames, errors) = run(&mut d, &[(0, true, &aac_hbr(&[&[1], &[1, 2, 3]], None))]);
