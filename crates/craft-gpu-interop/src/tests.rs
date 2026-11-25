@@ -9,64 +9,94 @@ fn frame(ring: &std::sync::Arc<SharedRing>, slot: usize, ready: u64) -> SharedFr
 #[test]
 fn free_textures_are_written_oldest_first() {
     let t0 = Instant::now();
+    let ring = SharedRing::detached(1, 1);
     let mut slots = SlotTable::default();
     let mut order = Vec::new();
     for _ in 0..SLOTS {
-        let s = slots.pick(0, t0).unwrap();
+        let s = slots.pick(&ring, 0, t0).unwrap();
         assert!(!order.contains(&s), "a texture handed out is not picked again");
         order.push(s);
-        slots.fill(s, t0).unwrap();
+        slots.fill(&ring, s, t0).unwrap();
     }
     assert_eq!(slots.last(), 3);
-    assert_eq!(slots.pick(0, t0), None, "every texture is waiting for the compositor");
+    assert_eq!(slots.pick(&ring, 0, t0), None, "every texture is waiting for the compositor");
     // The compositor read frame 1: its texture is the one written again.
-    assert_eq!(slots.pick(1, t0), Some(order[0]));
+    assert_eq!(slots.pick(&ring, 1, t0), Some(order[0]));
     // Frame 3 read means frames 1 and 2 were passed over; all are free, the oldest first.
-    assert_eq!(slots.pick(3, t0), Some(order[0]));
+    assert_eq!(slots.pick(&ring, 3, t0), Some(order[0]));
 }
 
 #[test]
 fn a_texture_the_compositor_never_releases_is_taken_back() {
     let t0 = Instant::now();
+    let ring = SharedRing::detached(1, 1);
     let mut slots = SlotTable::default();
     for _ in 0..SLOTS {
-        let s = slots.pick(0, t0).unwrap();
-        slots.fill(s, t0).unwrap();
+        let s = slots.pick(&ring, 0, t0).unwrap();
+        slots.fill(&ring, s, t0).unwrap();
     }
-    assert_eq!(slots.pick(0, t0 + RECLAIM - Duration::from_millis(1)), None);
-    let s = slots.pick(0, t0 + RECLAIM).unwrap();
-    assert_eq!(slots.fill(s, t0 + RECLAIM), Some(4));
+    assert_eq!(slots.pick(&ring, 0, t0 + RECLAIM - Duration::from_millis(1)), None);
+    let s = slots.pick(&ring, 0, t0 + RECLAIM).unwrap();
+    assert_eq!(slots.fill(&ring, s, t0 + RECLAIM), Some(4));
     // A clock that went back does not free a texture.
     let later = t0 + RECLAIM * 4;
     let mut slots = SlotTable::default();
     for _ in 0..SLOTS {
-        let s = slots.pick(0, later).unwrap();
-        slots.fill(s, later).unwrap();
+        let s = slots.pick(&ring, 0, later).unwrap();
+        slots.fill(&ring, s, later).unwrap();
     }
-    assert_eq!(slots.pick(0, t0), None);
+    assert_eq!(slots.pick(&ring, 0, t0), None);
+}
+
+#[test]
+fn a_texture_the_compositor_started_to_read_waits_for_the_released_fence() {
+    let t0 = Instant::now();
+    let ring = SharedRing::detached(1, 1);
+    let mut slots = SlotTable::default();
+    let mut frames = Vec::new();
+    for _ in 0..SLOTS {
+        let s = slots.pick(&ring, 0, t0).unwrap();
+        frames.push(frame(&ring, s, slots.fill(&ring, s, t0).unwrap()));
+    }
+    // The compositor submits a draw of frame 1 that is still running after RECLAIM.
+    assert!(frames[0].start_reading());
+    assert!(!frames[0].start_reading(), "a frame is read once");
+    let late = t0 + RECLAIM * 2;
+    let s = slots.pick(&ring, 0, late).unwrap();
+    assert_ne!(s, frames[0].slot(), "the texture being read is not written");
+    assert_eq!(s, frames[1].slot(), "the oldest texture nobody reads is taken back");
+    // A frame taken back is not drawn: its texture may hold another picture.
+    assert!(!frames[1].start_reading());
+    assert!(!frames[2].start_reading(), "a texture past RECLAIM that was passed over is taken back too");
+    slots.fill(&ring, s, late).unwrap();
+    assert_eq!(slots.pick(&ring, 0, late), Some(frames[2].slot()));
+    // Once the released fence passes frame 1, its texture is free again.
+    assert_eq!(slots.pick(&ring, 1, late), Some(frames[0].slot()));
 }
 
 #[test]
 fn an_export_texture_is_written_again_only_once_it_is_released() {
     let t0 = Instant::now();
+    let ring = SharedRing::detached(4, 2);
     let mut slots = SlotTable::default();
     for _ in 0..SLOTS {
         let s = slots.pick_released(0).unwrap();
-        slots.fill(s, t0).unwrap();
+        slots.fill_released(s, t0).unwrap();
     }
     assert_eq!(slots.pick_released(0), None, "every texture is being encoded");
-    // However long the encoder holds them, the capture side's time limit does not apply.
-    assert!(slots.pick(0, t0 + RECLAIM * 10).is_some());
+    // However long the encoder holds them, the textures are not taken back: they were never
+    // handed out as shared frames, so the capture side's time limit does not apply.
+    assert_eq!(slots.pick(&ring, 0, t0 + RECLAIM * 10), None);
     assert_eq!(slots.pick_released(0), None);
-    assert_eq!(slots.pick_released(2), slots.pick(2, t0), "frames 1 and 2 were read; the oldest goes first");
+    assert_eq!(slots.pick_released(2), slots.pick(&ring, 2, t0), "frames 1 and 2 were read; the oldest goes first");
 }
 
 #[test]
 fn a_slot_outside_the_ring_is_refused() {
-    let mut slots = SlotTable::default();
-    assert_eq!(slots.fill(SLOTS, Instant::now()), None);
-    assert_eq!(slots.last(), 0, "a refused fill hands out no value");
     let ring = SharedRing::detached(4, 2);
+    let mut slots = SlotTable::default();
+    assert_eq!(slots.fill(&ring, SLOTS, Instant::now()), None);
+    assert_eq!(slots.last(), 0, "a refused fill hands out no value");
     assert!(SharedFrame::new(ring.clone(), SLOTS, 1).is_none());
     assert!(SharedFrame::new(ring.clone(), usize::MAX, 1).is_none());
     let f = frame(&ring, SLOTS - 1, 9);
@@ -84,12 +114,36 @@ fn a_late_copy_leaves_the_frame_waiting_and_the_caller_goes_on() {
         assert!(handoff.take_ready(completed).is_none());
         assert_eq!(handoff.pending().map(SharedFrame::ready), Some(5));
     }
-    // A newer frame replaces the one still waiting.
+    // A newer frame takes the waiting one's place.
     handoff.offer(frame(&ring, 1, 6));
-    assert!(handoff.take_ready(5).is_none());
+    assert!(handoff.take_ready(4).is_none());
+    assert_eq!(handoff.pending().map(SharedFrame::ready), Some(6));
     let taken = handoff.take_ready(6).unwrap();
     assert_eq!((taken.slot(), taken.ready()), (1, 6));
     assert!(handoff.pending().is_none(), "a frame is taken once");
+    assert!(handoff.take_ready(u64::MAX).is_none(), "the frame it replaced is dropped with it");
+}
+
+#[test]
+fn a_finished_frame_is_drawn_while_the_newer_one_is_copied() {
+    let ring = SharedRing::detached(1, 1);
+    let mut handoff = Handoff::default();
+    handoff.offer(frame(&ring, 0, 5));
+    handoff.offer(frame(&ring, 1, 6));
+    // Frame 5's copy is done and frame 6's is not: frame 5 is taken and frame 6 keeps waiting.
+    assert_eq!(handoff.take_ready(5).map(|f| f.ready()), Some(5));
+    assert_eq!(handoff.pending().map(SharedFrame::ready), Some(6));
+    assert!(handoff.take_ready(5).is_none(), "the older frame is taken once");
+    // Only the frame the newest one replaced is kept: frame 6 is dropped.
+    handoff.offer(frame(&ring, 2, 7));
+    handoff.offer(frame(&ring, 0, 8));
+    assert!(handoff.take_ready(6).is_none());
+    assert_eq!(handoff.take_ready(7).map(|f| f.ready()), Some(7));
+    // A frame from another ring is not kept.
+    let other = SharedRing::detached(1, 1);
+    handoff.offer(frame(&other, 0, 9));
+    assert!(handoff.take_ready(8).is_none());
+    assert_eq!(handoff.take_ready(9).map(|f| f.ready()), Some(9));
 }
 
 #[test]

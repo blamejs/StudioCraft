@@ -476,7 +476,7 @@ impl Exporter {
             Err(Fallback::Unsupported)
         };
         let commands = commands.inspect_err(|&reason| self.ring.refuse(reason))?;
-        let Some(ready) = self.slots.fill(slot, now) else {
+        let Some(ready) = self.slots.fill_released(slot, now) else {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };

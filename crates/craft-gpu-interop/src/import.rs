@@ -267,7 +267,16 @@ impl Importer {
             }
         }
         let Some(opened) = &self.opened else { return Ok(Drawn::Idle) };
-        let Some(frame) = self.handoff.take_ready(completed(opened)) else { return Ok(Drawn::Waiting) };
+        let done = completed(opened);
+        // A frame whose texture the capture side took back is dropped, and the next one is tried.
+        let frame = loop {
+            match self.handoff.take_ready(done) {
+                Some(frame) if frame.start_reading() => break frame,
+                Some(_) => {}
+                None if self.handoff.pending().is_some() => return Ok(Drawn::Waiting),
+                None => return Ok(Drawn::Idle),
+            }
+        };
         let Some(bind) = opened.binds.get(frame.slot()) else {
             ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
