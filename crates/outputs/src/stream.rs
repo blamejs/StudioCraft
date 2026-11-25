@@ -2362,6 +2362,10 @@ impl OutputInstance for Streaming {
         self.split.as_ref().map_or_else(|| self.native.video(), Split::video)
     }
 
+    fn video_held(&self) -> usize {
+        self.split.as_ref().map_or(0, Split::held)
+    }
+
     fn audio(&self) -> Arc<Fifo<PooledBlock>> {
         self.split.as_ref().map_or_else(|| self.native.audio(), Split::audio)
     }

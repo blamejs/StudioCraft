@@ -664,7 +664,7 @@ fn encoders_receive_nv12_frames_in_order() {
     let white = solid([255, 255, 255, 255], 16, 16);
     c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item(1, &white, at(0.0, 0.0))] }, ..Plan::default() }));
     let sink = Arc::new(Fifo::new(16));
-    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)], held: 0 }));
     let lost = AtomicU64::new(0);
     for i in 0..5 {
         c.frame(Tick(i * 100), &lost);
@@ -692,7 +692,7 @@ fn finish_hands_over_every_read_back_while_another_thread_polls_the_device() {
     let white = solid([255, 255, 255, 255], 16, 16);
     c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item(1, &white, at(0.0, 0.0))] }, ..Plan::default() }));
     let sink = Arc::new(Fifo::new(4));
-    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)], held: 0 }));
     // A second thread polls the same device, as the window does, and can run a read-back's
     // callback in place of the wait in `finish`.
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -726,7 +726,7 @@ fn finish_hands_over_every_read_back_while_another_thread_polls_the_device() {
 fn an_output_larger_than_the_device_allows_is_an_error_not_a_converter() {
     let Some(mut c) = compositor(32, 16) else { return };
     let sink = Arc::new(Fifo::new(4));
-    c.set_encode(Some(EncodeTarget { width: 1 << 20, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    c.set_encode(Some(EncodeTarget { width: 1 << 20, height: 8, sinks: vec![Arc::clone(&sink)], held: 0 }));
     let errors = c.take_errors();
     assert!(errors.iter().any(|e| e.to_string().contains("frames for the encoders cannot be converted")), "{errors:?}");
     let lost = AtomicU64::new(0);
@@ -734,7 +734,7 @@ fn an_output_larger_than_the_device_allows_is_an_error_not_a_converter() {
     c.finish(&lost);
     assert!(sink.pop().is_none());
     // A size the device holds starts the conversion.
-    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)], held: 0 }));
     assert!(c.take_errors().is_empty());
 }
 
@@ -744,8 +744,8 @@ fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     let white = solid([255, 255, 255, 255], 16, 16);
     c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item(1, &white, at(0.0, 0.0))] }, ..Plan::default() }));
     let (enc, scope) = (Arc::new(Fifo::new(16)), Arc::new(Fifo::new(16)));
-    c.set_encode(Some(EncodeTarget { width: 32, height: 16, sinks: vec![Arc::clone(&enc)] }));
-    c.set_scope(Some(EncodeTarget { width: 8, height: 4, sinks: vec![Arc::clone(&scope)] }));
+    c.set_encode(Some(EncodeTarget { width: 32, height: 16, sinks: vec![Arc::clone(&enc)], held: 0 }));
+    c.set_scope(Some(EncodeTarget { width: 8, height: 4, sinks: vec![Arc::clone(&scope)], held: 0 }));
     let lost = AtomicU64::new(0);
     for i in 0..4 {
         c.frame(Tick(i * 100), &lost);

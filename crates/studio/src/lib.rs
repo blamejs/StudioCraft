@@ -1770,7 +1770,8 @@ impl Studio {
         let vs = self.profile.video.sanitized();
         let mut sinks = self.outputs.video_sinks();
         sinks.extend(self.virtual_camera_sink());
-        let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks });
+        let held = self.outputs.video_held();
+        let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks, held });
         v.shared.encode.publish(target);
     }
 
@@ -1792,7 +1793,7 @@ impl Studio {
         let canvas = self.canvas();
         let target = self.scope_feed.as_ref().map(|f| {
             let (width, height) = scope_size(canvas, f.max_width, f.max_height);
-            studiocraft_render::EncodeTarget { width, height, sinks: vec![Arc::clone(&f.sink)] }
+            studiocraft_render::EncodeTarget { width, height, sinks: vec![Arc::clone(&f.sink)], held: 0 }
         });
         v.shared.scope.publish(target);
     }

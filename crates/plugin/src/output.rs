@@ -84,6 +84,13 @@ pub enum OutputStatus {
 pub trait OutputInstance: Send {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>>;
     fn audio(&self) -> Arc<Fifo<PooledBlock>>;
+    /// Frames the output can hold beyond its video queue and the frame taken from it: those
+    /// queued for, or being encoded by, the encoders a stream hands its frames on to. The
+    /// compositor keeps that many more frames, so they do not make its frame loop allocate. Read
+    /// without allocating; 0 for an output that encodes the frames it takes itself.
+    fn video_held(&self) -> usize {
+        0
+    }
     /// A queue for each audio stream the output writes, in the order of
     /// [`OutputJob::audio_streams`]; the first is [`OutputInstance::audio`]. An output that
     /// writes one stream returns that one.

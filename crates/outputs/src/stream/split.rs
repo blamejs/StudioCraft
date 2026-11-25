@@ -16,8 +16,10 @@
 //!   frames and never stalls the split, the other encoders or the compositor.
 //! - The split holds an encoder's queues weakly. Once the encoder is dropped, the split stops
 //!   handing it input and it no longer counts toward [`MAX_ENCODERS`].
+//! - The encoders' queues hold frames the stream's queue no longer does. [`Split::held`] counts
+//!   them, so the compositor keeps enough frames for every encoder's queue to fill.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 
@@ -76,10 +78,18 @@ pub(crate) struct Split {
     /// The video queue of every encoder fed, the first one included, for the count of those
     /// still held.
     fed: Mutex<Vec<Weak<Fifo<Arc<PooledFrame>>>>>,
+    /// The frames the encoders of `fed` still held when the last one was added can hold.
+    held: AtomicUsize,
     /// The presentation time of the newest frame handed on, as ticks; [`NO_FRAME`] before one.
     newest: Arc<AtomicI64>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// How many frames the encoders of `fed` still held can hold at once: each one's queue, and the
+/// frame it has taken.
+fn holds(fed: &[Weak<Fifo<Arc<PooledFrame>>>]) -> usize {
+    fed.iter().filter_map(Weak::upgrade).map(|v| v.capacity() + 1).sum()
 }
 
 fn silent_block() -> AudioBlock {
@@ -96,13 +106,15 @@ impl Split {
         let newest = Arc::new(AtomicI64::new(NO_FRAME));
         let stop = Arc::new(AtomicBool::new(false));
         let (v, a, j, n, s) = (Arc::clone(&video), Arc::clone(&audio), Arc::clone(&joins), Arc::clone(&newest), Arc::clone(&stop));
-        let fed = Mutex::new(vec![Arc::downgrade(&first.video)]);
+        let fed = vec![Arc::downgrade(&first.video)];
+        let held = AtomicUsize::new(holds(&fed));
+        let fed = Mutex::new(fed);
         let first = Fed::of(first);
         let thread = std::thread::Builder::new()
             .name("stream split".into())
             .spawn(move || run(&v, &a, &j, &n, &s, first))
             .map_err(|e| PluginError::Failed(format!("no thread to share the stream's frames between its encoders: {e}")))?;
-        Ok(Split { video, audio, joins, fed, newest, stop, thread: Some(thread) })
+        Ok(Split { video, audio, joins, fed, held, newest, stop, thread: Some(thread) })
     }
 
     /// The queue the stream's frames go into.
@@ -137,7 +149,16 @@ impl Split {
             self.joins.push(back).map_err(|_| refused())?;
         }
         fed.push(Arc::downgrade(&input.video));
+        self.held.store(holds(&fed), Ordering::Release);
         Ok(())
+    }
+
+    /// How many frames the encoders fed can hold at once: each one's queue, and the frame it has
+    /// taken. They can all be frames the stream's queue no longer holds, when the encoders fall
+    /// behind at different rates. Counted as each encoder is added, so an encoder dropped since
+    /// the last was added still counts. Read without allocating.
+    pub(crate) fn held(&self) -> usize {
+        self.held.load(Ordering::Acquire)
     }
 
     /// Frames the stream's video queue dropped because it was full; every encoder lost them.
@@ -332,6 +353,20 @@ mod tests {
         drop(held.pop());
         assert!(split.add(&one_more).is_ok());
         let Err(PluginError::Failed(_)) = split.add(&input()) else { panic!("one encoder too many") };
+    }
+
+    #[test]
+    fn the_frames_held_count_every_encoders_queue_and_the_frame_it_took() {
+        let first = input_of(4);
+        let split = Split::start(&first).unwrap();
+        assert_eq!(split.held(), 5);
+        let (late, later) = (input_of(16), input_of(8));
+        split.add(&late).unwrap();
+        assert_eq!(split.held(), 5 + 17, "an encoder added while the stream runs counts");
+        drop(late);
+        assert_eq!(split.held(), 22, "a dropped encoder counts until the next is added");
+        split.add(&later).unwrap();
+        assert_eq!(split.held(), 5 + 9);
     }
 
     #[test]

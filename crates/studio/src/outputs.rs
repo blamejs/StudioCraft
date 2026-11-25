@@ -317,6 +317,8 @@ pub(crate) struct Outputs {
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
     streams: u64,
+    /// [`Outputs::video_held`] at the last poll.
+    held_seen: usize,
 }
 
 /// Where a stop thread puts the state of the stream's copy once the stream has ended.
@@ -656,7 +658,19 @@ impl Outputs {
         for s in saved {
             ev.notices.push(save_notice(&s.path, s.handle.join()));
         }
+        // An encoder a destination started while the stream runs holds frames too.
+        let held = self.video_held();
+        if held != self.held_seen {
+            self.held_seen = held;
+            ev.sinks_changed = true;
+        }
         ev
+    }
+
+    /// The frames the active outputs can hold beyond their video queues
+    /// ([`OutputInstance::video_held`]).
+    pub(crate) fn video_held(&self) -> usize {
+        self.active.values().map(|a| a.instance.video_held()).fold(0, usize::saturating_add)
     }
 
     /// Keep the state a stop thread put in `copy`'s slot as the last stream's copy, and its
@@ -2839,6 +2853,50 @@ pub(crate) mod tests {
             let failure = self.failure.lock().unwrap().clone();
             Some(StreamCopyState { path: self.ended.path.clone(), failure, ..StreamCopyState::default() })
         }
+    }
+
+    /// A stream whose destinations' encoders hold the frames the test sets.
+    struct HoldingStream {
+        held: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl OutputInstance for HoldingStream {
+        fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn video_held(&self) -> usize {
+            self.held.load(Ordering::SeqCst)
+        }
+        fn audio(&self) -> Arc<Fifo<PooledBlock>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn status(&self) -> OutputStatus {
+            OutputStatus::Running
+        }
+        fn target(&self) -> String {
+            String::new()
+        }
+        fn stop(&mut self) -> Result<(), PluginError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_encoders_get_new_sinks_when_a_streams_destinations_hold_more_frames() {
+        let mut o = Outputs::default();
+        let held = Arc::new(std::sync::atomic::AtomicUsize::new(9));
+        let instance = Box::new(HoldingStream { held: Arc::clone(&held) });
+        let stats = Arc::new(EncoderStats::default());
+        let active = Active { id: 1, instance, stats, started: Instant::now(), start: Tick(0), target: String::new(), hardware: None };
+        o.active.insert(OutputKind::Streaming, active);
+        assert!(o.poll().sinks_changed);
+        assert_eq!(o.video_held(), 9);
+        assert!(!o.poll().sinks_changed, "nothing changed");
+        // A destination starts an encoder of its own while the stream runs.
+        held.store(9 + 31, Ordering::SeqCst);
+        assert!(o.poll().sinks_changed);
+        assert_eq!(o.video_held(), 40);
+        assert!(!o.poll().sinks_changed);
     }
 
     /// The notices of `o` until nothing is active or finishing.
