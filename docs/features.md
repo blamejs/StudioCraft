@@ -396,7 +396,8 @@ out as YUYV when the device takes it, otherwise as NV12 or I420. When the device
 frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
 runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
 a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
-and stop it.
+and stop it. The MCP server's in-process studio starts it only when the server was started with
+`--allow-virtual-camera` ([MCP](mcp.md#virtual-camera)).
 
 ### Audio tracks
 
