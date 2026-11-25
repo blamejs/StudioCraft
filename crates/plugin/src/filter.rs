@@ -207,6 +207,12 @@ impl Reframe {
 
 /// A running filter. Video filters live on the compositor thread and audio filters on the mixer
 /// thread, so instances are `Send`.
+///
+/// A video filter whose settings change gets them through [`update`](Self::update). An audio
+/// filter is created again with its new settings off the mixer thread, and the mixer runs the old
+/// and the new instance side by side for one block while its output crossfades from the old one
+/// to the new one. The new instance starts without the old one's state (a reverb's tail, a
+/// look-ahead buffer). The other filters of the source keep running with theirs.
 pub trait FilterInstance: Send {
     fn update(&mut self, settings: &Settings) -> Result<(), PluginError>;
     /// The pass a video filter draws.
@@ -225,7 +231,8 @@ pub trait FilterInstance: Send {
     }
     /// How many sample frames later an audio filter's output carries its input, at the mixer's
     /// sample rate: 0 for a filter that does not delay its audio. Read after the filter is
-    /// created or updated; it does not change while the filter processes audio.
+    /// created or updated, so an instance created with new settings reports its own delay; it
+    /// does not change while the filter processes audio.
     fn latency_frames(&self) -> usize {
         0
     }

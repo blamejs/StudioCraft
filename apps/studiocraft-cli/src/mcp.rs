@@ -21,10 +21,10 @@ pub struct McpArgs {
 }
 
 /// `mcp`'s arguments. `mcp <port>` is read as `mcp --connect <port>`. The roots,
-/// `--allow-streaming` and `--collection` apply to the in-process studio only, so they can't be
-/// combined with a port.
+/// `--allow-streaming`, `--allow-virtual-camera` and `--collection` apply to the in-process studio
+/// only, so they can't be combined with a port.
 pub fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
-    let (mut connect, mut collection, mut allow_streaming) = (None::<String>, None::<String>, false);
+    let (mut connect, mut collection, mut allow_streaming, mut allow_virtual_camera) = (None::<String>, None::<String>, false, false);
     let (mut read, mut write) = (Vec::new(), Vec::new());
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -40,6 +40,10 @@ pub fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
             }
             "--allow-streaming" => {
                 allow_streaming = true;
+                continue;
+            }
+            "--allow-virtual-camera" => {
+                allow_virtual_camera = true;
                 continue;
             }
             "--collection" => {
@@ -68,12 +72,17 @@ pub fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
         if allow_streaming {
             return Err("--allow-streaming applies to the in-process studio; the app at a port streams as its menu item does".into());
         }
+        if allow_virtual_camera {
+            return Err(
+                "--allow-virtual-camera applies to the in-process studio; the app at a port starts the virtual camera as its menu item does".into()
+            );
+        }
         if collection.is_some() {
             return Err("--collection opens a file in the in-process studio; with a port, open it with the collection_open tool".into());
         }
     }
     let roots = if read.is_empty() && write.is_empty() { None } else { Some(Roots::new(&read, &write).map_err(|e| e.to_string())?) };
-    Ok(McpArgs { connect, options: ServerOptions { allow_streaming, roots }, collection })
+    Ok(McpArgs { connect, options: ServerOptions { allow_streaming, allow_virtual_camera, roots }, collection })
 }
 
 /// Serve MCP on standard input and output until the input ends.
@@ -151,11 +160,17 @@ mod tests {
             "show.json",
         ]))
         .unwrap();
-        assert!(a.connect.is_none() && a.options.allow_streaming);
+        assert!(a.connect.is_none() && a.options.allow_streaming && !a.options.allow_virtual_camera);
         assert_eq!(a.collection.as_deref(), Some("show.json"));
         let roots = a.options.roots.unwrap();
         assert_eq!((roots.read().len(), roots.write().len()), (2, 1));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allow_virtual_camera_sets_only_its_own_option() {
+        let a = parse_mcp_args(&strings(&["--allow-virtual-camera"])).unwrap();
+        assert!(a.connect.is_none() && a.options.allow_virtual_camera && !a.options.allow_streaming);
     }
 
     #[test]
@@ -179,6 +194,7 @@ mod tests {
         assert!(e.contains("--read-root"), "{e}");
         assert!(parse_mcp_args(&strings(&["9876", "--write-root", &path("out")])).is_err());
         assert!(parse_mcp_args(&strings(&["9876", "--allow-streaming"])).unwrap_err().contains("--allow-streaming"));
+        assert!(parse_mcp_args(&strings(&["9876", "--allow-virtual-camera"])).unwrap_err().contains("--allow-virtual-camera"));
         assert!(parse_mcp_args(&strings(&["--connect", "9876", "--collection", "show.json"])).unwrap_err().contains("--collection"));
         let _ = std::fs::remove_dir_all(&dir);
     }

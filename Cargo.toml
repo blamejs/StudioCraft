@@ -39,6 +39,7 @@ craft-flv = { path = "crates/craft-flv" }
 craft-packet = { path = "crates/craft-packet" }
 craft-rtmp = { path = "crates/craft-rtmp" }
 craft-speech = { path = "crates/craft-speech" }
+craft-face-track = { path = "crates/craft-face-track" }
 craft-closed-captions = { path = "crates/craft-closed-captions" }
 
 # foundation

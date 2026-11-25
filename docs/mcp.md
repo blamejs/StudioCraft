@@ -34,7 +34,8 @@ Register the server with an MCP client as a program that takes `mcp`:
 
 Add `--read-root` and `--write-root` to confine its file access ([Confining file
 access](#confining-file-access)), `--collection <file>` to open a scene collection before the first
-message, and `--allow-streaming` to let it start a stream ([Streaming](#streaming)):
+message, `--allow-streaming` to let it start a stream ([Streaming](#streaming)), and
+`--allow-virtual-camera` to let it start the virtual camera ([Virtual camera](#virtual-camera)):
 
 ```json
 {"mcpServers": {"studiocraft": {"command": "studiocraft-cli",
@@ -68,7 +69,8 @@ code 2 without starting the server:
 - `--connect` given twice, or a port given twice.
 - A port of 0 or above 65535, or an address not on this computer.
 - `--collection` given twice.
-- `--read-root`, `--write-root`, `--allow-streaming` or `--collection` together with a port.
+- `--read-root`, `--write-root`, `--allow-streaming`, `--allow-virtual-camera` or `--collection`
+  together with a port.
 
 ## Headless and app backends
 
@@ -79,6 +81,7 @@ code 2 without starting the server:
 | Window commands (`view.stats`, `collection.import`, `app.settings`, `app.exit`) | The server refuses them with an error that says how to start the app for them. | The window runs them. |
 | `collection_open`, `collection_save` | The tools read and write the file in the server's process. | The tools run the window's `collection.import` and `collection.export`. |
 | Streaming | A stream starts only with `--allow-streaming`. | A stream starts as the app's Start Streaming does. |
+| Virtual camera | The virtual camera starts only with `--allow-virtual-camera`. | The virtual camera starts as the app's Start Virtual Camera does. |
 | File roots | `--read-root` and `--write-root` apply. | The server does not accept them. |
 | `render_preview` | The tool waits up to 2 seconds for a running transition to end and for the shown scene's sources to show their first picture, then draws. It fails without a graphics device. | The tool waits up to 5 seconds for the app's compositor. |
 
@@ -92,8 +95,19 @@ or may not have run.
 A stream publishes the program to the Real-Time Messaging Protocol (RTMP) server in
 Settings › Stream. The headless backend starts a stream only when the server was started with
 `--allow-streaming`. Without it, `stream_start`, `stream.start` and a `stream.toggle` that would
-start a stream fail and nothing starts. The app backend starts a stream as its Start Streaming menu
-item does.
+start a stream fail and nothing starts, and `command_list` reports `stream.start` and that
+`stream.toggle` as not enabled. The app backend starts a stream as its Start Streaming menu item
+does.
+
+### Virtual camera
+
+The virtual camera sends the program to a camera device that other apps on the computer can open.
+The headless backend starts it only when the server was started with `--allow-virtual-camera`.
+Without it, `vcam.start` and a `vcam.toggle` that would start the virtual camera fail and nothing
+starts, and `command_list` reports them as not enabled. `vcam.stop`, and a `vcam.toggle` while the
+virtual camera runs, are always allowed.
+`--allow-streaming` does not allow the virtual camera. The app backend starts the virtual camera as
+its Start Virtual Camera menu item does.
 
 ## Confining file access
 
@@ -125,7 +139,11 @@ flags. The two flags keep the headless backend's file access inside the folders 
   `captions.download` writes a speech model into the models folder, so that folder, the model's
   folder and its files must lie inside a write root. `captions.start`, and a `captions.toggle` that
   would start captions, read a model from that folder, so they must lie inside a read root. The
-  caption status reports `downloaded` as null for a model outside the read roots. `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
+  caption status reports `downloaded` as null for a model outside the read roots.
+  `avatar.model_download` writes the face tracking model into the same folder, so that folder, the
+  model's folder and its file must lie inside a write root. `avatar.model_install` also reads its
+  `path`, which must lie inside a read root. `avatar.models` reports `installed` as null for a model
+  outside the read roots. `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
   a write root. With or without roots, the studio repairs only the recording folder and the
   folders inside it. `audio_tracks_open_last` and `audio_tracks.open_last` need the last session
   file inside a read root. `recordings.list` names the files in the recording folder, so that
@@ -153,8 +171,8 @@ flags. The two flags keep the headless backend's file access inside the folders 
   path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
   text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.
-- The roots apply to the headless backend only. Combining them, `--allow-streaming` or
-  `--collection` with a port is an error at startup (exit code 2).
+- The roots apply to the headless backend only. Combining them, `--allow-streaming`,
+  `--allow-virtual-camera` or `--collection` with a port is an error at startup (exit code 2).
 
 ## Protocol
 

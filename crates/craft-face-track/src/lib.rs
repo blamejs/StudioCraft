@@ -15,6 +15,9 @@
 //! [`Expressions`] (measured from the mesh in the head's own frame, [`expressions`]), smoothed with
 //! One Euro filters ([`filter`]). Once its buffers are warm, following a face does not allocate.
 //!
+//! [`models`] holds the catalog of model files with their pinned URL, size and SHA-256, the
+//! checks of a model in the models folder, and the install of a file the user already has.
+//!
 //! Every tracker runs its models on a [`Pool`]. Trackers that share one pool share its threads,
 //! so the pool's size caps the threads all of them use together.
 //!
@@ -25,6 +28,7 @@ pub mod expressions;
 pub mod filter;
 pub mod frame;
 pub mod landmarker;
+pub mod models;
 mod nn;
 pub mod pool;
 pub mod pose;
@@ -55,6 +59,12 @@ pub enum Error {
     /// The tracker's threads could not start, or a thread count is out of range.
     #[error("{0}")]
     Threads(String),
+    /// A model file could not be checked or put in the models folder.
+    #[error("the face tracking model could not be installed: {0}")]
+    Install(String),
+    /// A model install was stopped.
+    #[error("the face tracking model install was canceled")]
+    Canceled,
 }
 
 /// A result with this crate's [`Error`].

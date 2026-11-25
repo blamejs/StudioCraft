@@ -105,6 +105,7 @@ const WASM_CRATES: &[&str] = &[
     "studiocraft-model",
     "studiocraft-plugin",
     "craft-flv",
+    "craft-rtp",
     "craft-scopes",
     "craft-ease",
     "craft-transitions",

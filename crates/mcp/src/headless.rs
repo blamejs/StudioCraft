@@ -102,6 +102,9 @@ pub struct ServerOptions {
     /// Starting a stream is allowed (`--allow-streaming`). It publishes to the RTMP server in the
     /// stream settings, so it is off unless asked for.
     pub allow_streaming: bool,
+    /// Starting the virtual camera is allowed (`--allow-virtual-camera`). It sends the program to a
+    /// camera device that other apps on the computer can open, so it is off unless asked for.
+    pub allow_virtual_camera: bool,
     /// The folders files may be read from and written to; `None` leaves file access as it is.
     pub roots: Option<Roots>,
 }
@@ -109,6 +112,20 @@ pub struct ServerOptions {
 /// What `stream.start` answers when streaming was not allowed.
 pub(crate) const STREAMING_REFUSED: &str = "streaming is off in this server: a stream publishes to the RTMP server in Settings › Stream, so the \
                                      in-process server starts one only when it was started with `studiocraft-cli mcp --allow-streaming`";
+
+/// What `vcam.start` answers when the virtual camera was not allowed.
+pub(crate) const VIRTUAL_CAMERA_REFUSED: &str = "the virtual camera is off in this server: it sends the program to a camera device that other \
+                                     apps can open, so the in-process server starts it only when it was started with \
+                                     `studiocraft-cli mcp --allow-virtual-camera`";
+
+/// Whether `cmd` starts the virtual camera, given whether the virtual camera runs now.
+pub(crate) fn starts_virtual_camera(cmd: &Command, running: bool) -> bool {
+    match cmd {
+        Command::VirtualCameraStart {} => true,
+        Command::VirtualCameraToggle {} => !running,
+        _ => false,
+    }
+}
 
 /// The texts the roots resolved for the profile's path settings a command reaches, each as the
 /// setting is to hold it before the command runs.
@@ -178,6 +195,16 @@ impl Headless {
     fn speech_model_allowed(&self, model: Option<&str>, access: Access) -> Result<(), McpError> {
         self.allowed(self.studio.models_dir(), access)?;
         for path in self.studio.speech_model_paths(model) {
+            self.allowed(&path, access)?;
+        }
+        Ok(())
+    }
+
+    /// The models folder, and the folder and file of face tracking model `model` in it, held to
+    /// the roots.
+    fn face_model_allowed(&self, model: Option<&str>, access: Access) -> Result<(), McpError> {
+        self.allowed(self.studio.models_dir(), access)?;
+        for path in self.studio.face_model_paths(model) {
             self.allowed(&path, access)?;
         }
         Ok(())
@@ -261,6 +288,9 @@ impl Headless {
         if starts_stream && !self.options.allow_streaming {
             return Err(McpError::NotAllowed(STREAMING_REFUSED.into()));
         }
+        if !self.options.allow_virtual_camera && starts_virtual_camera(&cmd, self.studio.virtual_camera().is_some()) {
+            return Err(McpError::NotAllowed(VIRTUAL_CAMERA_REFUSED.into()));
+        }
         let Some(roots) = &self.options.roots else { return Ok((cmd, Held::default())) };
         let registry = self.studio.registry();
         let mut held = Held::default();
@@ -284,6 +314,16 @@ impl Headless {
             }
             Command::CaptionsToggle {} if !matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running) => {
                 self.speech_model_allowed(None, Access::Read)?;
+            }
+            // A face tracking model is downloaded into the models folder.
+            Command::AvatarModelDownload { model } => {
+                self.face_model_allowed(model.as_deref(), Access::Write)?;
+            }
+            // An install reads the user's file and writes it into the models folder.
+            Command::AvatarModelInstall { path, model } => {
+                let resolved = self.allowed(Path::new(path.as_str()), Access::Read)?;
+                *path = setting_text(roots, &resolved, Access::Read)?;
+                self.face_model_allowed(model.as_deref(), Access::Write)?;
             }
             // The pause screen reads its picture or video.
             Command::PauseStart { media: Some(media), .. } if !media.trim().is_empty() => {
@@ -450,6 +490,13 @@ impl Headless {
                 let enabled = match s.id {
                     "edit.undo" => engine.undo_label().is_some(),
                     "edit.redo" => engine.redo_label().is_some(),
+                    // Without permission only the toggle of a running output runs, and it stops it.
+                    "stream.start" | "stream.toggle" if !self.options.allow_streaming => {
+                        s.id == "stream.toggle" && self.running(OutputKind::Streaming)
+                    }
+                    "vcam.start" | "vcam.toggle" if !self.options.allow_virtual_camera => {
+                        s.id == "vcam.toggle" && self.studio.virtual_camera().is_some()
+                    }
                     id => !WINDOW_ENGINE_COMMANDS.contains(&id),
                 };
                 json!({
@@ -572,6 +619,7 @@ impl Backend for Headless {
             text.push_str(&format!("; files are confined to {}", roots.describe()));
         }
         text.push_str(if self.options.allow_streaming { "; streaming is allowed" } else { "; streaming is off" });
+        text.push_str(if self.options.allow_virtual_camera { "; the virtual camera is allowed" } else { "; the virtual camera is off" });
         text
     }
 }
