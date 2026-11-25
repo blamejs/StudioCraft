@@ -439,7 +439,8 @@ saves at this moment. `name` follows the rules of `audio_tracks.marker`; without
 "Marker N", the output's own Nth marker. It returns `{"name", "seconds", "recording", "stream_copy"}`.
 `name` and `seconds` are the marker's in the recording, or in the copy when the recording does not
 keep it; `seconds` counts from the output's first frame and leaves out the time the output has
-skipped so far while the computer was suspended. `recording` and `stream_copy` are each
+skipped so far while the computer was suspended. For a stream's copy whose file starts after the
+stream's first frame, it counts from the file's first frame, and a marker from before then is at 0. `recording` and `stream_copy` are each
 `{"name", "seconds"}` when that output kept the marker, `{"error"}` when it runs and did not, or
 `null` when it does not run. Neither output running, and no output keeping the marker, as when each
 already holds 10,000 markers, are errors. When the recording stops, `<recording name>.otio` is
@@ -466,7 +467,8 @@ recording, stream copy or take, no output keeping the marker, and a session that
 `marker.list` takes no params and returns `{"running", "markers"}`. `markers` lists the session's
 markers oldest first, each `{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}`
 with `recording`, `stream_copy` and `audio_tracks` each `{"seconds"}` or `null` for an output that
-did not keep it.
+did not keep it. A marker set before the stream's copy got its first packet lists the time in the
+copy's file once the file's start is known.
 `running` is `false` after the session has ended; the list then holds that session's markers until
 the next session starts.
 
@@ -703,8 +705,13 @@ under that name now. `status` is `idle` while no stream runs, `not_in_stream` fo
 added after the stream started and not started since, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
-`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
-`cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `max_tries`,
+`next_try_ms`, `error` and `cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`attempt` is the number of the next try and `max_tries` the failed tries in a row the running
+stream allows, so the tries left, the next one included, are `max_tries - attempt + 1`.
+`next_try_ms` is the time in milliseconds until the next try starts. It is `null` while a try runs,
+and for a `waiting_for_network` destination whose server is given as an IP address, which tries
+when a route to the server returns.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |
@@ -772,13 +779,20 @@ a destination that is not sending, or that was stopped and has not closed its co
 its server, key and service as the profile has them now; one that is sending keeps the ones it
 started with and needs no held key.
 
+`stream.retry_now` takes `{"id"}` and starts the next try of that destination of the running stream
+at once, as Try Now in the Streaming window does, when it is `retrying` and waits for its next try or
+is `waiting_for_network`; a destination waiting for the network tries without a route. It returns
+`{"id", "started"}`, where `started` is `false` for a destination that was not waiting, which it
+leaves as it is. Unlike a stop and start, the try counts toward the failed tries in a row.
+
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
 that is not empty and is not a streaming service id, a parameter
-of the wrong type, a start or stop while no stream runs or while the running stream was started with
-another profile, and a start of a destination whose held key is not set. While a stream of another
+of the wrong type, a start, stop or `stream.retry_now` while no stream runs or while the running
+stream was started with another profile, a `stream.retry_now` of a destination that is not in the
+running stream, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.

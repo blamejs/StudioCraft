@@ -340,8 +340,10 @@ numbers its own markers and holds at most 10,000 of them. When the stream stops,
 during it, and the copy's file is finished, StudioCraft writes `<copy name>.otio` beside
 `Stream <date> <time>.mkv` by the same rules as for a recording: the clip is as long as the frames
 the stream's encoder was handed, a marker past the clip's end goes on its last frame, the time
-skipped while the computer was suspended is left out, and a file of that name is not replaced. A
-copy whose file could not be finished gets no timeline file, and a copy that fails while its stream
+skipped while the computer was suspended is left out, and a file of that name is not replaced. When
+the disk fell behind before the copy got the stream's first packets, its file starts at a later
+keyframe: the timeline then leaves that opening out of the clip, places each marker in the file, and
+puts a marker from before the file's start on its first frame. A copy whose file could not be finished gets no timeline file, and a copy that fails while its stream
 runs takes no more markers. When a recording and a stream's copy
 both run, each gets the marker, and when one of them does not keep it, the other still does.
 
@@ -541,7 +543,11 @@ tried (at most four) with its own outcome. A lookup with no answer within 10 s s
 did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
-Stop send to one destination or stop sending to it while the others go on. A destination added
+Stop send to one destination or stop sending to it while the others go on. A destination that
+waits to try again shows its try number out of the tries it has, such as "try 3 of 10", and when
+the next try starts, as a countdown in seconds, or "when a network route to the server returns" for
+a server given as an IP address that has no route. Try Now starts that try at once, without a route
+too; unlike Stop and Start, the try counts toward the tries. A destination added
 after the stream started shows "Not in this stream yet", and Start sends to it at once, from the
 stream's next keyframe, without restarting the stream. A destination that is not sending starts
 with its server and key as they are set when Start is pressed. One that is sending keeps the server
@@ -644,10 +650,11 @@ The copy reads the stream's packets from a buffer of its own that holds up to 4 
 encoders and destinations do not wait for it. When the disk falls further behind than that, the
 copy leaves out packets up to the next keyframe and counts them. A file that cannot be made or
 written stops the copy, keeps what was written, and shows a notice once, and the stream goes on.
-When the stream stops, StudioCraft writes what the buffer holds and finishes the file, for up to 20
-seconds; after that the file plays up to the last part written. A notice names the file when it is
-finished, with the packets left out when there were any. A stream with a copy can have at most 63
-destinations.
+When another file that holds data has taken the copy's name before the copy starts writing, the
+copy does not write to it and stops in the same way. When the stream stops, StudioCraft writes
+what the buffer holds and finishes the file, for up to 20 seconds; after that the file plays up to
+the last part written. A notice names the file when it is finished, with the packets left out when
+there were any. A stream with a copy can have at most 63 destinations.
 
 The copy needs a keyframe at least every 2 seconds, as a recording does. With a longer Keyframe
 interval in Settings › Stream, the stream starts without the copy and a notice says why.

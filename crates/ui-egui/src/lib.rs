@@ -1086,6 +1086,7 @@ impl StudioApp {
                     | "stream.check_service_set"
                     | "stream.save_copy_set"
                     | "stream.ingest_servers"
+                    | "stream.retry_now"
             ) || id.starts_with("stream.destination") =>
             {
                 return self.streaming_command(cmd);
