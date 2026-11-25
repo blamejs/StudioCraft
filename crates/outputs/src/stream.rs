@@ -406,6 +406,17 @@ enum NextTry {
     Route,
 }
 
+/// The bits of [`Dest::next`] that hold the kind of the next try.
+const NEXT_KIND: u64 = 0b11;
+const NEXT_NONE: u64 = 0;
+const NEXT_AT: u64 = 1;
+const NEXT_CLOCKED: u64 = 2;
+const NEXT_ROUTE: u64 = 3;
+/// The bit of [`Dest::next`] that holds Try Now's request.
+const NEXT_TRY_NOW: u64 = 0b100;
+/// Where the deadline starts in [`Dest::next`].
+const NEXT_SHIFT: u32 = 3;
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
@@ -443,11 +454,12 @@ struct Dest {
     /// Whether its latest check is still wanted, shared with that check while it waits for a
     /// place; cleared with `checked`.
     wanted: Mutex<Arc<Mutex<bool>>>,
-    /// When its next try starts while it waits to try again.
-    next: Mutex<NextTry>,
-    /// Asks the thread to end its wait and try at once. It is set with `next` locked, only while
-    /// the thread waits, and cleared with `next` locked as the try starts.
-    try_now: AtomicBool,
+    /// When its next try starts while it waits to try again, with Try Now's request, in one word
+    /// ([`Dest::pack`]). The request is set only while there is a next try, and cleared as the try
+    /// starts.
+    next: AtomicU64,
+    /// The time the deadlines in `next` count from.
+    epoch: Instant,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -477,8 +489,8 @@ impl Dest {
             recovered: AtomicU32::new(0),
             checked: Arc::new(AtomicBool::new(false)),
             wanted: Mutex::new(Arc::new(Mutex::new(false))),
-            next: Mutex::new(NextTry::None),
-            try_now: AtomicBool::new(false),
+            next: AtomicU64::new(0),
+            epoch: Instant::now(),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -520,40 +532,78 @@ impl Dest {
         }
         // Only a destination that waits to try again has a next try.
         if !matches!(*status, DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. }) {
-            *lock(&self.next) = NextTry::None;
+            self.wait_until(NextTry::None);
         }
         drop(status);
         self.touch();
     }
 
-    /// Sets when the next try starts, before the status that shows the wait is set.
+    /// `next` as one word: the kind in bits 0 and 1, Try Now's request (bit 2) left clear, and the
+    /// deadline in the bits above, in nanoseconds from `epoch`, signed. A deadline more than about
+    /// 36 years from `epoch` is kept at that limit.
+    fn pack(&self, next: NextTry) -> u64 {
+        let (kind, at) = match next {
+            NextTry::None => (NEXT_NONE, None),
+            NextTry::At(at) => (NEXT_AT, Some(at)),
+            NextTry::Clocked(at) => (NEXT_CLOCKED, Some(at)),
+            NextTry::Route => (NEXT_ROUTE, None),
+        };
+        let limit = i64::MAX >> NEXT_SHIFT;
+        let nanos = at.map_or(0, |at| match at.checked_duration_since(self.epoch) {
+            Some(after) => i64::try_from(after.as_nanos()).unwrap_or(limit).min(limit),
+            None => -i64::try_from(self.epoch.duration_since(at).as_nanos()).unwrap_or(limit).min(limit),
+        });
+        ((nanos << NEXT_SHIFT) as u64) | kind
+    }
+
+    /// The next try held in `word`.
+    fn unpack(&self, word: u64) -> NextTry {
+        let nanos = (word as i64) >> NEXT_SHIFT;
+        let at = if nanos >= 0 {
+            self.epoch.checked_add(Duration::from_nanos(nanos.unsigned_abs()))
+        } else {
+            self.epoch.checked_sub(Duration::from_nanos(nanos.unsigned_abs()))
+        }
+        .unwrap_or(self.epoch);
+        match word & NEXT_KIND {
+            NEXT_AT => NextTry::At(at),
+            NEXT_CLOCKED => NextTry::Clocked(at),
+            NEXT_ROUTE => NextTry::Route,
+            _ => NextTry::None,
+        }
+    }
+
+    /// When the next try starts.
+    fn next_try(&self) -> NextTry {
+        self.unpack(self.next.load(Ordering::SeqCst))
+    }
+
+    /// Sets when the next try starts, before the status that shows the wait is set. A Try Now
+    /// request stays until the try starts.
     fn wait_until(&self, next: NextTry) {
-        *lock(&self.next) = next;
+        let word = self.pack(next);
+        // The closure always gives a value, so the update cannot fail.
+        let _ = self.next.try_update(Ordering::SeqCst, Ordering::SeqCst, |old| Some(word | (old & NEXT_TRY_NOW)));
     }
 
     /// Ends the wait before the next try, so the try starts at once; whether it was waiting.
     fn try_now(&self) -> bool {
-        let next = lock(&self.next);
-        if *next == NextTry::None {
-            return false;
+        let asked =
+            self.next.try_update(Ordering::SeqCst, Ordering::SeqCst, |old| (old & NEXT_KIND != NEXT_NONE).then_some(old | NEXT_TRY_NOW)).is_ok();
+        if asked {
+            self.wake();
         }
-        self.try_now.store(true, Ordering::SeqCst);
-        drop(next);
-        self.wake();
-        true
+        asked
     }
 
     /// Whether Try Now asked the thread to end its wait.
     fn trying_now(&self) -> bool {
-        self.try_now.load(Ordering::SeqCst)
+        self.next.load(Ordering::SeqCst) & NEXT_TRY_NOW != 0
     }
 
     /// The wait is over and the try starts: there is no next try until it fails.
     fn begin_try(&self) {
-        let mut next = lock(&self.next);
-        *next = NextTry::None;
-        self.try_now.store(false, Ordering::SeqCst);
-        drop(next);
+        self.next.store(self.pack(NextTry::None), Ordering::SeqCst);
         self.touch();
     }
 
@@ -624,7 +674,7 @@ impl Dest {
     fn state(&self, hub: &Hub) -> DestinationState {
         let status = self.status();
         // Read after the status, which is set after the next try, so a waiting status has its time.
-        let next_try = match *lock(&self.next) {
+        let next_try = match self.next_try() {
             NextTry::At(at) => Some(at.saturating_duration_since(Instant::now())),
             NextTry::Clocked(at) => Some(at.saturating_duration_since(hub.seams.clock.now())),
             NextTry::None | NextTry::Route => None,

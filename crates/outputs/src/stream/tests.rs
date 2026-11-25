@@ -1492,6 +1492,39 @@ fn try_now_ends_the_wait_before_a_try_again() {
 }
 
 #[test]
+fn the_next_try_and_try_now_are_one_atomic_word() {
+    let d = Dest::new(named("a"), Arc::default());
+    // The window reads it without waiting on the destination's thread (AGENTS.md › Performance).
+    let _: &AtomicU64 = &d.next;
+    assert!(!d.try_now(), "a destination that does not wait has nothing to end");
+    let at = Instant::now() + Duration::from_secs(3);
+    d.wait_until(NextTry::At(at));
+    assert_eq!(d.next_try(), NextTry::At(at));
+    assert!(d.try_now());
+    // A new deadline after the wait for the network keeps the request, so that wait ends at once too.
+    let later = at + Duration::from_secs(1);
+    d.wait_until(NextTry::At(later));
+    assert!(d.trying_now());
+    assert_eq!(d.next_try(), NextTry::At(later));
+    // A non-waiting status takes the next try away and keeps the request until the try starts.
+    d.set(DestinationStatus::Connecting);
+    assert_eq!(d.next_try(), NextTry::None);
+    assert!(d.trying_now());
+    d.begin_try();
+    assert!(!d.trying_now());
+    // A time of the stream's clock from before the destination was made reads back the same.
+    if let Some(early) = Instant::now().checked_sub(Duration::from_secs(5)) {
+        d.wait_until(NextTry::Clocked(early));
+        assert_eq!(d.next_try(), NextTry::Clocked(early));
+    }
+    d.wait_until(NextTry::Route);
+    assert_eq!(d.next_try(), NextTry::Route);
+    d.begin_try();
+    assert_eq!(d.next_try(), NextTry::None);
+    assert!(!d.try_now());
+}
+
+#[test]
 fn a_try_started_by_try_now_counts_toward_the_tries() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let long = GUARD * 10;
