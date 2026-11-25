@@ -386,7 +386,10 @@ impl Mixer {
         }
     }
 
-    pub fn send(&self, cmd: MixerCmd) {
+    /// Send `cmd` to the mixer thread, after freeing what it handed back. It takes `&mut self` so
+    /// that one sender at a time pushes, which bounds what the mixer can retire between two frees
+    /// ([`RETIRED_LISTS`], [`RETIRED_FILTERS`]).
+    pub fn send(&mut self, cmd: MixerCmd) {
         self.free_retired();
         let n = self.sent.fetch_add(1, Ordering::Relaxed) + 1;
         match cmd {
@@ -408,6 +411,23 @@ impl Mixer {
         while let Some(filter) = self.retired_filters.pop() {
             drop(filter);
         }
+    }
+
+    /// How many commands other than fader moves and tap sets a full queue has dropped since the
+    /// mixer started. A dropped command never reaches the mixer.
+    pub fn control_dropped(&self) -> u64 {
+        self.control.dropped()
+    }
+
+    /// Whether `cmds`, sent one after another, all stay in their queues until the mixer takes
+    /// them: no more fader moves than the fader queue holds, and no more other commands than the
+    /// control queue holds. A full queue drops its oldest command, so a later push drops one of
+    /// `cmds` only when they are more than their queue holds. Tap sets are not counted: the latest
+    /// replaces the one before.
+    pub fn fits(&self, cmds: &[MixerCmd]) -> bool {
+        let gains = cmds.iter().filter(|c| matches!(c, MixerCmd::Gain { .. })).count();
+        let control = cmds.iter().filter(|c| !matches!(c, MixerCmd::Gain { .. } | MixerCmd::Taps { .. })).count();
+        gains <= self.gains.capacity() && control <= self.control.capacity()
     }
 
     /// The `generation` of the last [`MixerCmd::Taps`] the mixer applied; 0 before the first.
@@ -465,10 +485,12 @@ struct Input {
 const CONTROL_QUEUE: usize = 1024;
 
 /// Replaced input lists and tap sets held for the sending thread to free. The sender frees them
-/// before each command it sends, and each command retires at most one of each,
-/// so no more can wait than the commands the control queue holds plus the one the mixer is
-/// applying, and none is freed on the mixer thread.
-const RETIRED_LISTS: usize = CONTROL_QUEUE + 1;
+/// before each command it sends, and each command retires at most one of each. Between two frees
+/// the mixer can apply the command it took before the first free, the commands the control queue
+/// held then, and the one the sender pushes after it, so no more can wait than that and none is
+/// freed on the mixer thread. [`Mixer::send`] takes `&mut self`, so sends cannot overlap and push
+/// more.
+const RETIRED_LISTS: usize = CONTROL_QUEUE + 2;
 
 /// Replaced filters the inputs hold to crossfade from, all inputs together. A filter replaced
 /// while this many wait goes back at once, without a crossfade.
@@ -1054,7 +1076,7 @@ mod tests {
 
     #[test]
     fn fader_moves_do_not_push_out_an_output_or_undo_a_newer_input_list() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         let a = Arc::new(AudioOut::default());
         let out = Arc::new(Fifo::new(8));
@@ -1073,7 +1095,7 @@ mod tests {
 
     #[test]
     fn replaced_input_lists_are_freed_by_the_sender() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired = Arc::clone(&mixer.retired);
         let a = Arc::new(AudioOut::default());
@@ -1183,7 +1205,7 @@ mod tests {
 
     #[test]
     fn replaced_filters_are_freed_by_the_sender_and_unknown_places_send_the_filter_back() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired_filters = Arc::clone(&mixer.retired_filters);
         let a = Arc::new(AudioOut::default());
@@ -1246,7 +1268,7 @@ mod tests {
     /// still frees no filter.
     #[test]
     fn filters_waiting_to_crossfade_fit_beside_a_full_control_queue() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired_filters = Arc::clone(&mixer.retired_filters);
         let dropped = Arc::new(AtomicBool::new(false));
@@ -1278,6 +1300,78 @@ mod tests {
         assert!(!dropped.load(Ordering::Relaxed), "the mixer thread freed a filter");
         mixer.free_retired();
         assert!(dropped.load(Ordering::Relaxed), "the sender frees them");
+    }
+
+    /// The most commands that can retire something between two frees by the sender: one the mixer
+    /// took before the free and applies after it, a full control queue, and the sender's own
+    /// command, which finds room because the mixer took one more between the free and the push.
+    fn race_a_send(mixer: &Mixer, m: &mut MixState, mut cmd: impl FnMut() -> MixerCmd) {
+        let taken = Cmd::from(cmd());
+        for _ in 0..CONTROL_QUEUE {
+            mixer.control.push((0, cmd().into()));
+        }
+        mixer.free_retired();
+        if let Some((n, c)) = mixer.control.pop() {
+            m.apply_sent(n, c);
+        }
+        mixer.control.push((0, cmd().into()));
+        m.apply_sent(0, taken);
+        drain(&mixer.taps, &mixer.control, &mixer.gains, m);
+    }
+
+    /// With the most filters waiting to crossfade, the replacements a send that races the mixer
+    /// leaves behind still go back to the sending thread.
+    #[test]
+    fn filters_retired_while_a_send_races_the_mixer_go_back_to_the_sender() {
+        let mut mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired_filters = Arc::clone(&mixer.retired_filters);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let scale = || -> Box<dyn FilterInstance> { Box::new(Scale(1.0, Arc::clone(&dropped))) };
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1.0, true);
+        ia.filters = (0..FADING_FILTERS).map(|_| scale()).collect();
+        mixer.send(MixerCmd::Inputs(vec![ia]));
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        for index in 0..FADING_FILTERS {
+            mixer.send(MixerCmd::ReplaceFilter { source: SourceId(1), index, instance: scale() });
+            drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        }
+        assert_eq!(m.inputs[0].fading.len(), FADING_FILTERS);
+        race_a_send(&mixer, &mut m, || MixerCmd::ReplaceFilter { source: SourceId(1), index: 0, instance: scale() });
+        dropped.store(false, Ordering::Relaxed);
+        feed(&a, 0.5);
+        m.tick(Tick(0));
+        assert_eq!(mixer.retired_filters.dropped(), 0, "the queue of retired filters overflowed");
+        assert!(!dropped.load(Ordering::Relaxed), "the mixer thread freed a filter");
+        mixer.free_retired();
+        assert!(dropped.load(Ordering::Relaxed), "the sender frees them");
+    }
+
+    /// Commands fit while each queue holds them all: fader moves in theirs, the rest in the control
+    /// queue, and tap sets in neither.
+    #[test]
+    fn commands_fit_while_each_queue_holds_them() {
+        let mixer = Mixer::detached();
+        let moves = |n: usize| (0..n).map(|_| MixerCmd::Gain { source: SourceId(1), gain: 1.0, muted: false });
+        let holds = |n: usize| (0..n).map(|_| MixerCmd::Hold(false));
+        let taps = |n: usize| (0..n).map(|_| MixerCmd::Taps { set: None, generation: 1 });
+        let gains = mixer.gains.capacity();
+        assert!(mixer.fits(&moves(gains).chain(holds(CONTROL_QUEUE)).chain(taps(CONTROL_QUEUE * 2)).collect::<Vec<_>>()));
+        assert!(!mixer.fits(&moves(gains + 1).collect::<Vec<_>>()));
+        assert!(!mixer.fits(&holds(CONTROL_QUEUE + 1).collect::<Vec<_>>()));
+        assert!(mixer.fits(&[]));
+    }
+
+    /// The input lists a send that races the mixer leaves behind all go back to the sending thread.
+    #[test]
+    fn input_lists_retired_while_a_send_races_the_mixer_go_back_to_the_sender() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired = Arc::clone(&mixer.retired);
+        let a = Arc::new(AudioOut::default());
+        race_a_send(&mixer, &mut m, || MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        assert_eq!(mixer.retired.dropped(), 0, "the queue of retired input lists overflowed");
     }
 
     /// Push `blocks` blocks of a 1 kHz tone with `peak`, the same on both channels, through `m`.
@@ -1437,7 +1531,7 @@ mod tests {
 
     #[test]
     fn a_new_input_list_keeps_the_audio_a_delay_line_holds() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired = Arc::clone(&mixer.retired);
         let a = Arc::new(AudioOut::default());
@@ -1789,7 +1883,7 @@ mod tests {
 
     #[test]
     fn a_burst_of_replacements_is_all_handed_back_and_none_is_freed_on_the_mixer() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired = Arc::clone(&mixer.retired);
         m.retired_taps = Arc::clone(&mixer.retired_taps);
@@ -1814,7 +1908,7 @@ mod tests {
 
     #[test]
     fn tap_sets_are_applied_kept_across_new_input_lists_and_handed_back() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired = Arc::clone(&mixer.retired);
         m.retired_taps = Arc::clone(&mixer.retired_taps);
@@ -1843,7 +1937,7 @@ mod tests {
 
     #[test]
     fn a_burst_of_commands_never_drops_the_removal_of_the_taps() {
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.retired_taps = Arc::clone(&mixer.retired_taps);
         m.taps_applied = Arc::clone(&mixer.taps_applied);
@@ -1873,7 +1967,7 @@ mod tests {
 
     #[test]
     fn the_thread_runs_and_stops() {
-        let mixer = Mixer::spawn(MasterClock::new()).unwrap();
+        let mut mixer = Mixer::spawn(MasterClock::new()).unwrap();
         let out = Arc::new(Fifo::new(64));
         mixer.send(MixerCmd::AddOutput { id: 7, queue: Arc::clone(&out) });
         std::thread::sleep(std::time::Duration::from_millis(150));

@@ -143,20 +143,20 @@ impl Monitor {
     }
 
     /// Play on another sink from now on; the device is opened again on the next [`Monitor::sync`].
-    pub(crate) fn set_sink(&mut self, sink: Arc<dyn AudioSink>, mixer: &Mixer) {
+    pub(crate) fn set_sink(&mut self, sink: Arc<dyn AudioSink>, mixer: &mut Mixer) {
         self.stop(mixer);
         self.failed = None;
         self.sink = sink;
     }
 
-    fn stop(&mut self, mixer: &Mixer) {
+    fn stop(&mut self, mixer: &mut Mixer) {
         if self.playing.take().is_some() {
             mixer.send(MixerCmd::MonitorOutput(None));
         }
     }
 
     /// Play on `device` while `wanted` (a source is monitored), else close the device.
-    pub(crate) fn sync(&mut self, wanted: bool, device: &str, mixer: &Mixer, notices: &mut Vec<Notice>) {
+    pub(crate) fn sync(&mut self, wanted: bool, device: &str, mixer: &mut Mixer, notices: &mut Vec<Notice>) {
         if !wanted {
             self.stop(mixer);
             self.failed = None;
@@ -191,7 +191,7 @@ impl Monitor {
     }
 
     /// Stop monitoring when the playing device reported an error.
-    pub(crate) fn poll(&mut self, mixer: &Mixer, notices: &mut Vec<Notice>) {
+    pub(crate) fn poll(&mut self, mixer: &mut Mixer, notices: &mut Vec<Notice>) {
         let Some(first) = self.errors.pop() else { return };
         while self.errors.pop().is_some() {}
         if self.playing.is_some() {

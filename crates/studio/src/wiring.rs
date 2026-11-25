@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use studiocraft_engine::host::SourceSet;
-use studiocraft_engine::mixer::{MixInput, MixerCmd};
+use studiocraft_engine::mixer::{MixInput, Mixer, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
 use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
@@ -75,9 +75,55 @@ pub(crate) struct Wiring {
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
+    /// The mixer's count of dropped control commands at the last [`Wiring::mixer_dropped`].
+    control_dropped: u64,
 }
 
 impl Wiring {
+    /// Take the mixer's count of control commands a full queue dropped
+    /// ([`Mixer::control_dropped`]). When it grew, a replacement or
+    /// another change this wiring sent may not have reached the mixer, so the next
+    /// [`Wiring::mixer_inputs`] sends a whole input list, and this returns `true`.
+    pub(crate) fn mixer_dropped(&mut self, dropped: u64) -> bool {
+        if dropped == self.control_dropped {
+            return false;
+        }
+        self.control_dropped = dropped;
+        self.mix = None;
+        true
+    }
+
+    /// Take the mixer's count of dropped control commands right after sending it a whole input
+    /// list, which carries every change the dropped commands carried.
+    pub(crate) fn mixer_caught_up(&mut self, dropped: u64) {
+        self.control_dropped = dropped;
+    }
+
+    /// [`Wiring::mixer_inputs`] for `mixer`. After the mixer's control queue dropped a command
+    /// ([`Wiring::mixer_dropped`]), or when the commands are more than the mixer's queues hold
+    /// ([`Mixer::fits`]), it is a whole input list instead, so no change is recorded as applied
+    /// without reaching the mixer.
+    pub(crate) fn mixer_commands(
+        &mut self,
+        mixer: &Mixer,
+        c: &SceneCollection,
+        registry: &Registry,
+        sources: &SourceSet,
+        levels: &mut HashMap<SourceId, Arc<Levels>>,
+        notices: &mut Vec<Notice>,
+    ) -> Option<Vec<MixerCmd>> {
+        self.mixer_dropped(mixer.control_dropped());
+        let noticed = notices.len();
+        let cmds = self.mixer_inputs(c, registry, sources, levels, notices)?;
+        if mixer.fits(&cmds) {
+            return Some(cmds);
+        }
+        // The input list reports the refused settings again.
+        notices.truncate(noticed);
+        self.mix = None;
+        self.mixer_inputs(c, registry, sources, levels, notices)
+    }
+
     /// The compositor's plan: the program scene, or `pause` while the program is paused, the
     /// preview scene in studio mode, and the transition from `transition.0` when one runs.
     #[allow(clippy::too_many_arguments)]
@@ -648,6 +694,80 @@ mod tests {
             "{} commands",
             cmds.len()
         );
+    }
+
+    /// After the mixer's control queue drops a command, which may have been a filter replacement,
+    /// the next refresh sends a whole input list with the current settings; the same count again
+    /// sends nothing.
+    #[test]
+    fn a_dropped_control_command_brings_a_whole_input_list() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().filters = vec![FilterConfig {
+            id: FilterId(901),
+            kind: "gain".into(),
+            kind_version: 1,
+            name: "Gain".into(),
+            enabled: true,
+            settings: Settings::new(),
+        }];
+        sources.sync(&c, &registry);
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        c.source_mut(mic).unwrap().filters[0].settings = Settings::new().with("db", -6.0);
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(matches!(cmds.as_slice(), [MixerCmd::ReplaceFilter { index: 0, .. }]), "{} commands", cmds.len());
+        assert!(!wiring.mixer_dropped(0));
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing was dropped");
+        assert!(wiring.mixer_dropped(1));
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.filters.len()), Some(1));
+        assert!(!wiring.mixer_dropped(1));
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing was dropped since");
+    }
+
+    /// More filter replacements than the mixer's control queue holds go to the mixer as one input
+    /// list, and fewer go as replacements.
+    #[test]
+    fn more_replacements_than_the_mixer_queue_holds_bring_a_whole_input_list() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mixer = Mixer::detached();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        let count = 2048;
+        c.source_mut(mic).unwrap().filters = (0..count)
+            .map(|n| FilterConfig {
+                id: FilterId(1000 + n),
+                kind: "gain".into(),
+                kind_version: 1,
+                name: format!("Gain {n}"),
+                enabled: true,
+                settings: Settings::new(),
+            })
+            .collect();
+        sources.sync(&c, &registry);
+        assert!(wiring.mixer_commands(&mixer, &c, &registry, &sources, &mut levels, &mut notices).is_some());
+        let set_all = |c: &mut SceneCollection, db: f64| {
+            for f in &mut c.source_mut(mic).unwrap().filters {
+                f.settings = Settings::new().with("db", db);
+            }
+        };
+        set_all(&mut c, -6.0);
+        let cmds = wiring.mixer_commands(&mixer, &c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.filters.len()), Some(count as usize));
+        assert!(wiring.mixer_commands(&mixer, &c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+        c.source_mut(mic).unwrap().filters[0].settings = Settings::new().with("db", 3.0);
+        let cmds = wiring.mixer_commands(&mixer, &c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(matches!(cmds.as_slice(), [MixerCmd::ReplaceFilter { index: 0, .. }]), "{} commands", cmds.len());
+        assert!(notices.is_empty());
     }
 
     /// A source's size follows its enabled crop and pad filters in order, and a disabled one or
