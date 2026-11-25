@@ -302,9 +302,10 @@ pub(crate) struct Outputs {
     copy_path: Option<PathBuf>,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
-    /// The last [`MAX_UNFINISHED`] copies of streams that ended, each file and whether it was
-    /// finished, oldest first, for [`Outputs::copy_ended`].
-    ended_copies: Vec<(PathBuf, bool)>,
+    /// The last [`MAX_UNFINISHED`] copies of streams that ended, each file, whether it was
+    /// finished and its [`StreamCopyState::start_ns`], oldest first, for [`Outputs::copy_ended`]
+    /// and [`Outputs::copy_start`].
+    ended_copies: Vec<(PathBuf, bool, u64)>,
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
     streams: u64,
@@ -662,10 +663,16 @@ impl Outputs {
         if self.ended_copies.len() >= MAX_UNFINISHED {
             self.ended_copies.remove(0);
         }
-        self.ended_copies.push((state.path.clone(), state.finished));
+        self.ended_copies.push((state.path.clone(), state.finished, state.start_ns));
         if latest {
             self.last_copy = Some(state);
         }
+    }
+
+    /// [`StreamCopyState::start_ns`] of the copy of a stream at `path` that ended, the latest one
+    /// with that file name; 0 when no such copy is known.
+    pub(crate) fn copy_start(&self, path: &Path) -> u64 {
+        self.ended_copies.iter().rev().find(|(p, ..)| p == path).map_or(0, |(.., start)| *start)
     }
 
     /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
@@ -678,7 +685,7 @@ impl Outputs {
         if stopping || running {
             return None;
         }
-        Some(self.ended_copies.iter().rev().find(|(p, _)| p == path).is_some_and(|(_, finished)| *finished))
+        Some(self.ended_copies.iter().rev().find(|(p, ..)| p == path).is_some_and(|(_, finished, _)| *finished))
     }
 
     /// Why the running stream's copy stopped while the stream goes on, once [`Outputs::poll`] has

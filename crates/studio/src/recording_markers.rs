@@ -100,6 +100,10 @@ pub(crate) struct Ended {
     pub length: Tick,
     /// The encoder counters. The timeline's clip holds the frames the encoder was handed.
     pub written: Option<Written>,
+    /// The part of the output before its file's start, without the gaps the output left out: for
+    /// a stream's copy that lost the stream's first packets, the stream up to the copy's first
+    /// keyframe. 0 for a file that holds the output from its first frame.
+    pub opening: Tick,
     pub markers: Vec<Marker>,
     /// Why the output could no longer finish its file while it ran, once [`MarkerWatch::fail`]
     /// said so.
@@ -160,6 +164,7 @@ impl MarkerWatch {
             recording: w.recording,
             rate: w.rate,
             written: w.written,
+            opening: Tick(0),
             markers: w.markers,
             failed,
         })
@@ -603,15 +608,19 @@ fn time_range(start: i64, duration: i64, rate: FrameRate) -> Value {
 /// timeline file, as one clip on a video track and an audio track, and each marker at the frame
 /// that holds its time in the recording, without the gaps the recording left out before it. The
 /// clip holds the frames the encoder was handed, or without encoder counters the frames that start
-/// before the stop. A marker after the last frame is put on the last frame.
+/// before the stop. The frames of the output's opening that its file does not hold
+/// ([`Ended::opening`]) are left out of the clip, and the markers are placed in the file. A marker
+/// after the last frame is put on the last frame, and one before the file's start on its first.
 pub(crate) fn timeline(ended: &Ended) -> Value {
     let rate = ended.rate.sane();
     let file = ended.recording.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let title = ended.recording.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // The frames that start before the stop.
     let by_clock = || if ended.length.0 > 0 { rate.frame_at(Tick(ended.length.0 - 1)).saturating_add(1) } else { 1 };
+    // The frames before the file's start.
+    let before = if ended.opening.0 > 0 { rate.frame_at(ended.opening) } else { 0 };
     // A recording is at least one frame.
-    let frames = ended.written.as_ref().map_or_else(by_clock, Written::frames).max(1);
+    let frames = ended.written.as_ref().map_or_else(by_clock, Written::frames).saturating_sub(before).max(1);
     let available = time_range(0, frames, rate);
     let clip = json!({
         "OTIO_SCHEMA": "Clip.2",
@@ -653,7 +662,7 @@ pub(crate) fn timeline(ended: &Ended) -> Value {
                 "name": m.name,
                 "comment": "",
                 "color": "GREEN",
-                "marked_range": time_range(rate.frame_at(in_recording(ended.written.as_ref(), m.at)).min(frames - 1), 0, rate),
+                "marked_range": time_range(rate.frame_at(in_recording(ended.written.as_ref(), m.at)).saturating_sub(before).clamp(0, frames - 1), 0, rate),
                 "metadata": {},
             })
         })
@@ -773,9 +782,10 @@ impl Studio {
             self.recording_markers.finishing.push(ended);
         }
         // The running stream's copy, when it writes one; a stream's encoder counters count the
-        // frames the copy gets. The copy writes each packet at its own time from the first one,
-        // so packets it loses leave a gap in the file rather than shorten it, and a copy that
-        // could not write its last packets is not finished and gets no timeline. `observe` calls `copy` once for each stream it sees, not each
+        // frames the copy gets. The copy writes each packet at its own time from the first one it
+        // got, so packets it loses later leave a gap in the file rather than shorten it; a copy
+        // that lost the stream's first packets starts later, and its timeline leaves that opening
+        // out. A copy that could not write its last packets is not finished and gets no timeline. `observe` calls `copy` once for each stream it sees, not each
         // frame; a failure later is read from `running_copy_failure`, which reads no stream state.
         let stream = self.outputs.start_of(OutputKind::Streaming);
         let mut failed_at_start = None;
@@ -826,7 +836,7 @@ impl Studio {
     /// Start writing the timeline of `ended`, a recording or with `copy` a stream's copy, on a
     /// thread of its own, so a slow disk does not hold up a frame. A recording or copy that did not
     /// finish its file cleanly gets no timeline.
-    fn write_marker_file(&mut self, ended: Ended, copy: bool) {
+    fn write_marker_file(&mut self, mut ended: Ended, copy: bool) {
         let unfinished = if copy {
             self.outputs.copy_ended(&ended.recording) != Some(true)
         } else {
@@ -836,6 +846,9 @@ impl Studio {
             let error = format!("{}: {} was not finished", ended.recording.display(), noun(copy));
             self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", error)], true));
             return;
+        }
+        if copy {
+            ended.opening = tick_of(Duration::from_nanos(self.outputs.copy_start(&ended.recording)));
         }
         let recording = ended.recording.clone();
         match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended).map(|p| (p, marker_ranges(&ended)))) {
@@ -1044,6 +1057,7 @@ mod tests {
             rate: FrameRate::new(30000, 1001),
             length: t(10_000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(1000), name: "Goal".into() }, Marker { at: t(60_000), name: "Late".into() }],
             failed: None,
         };
@@ -1073,6 +1087,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1010),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(1005), name: "End".into() }],
             failed: None,
         };
@@ -1091,6 +1106,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(10_000),
             written: Some(written(240)),
+            opening: Tick(0),
             markers: vec![Marker { at: t(9000), name: "Late".into() }],
             failed: None,
         };
@@ -1105,6 +1121,30 @@ mod tests {
         assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 301.0);
         ended.written = Some(written(0));
         assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 1.0);
+    }
+
+    #[test]
+    fn a_copy_that_lost_the_stream_s_opening_puts_its_markers_on_the_file_s_frames() {
+        let mut ended = Ended {
+            recording: PathBuf::from("copy.mkv"),
+            rate: FrameRate::new(30, 1),
+            length: t(10_000),
+            written: Some(written(300)),
+            opening: t(2000),
+            markers: vec![Marker { at: t(5000), name: "Goal".into() }, Marker { at: t(1000), name: "Early".into() }],
+            failed: None,
+        };
+        // The file starts 2 s into the stream: it holds the last 240 of the 300 frames, and a
+        // marker 5 s into the stream is 3 s into the file.
+        let v = timeline(&ended);
+        let clip = &v["tracks"]["children"][0]["children"][0];
+        assert_eq!(clip["source_range"]["duration"]["value"], 240.0);
+        let markers = v["tracks"]["markers"].as_array().unwrap();
+        assert_eq!(markers[0]["marked_range"]["start_time"]["value"], 90.0);
+        assert_eq!(markers[1]["marked_range"]["start_time"]["value"], 0.0, "a marker before the file's start is put on its first frame");
+        // Without encoder counters, the clip holds the frames from the file's start to the stop.
+        ended.written = None;
+        assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 240.0);
     }
 
     #[test]
@@ -1256,6 +1296,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(100), name: "Goal".into() }, Marker { at: t(500), name: "Save".into() }],
             failed: None,
         });
@@ -1324,6 +1365,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(0), name: "Goal".into() }, Marker { at: t(500), name: "Goal".into() }],
             failed: None,
         };
@@ -1367,6 +1409,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(0), name: "Goal".into() }],
             failed: None,
         };
@@ -1407,6 +1450,7 @@ mod tests {
             rate: FrameRate::new(60, 1),
             length: t(0),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(0), name: "Start".into() }],
             failed: None,
         };
@@ -1433,6 +1477,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(500), name: "Half".into() }],
             failed: None,
         });
@@ -1459,6 +1504,7 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
+            opening: Tick(0),
             markers: vec![Marker { at: t(500), name: "Half".into() }],
             failed: None,
         });
@@ -1616,6 +1662,28 @@ mod tests {
         studio.rename_marker(1, "Start".into()).unwrap();
         assert_eq!(timeline_names(&timeline), ["Goal", "Marker 2", "Start"]);
         assert_eq!(studio.add_recording_marker(None).unwrap_err().to_string(), "neither a recording nor a stream's copy is running");
+    }
+
+    #[test]
+    fn a_streams_copy_that_lost_the_stream_s_opening_gets_a_timeline_of_its_own_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("Stream 2026-11-23 10-00-00.mkv");
+        let mut studio = crate::tests::headless();
+        let stats = EncoderStats::default();
+        stats.frames.store(90, Ordering::Relaxed);
+        // The copy's disk fell behind before it got the stream's first packets: its file starts
+        // 1 s into the stream.
+        let ended = studiocraft_plugin::StreamCopyState { path: copy.clone(), finished: true, start_ns: 1_000_000_000, ..Default::default() };
+        let now = studio.clock.now();
+        let _ = crate::outputs::tests::stream_with_copy(&mut studio.outputs, now, Arc::new(stats), ended);
+        studio.sync_recording_markers();
+        studio.add_recording_marker(Some("Goal".into())).unwrap();
+        stop_stream(&mut studio);
+        let v: Value = serde_json::from_slice(&std::fs::read(dir.path().join("Stream 2026-11-23 10-00-00.otio")).unwrap()).unwrap();
+        let fps = v["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["rate"].as_f64().unwrap();
+        let frames = v["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"].as_f64().unwrap();
+        assert_eq!(frames, 90.0 - fps.floor(), "the clip leaves out the frames before the file's start");
+        assert_eq!(v["tracks"]["markers"][0]["marked_range"]["start_time"]["value"], 0.0, "a marker before the file's start is on its first frame");
     }
 
     #[test]

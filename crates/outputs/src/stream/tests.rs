@@ -1756,6 +1756,7 @@ fn the_copy_holds_the_pictures_and_sound_the_destination_got() {
     let file = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
     assert!(state.finished && state.failure.is_none() && state.lost_packets == 0, "{state:?}");
+    assert_eq!(state.start_ns, 0, "the file starts at the stream's first frame");
     assert_eq!((state.path.as_path(), state.bytes), (path.as_path(), file.len() as u64));
     let (tracks, [video, audio]) = packets(&file);
     assert_eq!((tracks[0].codec_id.as_str(), tracks[1].codec_id.as_str()), ("V_MPEG4/ISO/AVC", "A_AAC"));
@@ -1835,6 +1836,53 @@ fn a_copy_whose_disk_stalls_holds_back_neither_the_stream_nor_the_destination() 
     assert!(state.finished && state.failure.is_none(), "{state:?}");
     let (_, [video, _]) = packets(&bytes);
     assert!(video.first().is_some_and(|v| v.1), "after the packets it lost, the copy goes on from a keyframe");
+}
+
+#[test]
+fn a_copy_whose_disk_stalls_before_its_first_packet_says_where_in_the_stream_its_file_starts() {
+    let path = temp_file("stream-copy-late");
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, gate) = mpsc::channel::<()>();
+    let file = std::fs::File::create(&path).unwrap();
+    let open: copy::Open = Box::new(move || Ok(Box::new(Gated { file, gate: Some(gate) }) as Box<dyn copy::CopyFile>));
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), path.clone(), open).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    // The copy's first write waits until its ring is full and the destination has gone on past
+    // the ring's span, so the first packets the ring holds are stale once the write returns.
+    let waited = Instant::now();
+    while out.stream_copy().unwrap().lost_packets == 0 {
+        assert!(waited.elapsed() < GUARD, "the stalled copy counted no lost packets");
+        std::thread::yield_now();
+    }
+    let span = u64::from(RING_SECONDS) * 1000;
+    loop {
+        match next(&seen) {
+            Seen::Media { timestamp, .. } if u64::from(timestamp) > 2 * span => break,
+            Seen::Closed => panic!("the destination's connection ended"),
+            _ => {}
+        }
+    }
+    drop(release);
+    // The stream goes on while the copy writes again. GUARD only ends a test that would otherwise
+    // hang.
+    let waited = Instant::now();
+    while out.stream_copy().unwrap().start_ns == 0 {
+        assert!(waited.elapsed() < GUARD, "the copy never wrote a packet: {:?}", out.stream_copy());
+        std::thread::yield_now();
+    }
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    let state = out.stream_copy().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    assert!(state.finished && state.failure.is_none(), "{state:?}");
+    // The file starts at a keyframe after the opening the copy lost, at its own time 0.
+    assert!(state.start_ns >= span * 1_000_000 && state.start_ns.is_multiple_of(1_000_000_000), "{state:?}");
+    let (_, [video, _]) = packets(&bytes);
+    assert!(video.first().is_some_and(|v| v.1 && v.0 == 0), "{:?}", video.first());
 }
 
 #[test]

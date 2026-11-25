@@ -10,7 +10,9 @@
 //!   encoder delay, since the copy's first sound packet comes after its first keyframe.
 //! - A disk that falls more than the ring's length behind loses packets up to the next keyframe,
 //!   as a destination does; [`StreamCopyState::lost_packets`] counts them. The encoders, the
-//!   destinations and the other subscribers never wait for the copy.
+//!   destinations and the other subscribers never wait for the copy. When the disk falls behind
+//!   before the copy gets its first packet, the file starts at a later keyframe, and
+//!   [`StreamCopyState::start_ns`] says how much of the stream comes before the file's start.
 //! - A file that cannot be created or written stops the copy and keeps what was written. The
 //!   stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
@@ -20,7 +22,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -64,6 +66,8 @@ pub(crate) fn create(path: &Path) -> Open {
 struct Shared {
     /// Bytes in the file.
     stats: Arc<EncoderStats>,
+    /// [`StreamCopyState::start_ns`], once the copy got its first packet.
+    start_ns: AtomicU64,
     finished: AtomicBool,
     /// Leave the file as it is: the thread ends without finishing it.
     abandon: AtomicBool,
@@ -123,6 +127,7 @@ impl StreamCopy {
             path: self.path.clone(),
             bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
             lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
+            start_ns: self.shared.start_ns.load(Ordering::SeqCst),
             finished: self.shared.finished.load(Ordering::SeqCst),
             failure: lock(&self.shared.failure).clone(),
         }
@@ -182,7 +187,12 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
             Kind::Data => continue,
         };
         // A time before the first packet is written at 0, as a destination sends it.
-        let pts = packet.pts().saturating_sub(*zero.get_or_insert(packet.dts())).max(0);
+        let zero = *zero.get_or_insert_with(|| {
+            // The encoders count the stream's times from its first frame, at 0.
+            shared.start_ns.store(u64::try_from(packet.dts()).unwrap_or(0), Ordering::SeqCst);
+            packet.dts()
+        });
+        let pts = packet.pts().saturating_sub(zero).max(0);
         if let Err(e) = mux.write_frame(track as usize, pts, keyframe, packet.data(), None) {
             return shared.fail(could_not(&e));
         }
