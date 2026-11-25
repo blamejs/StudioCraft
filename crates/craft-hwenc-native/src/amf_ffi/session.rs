@@ -74,8 +74,11 @@ fn load() -> Result<Api, String> {
     let mut factory = std::ptr::null_mut();
     // SAFETY: `factory` is a valid out-pointer, and `version` is at most the runtime's own.
     let r = unsafe { init(version, &mut factory) };
-    if r != AMF_OK || factory.is_null() {
+    if r != AMF_OK {
         return Err(format!("AMFInit failed ({})", result_name(r)));
+    }
+    if factory.is_null() {
+        return Err("AMFInit returned no factory".into());
     }
     Ok(Api { factory: Mutex::new(Factory(factory)) })
 }
@@ -159,8 +162,11 @@ impl Session {
         // SAFETY: the factory is the live one `AMFInit` returned, and `context` a valid
         // out-pointer.
         let r = unsafe { ((*(*factory.0).pVtbl).CreateContext)(factory.0, &mut context) };
-        if r != AMF_OK || context.is_null() {
+        if r != AMF_OK {
             return Err(refusal("CreateContext", r));
+        }
+        if context.is_null() {
+            return Err(OpenError::Failed("CreateContext returned no context".into()));
         }
         // From here on, dropping `session` terminates and releases what was made.
         let mut session = Session { context, component: std::ptr::null_mut(), codec: p.codec, width: p.width, height: p.height };
@@ -175,8 +181,11 @@ impl Session {
         // call, and `component` is a valid out-pointer.
         let r = unsafe { ((*(*factory.0).pVtbl).CreateComponent)(factory.0, context, id.as_ptr(), &mut component) };
         drop(factory);
-        if r != AMF_OK || component.is_null() {
+        if r != AMF_OK {
             return Err(refusal(&format!("CreateComponent({})", super::component_id(p.codec)), r));
+        }
+        if component.is_null() {
+            return Err(OpenError::Failed(format!("CreateComponent({}) returned no component", super::component_id(p.codec))));
         }
         session.component = component;
         for (name, value, need) in super::properties(p) {
@@ -294,8 +303,11 @@ impl Engine for Session {
                 &mut surface,
             )
         };
-        if r != AMF_OK || surface.is_null() {
+        if r != AMF_OK {
             return Err(format!("AllocSurface failed ({})", result_name(r)));
+        }
+        if surface.is_null() {
+            return Err("AllocSurface returned no surface".into());
         }
         // SAFETY: `surface` is the live host NV12 surface just allocated.
         let filled = unsafe { fill(surface, frame, self.width, self.height) };
