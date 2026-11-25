@@ -45,6 +45,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // Apps and tooling.
     ("studiocraft", Class::Exempt),
     ("cli", Class::Exempt),
+    ("web", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

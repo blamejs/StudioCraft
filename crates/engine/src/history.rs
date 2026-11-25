@@ -16,12 +16,19 @@ struct Entry {
     label: &'static str,
     before: SceneCollection,
     key: Option<String>,
-    at: Instant,
+    /// When it was recorded; `None` without a clock ([`now`]).
+    at: Option<Instant>,
     /// Kept through undo and redo ([`History::holds`]).
     step: u64,
     /// The redo steps that recording this entry cleared, for [`History::discard`]; `None` when
     /// the entry did not come from [`History::record`] or an undo or redo came after it.
     cleared: Option<Vec<Redo>>,
+}
+
+/// The time a step is recorded, for coalescing. A WebAssembly build for the browser has no clock
+/// (`Instant::now` panics on `wasm32-unknown-unknown`), so there every change is its own step.
+fn now() -> Option<Instant> {
+    if cfg!(all(target_arch = "wasm32", target_os = "unknown")) { None } else { Some(Instant::now()) }
 }
 
 /// A step that can be redone: its label, the collection after it and its step id.
@@ -38,14 +45,18 @@ pub struct History {
 
 impl History {
     /// Record a change from `before`. With a `key` equal to the last entry's within
-    /// [`COALESCE`], the change joins that entry.
+    /// [`COALESCE`], the change joins that entry; without a clock ([`now`]) it never does.
     pub fn record(&mut self, label: &'static str, before: SceneCollection, key: Option<String>) {
-        let now = Instant::now();
-        if let (Some(k), Some(last)) = (&key, self.undo.last_mut())
+        self.record_at(label, before, key, now());
+    }
+
+    /// [`History::record`] at the time `now`. Without a time no change joins another.
+    fn record_at(&mut self, label: &'static str, before: SceneCollection, key: Option<String>, now: Option<Instant>) {
+        if let (Some(k), Some(last), Some(now)) = (&key, self.undo.last_mut(), now)
             && last.key.as_ref() == Some(k)
-            && now.duration_since(last.at) < COALESCE
+            && last.at.is_some_and(|at| now.duration_since(at) < COALESCE)
         {
-            last.at = now;
+            last.at = Some(now);
             self.redo.clear();
             return;
         }
@@ -96,7 +107,7 @@ impl History {
     pub fn redo(&mut self, current: &SceneCollection) -> Option<SceneCollection> {
         let (label, after, step) = self.redo.pop()?;
         self.forget_cleared();
-        self.undo.push(Entry { label, before: current.clone(), key: None, at: Instant::now(), step, cleared: None });
+        self.undo.push(Entry { label, before: current.clone(), key: None, at: now(), step, cleared: None });
         Some(after)
     }
 
@@ -236,6 +247,19 @@ mod tests {
         h.record("move", named("0"), Some("k".into()));
         h.seal();
         h.record("move", named("1"), Some("k".into()));
+        assert_eq!(h.undo(&named("2")).unwrap().name, "1");
+    }
+
+    #[test]
+    fn without_a_clock_each_change_is_its_own_step() {
+        let mut h = History::default();
+        h.record_at("move", named("0"), Some("k".into()), None);
+        h.record_at("move", named("1"), Some("k".into()), None);
+        assert_eq!(h.undo(&named("2")).unwrap().name, "1");
+        // A step recorded without a time is not joined by a timed one either.
+        let mut h = History::default();
+        h.record_at("move", named("0"), Some("k".into()), None);
+        h.record_at("move", named("1"), Some("k".into()), Some(Instant::now()));
         assert_eq!(h.undo(&named("2")).unwrap().name, "1");
     }
 

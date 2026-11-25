@@ -6737,6 +6737,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "studiocraft-web"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-i18n",
+ "js-sys",
+ "serde_json",
+ "studiocraft-engine",
+ "studiocraft-model",
+ "studiocraft-plugin",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
