@@ -3007,6 +3007,73 @@ fn a_destination_fails_when_its_own_encoder_stops_and_the_stream_goes_on() {
     until_closed(&seen_b);
 }
 
+/// A stream sending to `a` with its own encoder and to `b` with an encoder of `b`'s own, which is
+/// then stopped, with the servers' views of `a` and `b` and the encoder `b` sent with.
+fn with_b_stopped(b_plans: Vec<Plan>) -> (Streaming, Feed, mpsc::Receiver<Seen>, mpsc::Receiver<Seen>, Arc<EncoderFeed>) {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(b_plans);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let out = Streaming::start_timed(&job, vec![target("a", &a, "ka"), with_own("b", &b, "kb", own(800, "speed"))], quick()).unwrap();
+    let feed = Feed::new(&out);
+    for seen in [&seen_a, &seen_b] {
+        let _ = next(seen);
+        media(seen, 10);
+    }
+    out.stop_destination("b").unwrap();
+    until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+    until_ended(&out, "b");
+    until_closed(&seen_b);
+    let old = feed_of(&out, "b");
+    assert!(old.own.is_some());
+    (out, feed, seen_a, seen_b, old)
+}
+
+/// An encoder that cannot start, for a destination.
+fn missing_encoder() -> OwnEncoder {
+    OwnEncoder { encoder: "none-such".into(), settings: Settings::new(), kbps: 900 }
+}
+
+#[test]
+fn a_stopped_destination_started_with_another_encoder_lets_go_of_its_own_first() {
+    let (mut out, feed, seen_a, seen_b, old) = with_b_stopped(vec![Plan::Accept, Plan::Accept]);
+    // Before its new encoder is looked for, it lets go of the one it held, so at the limit of
+    // encoders that one can be dropped to make room. This new one cannot start.
+    let e = out.start_destination_as(&DestinationSetup { encoder: Some(missing_encoder()), ..setup("b", &closed_url(), "kb") }).unwrap_err();
+    assert!(e.to_string().contains("none-such"), "{e}");
+    assert!(!Arc::ptr_eq(&feed_of(&out, "b"), &old));
+    assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Stopped);
+    // Started again as it was, it sends with the encoder it held, which still runs.
+    out.start_destination("b", None).unwrap();
+    assert!(Arc::ptr_eq(&feed_of(&out, "b"), &old));
+    assert_eq!(next(&seen_b), Seen::Publish("kb".into()));
+    media(&seen_b, 10);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+    until_closed(&seen_b);
+}
+
+#[test]
+fn the_destination_an_added_one_replaces_lets_go_of_its_encoder_first() {
+    let (mut out, feed, seen_a, _seen_b, old) = with_b_stopped(vec![Plan::Accept]);
+    // The list fills with destinations that fail, so an added one takes the place of `b`, the
+    // only stopped one.
+    let (refusing, _refused) = server(vec![Plan::RefuseConnect; MAX_SUBSCRIBERS]);
+    for i in 2..MAX_SUBSCRIBERS {
+        let id = format!("d{i}");
+        out.start_destination_as(&setup(&id, &refusing, "k")).unwrap();
+        until(&out, &id, |d| matches!(d.status, DestinationStatus::Failed(_)));
+        until_ended(&out, &id);
+    }
+    assert_eq!(out.destinations().len(), MAX_SUBSCRIBERS);
+    let e = out.start_destination_as(&DestinationSetup { encoder: Some(missing_encoder()), ..setup("new", &closed_url(), "k") }).unwrap_err();
+    assert!(e.to_string().contains("none-such"), "{e}");
+    assert!(!Arc::ptr_eq(&feed_of(&out, "b"), &old));
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+}
+
 #[test]
 fn an_encoder_that_ended_is_dropped_without_another_start() {
     let (a, seen_a) = server(vec![Plan::Accept]);

@@ -687,7 +687,7 @@ shares the stream's encoder only when it names the encoder and bitrate the strea
 also when Settings › Stream changed the stream's since. A destination with an encoder of its own can be
 added to a running stream only when the stream started with at least one destination that has an
 encoder of its own, on or off; otherwise the stream has to be stopped and started again first. A
-stream runs at most 16 encoders for its destinations, besides its own; an encoder that stopped does
+stream runs at most 64 encoders for its destinations, besides its own; an encoder that stopped does
 not count ([Control protocol](control-protocol.md#viewstreaming-and-the-streamdestination-commands)).
 
 ### Copy of the stream

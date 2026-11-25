@@ -779,6 +779,16 @@ impl Dest {
     /// The thread gives up because the encoder `ended.0` it ran for itself ended, with `ended.1`,
     /// unless it was started again since or given another encoder: then it goes on, and says so
     /// with `false`. Asked to stop since, or with the stream of `hub` stopping, it ends as stopped.
+    /// Lets go of the encoder whose packets it sent, for the stream's `main`, when its thread has
+    /// ended, so an encoder of its own that no other destination holds can be dropped. Its next
+    /// start gives it the encoder it sends with.
+    fn release_feed(&self, main: &Arc<EncoderFeed>) {
+        let _slot = lock(&self.thread);
+        if !self.running() {
+            *lock(&self.feed) = Arc::clone(main);
+        }
+    }
+
     fn fail_ended(&self, hub: &Hub, ended: (Arc<EncoderFeed>, Failure)) -> bool {
         let _slot = lock(&self.thread);
         let (feed, failure) = ended;
@@ -924,7 +934,23 @@ struct NetWatch {
     threads: AtomicU32,
 }
 
+/// The place in `dests`, a full list of destinations, that an added destination takes: that of
+/// one whose thread has ended, a stopped one before a failed one.
+fn replaceable(dests: &[Arc<Dest>]) -> Option<usize> {
+    let ended = |stopped: bool| move |o: &Arc<Dest>| !o.running() && (o.status() == DestinationStatus::Stopped) == stopped;
+    dests.iter().position(ended(true)).or_else(|| dests.iter().position(ended(false)))
+}
+
 impl Hub {
+    /// The destination an added one takes the place of: `None` while the stream has room for it.
+    fn replaced(&self) -> Option<Arc<Dest>> {
+        let dests = lock(&self.dests);
+        if dests.len() < MAX_SUBSCRIBERS {
+            return None;
+        }
+        replaceable(&dests).and_then(|i| dests.get(i).cloned())
+    }
+
     fn find(&self, id: &str) -> Result<Arc<Dest>, PluginError> {
         lock(&self.dests)
             .iter()
@@ -941,11 +967,10 @@ impl Hub {
         if let Some(d) = dests.iter().find(|d| d.target.id == id) {
             return Ok(Arc::clone(d));
         }
-        let ended = |stopped: bool| move |o: &Arc<Dest>| !o.running() && (o.status() == DestinationStatus::Stopped) == stopped;
         let place = if dests.len() < MAX_SUBSCRIBERS {
             None
         } else {
-            match dests.iter().position(ended(true)).or_else(|| dests.iter().position(ended(false))) {
+            match replaceable(&dests) {
                 Some(i) => Some(i),
                 None => return Err(PluginError::Failed(format!("a stream can have at most {MAX_SUBSCRIBERS} destinations"))),
             }
@@ -2240,7 +2265,8 @@ impl Streaming {
 
     /// Stops and drops the encoders of `groups`, held from `own`, that no destination holds: one a
     /// destination left when it was started again with another encoder. A destination that is
-    /// stopped keeps its encoder, and so does one being started with it.
+    /// stopped keeps its encoder until a start of it, or of one that takes its place, lets go of
+    /// it, and one being started with an encoder keeps that one.
     fn drop_unused(&self, groups: &mut Vec<(Arc<EncoderFeed>, Native)>) {
         // Only `groups` holds the feed of such an encoder, and it is held locked, so no
         // destination can take that feed meanwhile.
@@ -2511,6 +2537,12 @@ impl OutputInstance for Streaming {
         // again with `setup`.
         if !found.as_ref().is_some_and(|d| d.running()) {
             self.room()?;
+        }
+        // The destination started again, or the one an added destination takes the place of,
+        // lets go of its encoder first when its thread has ended, so at the limit of encoders one
+        // that only it held can be dropped to make room.
+        if let Some(d) = found.clone().or_else(|| self.hub.replaced()) {
+            d.release_feed(&self.hub.main);
         }
         // The encoder is found or started before the destination is added, so one that cannot
         // start adds nothing.
