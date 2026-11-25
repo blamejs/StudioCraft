@@ -333,6 +333,7 @@
 	the audio stream failed	音訊串流發生錯誤
 	the camera capture could not start	無法開始攝影機擷取
 	the camera is already open in another format	攝影機已以另一種格式開啟
+	the camera is not connected	攝影機未連接
 	the camera is still closing	攝影機仍在關閉中
 	the camera offers no format StudioCraft reads	此攝影機沒有 StudioCraft 支援的影像格式
 	the camera sends frames that cannot be read	攝影機傳送的影格無法讀取

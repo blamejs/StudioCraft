@@ -433,6 +433,7 @@
 	the audio stream failed	the audio stream failed
 	the camera capture could not start	the camera capture could not start
 	the camera is already open in another format	the camera is already open in another format
+	the camera is not connected	the camera is not connected
 	the camera is still closing	the camera is still closing
 	the camera offers no format StudioCraft reads	the camera offers no format StudioCraft reads
 	the camera sends frames that cannot be read	the camera sends frames that cannot be read

@@ -332,6 +332,7 @@
 	the audio stream failed	o fluxo de áudio falhou
 	the camera capture could not start	não foi possível iniciar a captura da câmera
 	the camera is already open in another format	a câmera já está aberta em outro formato
+	the camera is not connected	a câmera não está conectada
 	the camera is still closing	a câmera ainda está fechando
 	the camera offers no format StudioCraft reads	a câmera não oferece nenhum formato que o StudioCraft leia
 	the camera sends frames that cannot be read	a câmera envia quadros que não podem ser lidos

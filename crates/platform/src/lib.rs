@@ -20,6 +20,7 @@ pub mod camera;
 mod camera_frames;
 #[cfg(target_os = "linux")]
 mod camera_gray;
+mod camera_watch;
 pub mod display;
 #[cfg(target_os = "linux")]
 mod display_list;
