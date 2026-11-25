@@ -101,6 +101,9 @@ pub(crate) struct Ended {
     /// The encoder counters. The timeline's clip holds the frames the encoder was handed.
     pub written: Option<Written>,
     pub markers: Vec<Marker>,
+    /// Why the output could no longer finish its file while it ran, once [`MarkerWatch::fail`]
+    /// said so.
+    pub failed: Option<String>,
 }
 
 struct Watched {
@@ -141,9 +144,7 @@ impl MarkerWatch {
             (Some(_), _) => self.recording.take(),
             (None, _) => None,
         };
-        if self.recording.is_none() {
-            self.failed = None;
-        }
+        let failed = if self.recording.is_none() { self.failed.take() } else { None };
         if self.recording.is_none()
             && let Some(start) = start
             && self.passed != Some(start)
@@ -160,6 +161,7 @@ impl MarkerWatch {
             rate: w.rate,
             written: w.written,
             markers: w.markers,
+            failed,
         })
     }
 
@@ -913,6 +915,10 @@ impl Studio {
             return renamed;
         }
         if let Some(e) = finishing.iter_mut().find(|e| e.recording == r.recording) {
+            if let Some(cause) = &e.failed {
+                // Its file will not be finished, so no timeline would carry the new name.
+                return Err(format!("{} failed: {cause}", noun(r.copy)));
+            }
             return rename_listed(&mut e.markers, r.index, &r.name, name, r.copy);
         }
         if rm.writes.iter().any(|(recording, _)| *recording == r.recording) {
@@ -1039,6 +1045,7 @@ mod tests {
             length: t(10_000),
             written: None,
             markers: vec![Marker { at: t(1000), name: "Goal".into() }, Marker { at: t(60_000), name: "Late".into() }],
+            failed: None,
         };
         let v = timeline(&ended);
         assert_eq!(v["OTIO_SCHEMA"], "Timeline.1");
@@ -1067,6 +1074,7 @@ mod tests {
             length: t(1010),
             written: None,
             markers: vec![Marker { at: t(1005), name: "End".into() }],
+            failed: None,
         };
         let v = timeline(&ended);
         assert_eq!(v["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 31.0);
@@ -1084,6 +1092,7 @@ mod tests {
             length: t(10_000),
             written: Some(written(240)),
             markers: vec![Marker { at: t(9000), name: "Late".into() }],
+            failed: None,
         };
         // The encoder stalled 2 s before the stop: the file holds 240 frames, not 300.
         let v = timeline(&ended);
@@ -1248,6 +1257,7 @@ mod tests {
             length: t(1000),
             written: None,
             markers: vec![Marker { at: t(100), name: "Goal".into() }, Marker { at: t(500), name: "Save".into() }],
+            failed: None,
         });
         let save = InRecording { recording: recording.clone(), index: 1, name: "Save".into(), copy: false };
         // The file is being finished: the marker is renamed in the list the timeline is made from.
@@ -1315,6 +1325,7 @@ mod tests {
             length: t(1000),
             written: None,
             markers: vec![Marker { at: t(0), name: "Goal".into() }, Marker { at: t(500), name: "Goal".into() }],
+            failed: None,
         };
         let path = write_timeline(&ended).unwrap();
         let ranges = marker_ranges(&ended);
@@ -1357,6 +1368,7 @@ mod tests {
             length: t(1000),
             written: None,
             markers: vec![Marker { at: t(0), name: "Goal".into() }],
+            failed: None,
         };
         let path = write_timeline(&ended).unwrap();
         let ranges = marker_ranges(&ended);
@@ -1396,6 +1408,7 @@ mod tests {
             length: t(0),
             written: None,
             markers: vec![Marker { at: t(0), name: "Start".into() }],
+            failed: None,
         };
         let path = write_timeline(&ended).unwrap();
         assert_eq!(path, dir.path().join("take.otio"));
@@ -1421,6 +1434,7 @@ mod tests {
             length: t(1000),
             written: None,
             markers: vec![Marker { at: t(500), name: "Half".into() }],
+            failed: None,
         });
         studio.sync_recording_markers();
         assert!(studio.recording_markers.writes.is_empty(), "nothing is written while the recording is finishing");
@@ -1446,6 +1460,7 @@ mod tests {
             length: t(1000),
             written: None,
             markers: vec![Marker { at: t(500), name: "Half".into() }],
+            failed: None,
         });
         studio.sync_recording_markers();
         studio.report_marker_files(true);
@@ -1530,6 +1545,22 @@ mod tests {
         *failure.lock().unwrap() = Some("the folder is gone".into());
         assert_eq!(studio.add_recording_marker(None).unwrap_err().to_string(), "the stream's copy failed: the folder is gone");
         assert!(!studio.can_add_recording_marker());
+    }
+
+    #[test]
+    fn a_failed_copy_whose_stop_is_finishing_does_not_rename_its_marker() {
+        let copy = PathBuf::from("/videos/Stream 2026-11-23 10-00-00.mkv");
+        let mut w = MarkerWatch::of_stream_copy();
+        assert!(w.observe(Some(t(0)), || Some((copy.clone(), FrameRate::new(30, 1), None)), t(0)).is_none());
+        w.add(t(500), Some("Goal".into())).unwrap();
+        w.fail("the disk is full");
+        let ended = w.observe(None, || None, t(1000)).unwrap();
+        assert_eq!(ended.failed.as_deref(), Some("the disk is full"), "the failure goes with the copy while its stop finishes");
+        let mut studio = crate::tests::headless();
+        studio.recording_markers.copies_finishing.push(ended);
+        let goal = InRecording { recording: copy, index: 0, name: "Goal".into(), copy: true };
+        assert_eq!(studio.rename_recording_marker(&goal, "Kickoff"), Err("the stream's copy failed: the disk is full".into()));
+        assert_eq!(studio.recording_markers.copies_finishing[0].markers[0].name, "Goal");
     }
 
     /// Stop the stream of `studio` and wait for its timeline files.

@@ -5,6 +5,10 @@
 //!   thread hands each packet, in decoding order, to [`Publish`], which shares the packet once
 //!   ([`craft_packet::PacketPool`]) and offers it to every destination ([`craft_packet::Fanout`]).
 //!   Offering a packet never waits for a network.
+//! - When the job has a caption feed, [`Publish`] takes the phrases waiting in it before each
+//!   video packet, without waiting, and puts the CEA-608 roll-up caption pairs due for that
+//!   picture into the packet as an SEI message ([`craft_closed_captions`]), before its first
+//!   slice. Platforms that read captions embedded in H.264 show them as closed captions.
 //! - Each destination that sends has a thread of its own. The thread connects
 //!   ([`craft_rtmp::Publisher`]), sends `onMetaData` and the H.264 and AAC sequence headers, and
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
@@ -56,12 +60,15 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
+use craft_closed_captions::sei::{self, Codec};
+use craft_closed_captions::{Config as CaptionConfig, MAX_PAIRS_PER_FRAME, RollUp};
 use craft_flv::{Body, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Metadata};
 use craft_media::matroska::TrackSpec;
 use craft_packet::{
     Control, Fanout, Info, Kind, MAX_RING_BYTES, MAX_SUBSCRIBERS, PacketPool, Receiver, RecvError, RingConfig, SharedPacket, StreamRates,
 };
 use craft_rtmp::{Config, Publisher};
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
@@ -80,6 +87,7 @@ use copy::StreamCopy;
 
 pub mod copy;
 pub mod diagnose;
+pub mod ingests;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
@@ -1468,6 +1476,40 @@ fn send_packet(p: &mut Publisher, packet: &SharedPacket, zero: i64) -> Result<()
     p.send_flv(timestamp, &checked)
 }
 
+/// Closed captions for the stream's pictures: finished phrases from the job's feed, as CEA-608
+/// roll-up captions in an SEI message on each H.264 access unit that has pairs due. Streams have
+/// no B-frames, so packets come in the order their pictures are shown.
+struct Captions {
+    feed: Arc<Fifo<String>>,
+    roll: RollUp,
+    pairs: Vec<[u8; 2]>,
+    nal: Vec<u8>,
+}
+
+impl Captions {
+    /// Captions for a stream at `fps_num / fps_den`; the phrases already waiting are left out.
+    fn new(feed: Arc<Fifo<String>>, fps_num: u32, fps_den: u32) -> Result<Captions, PluginError> {
+        while feed.pop().is_some() {}
+        let roll = RollUp::new(fps_num, fps_den, CaptionConfig::default()).map_err(|e| PluginError::Failed(format!("closed captions: {e}")))?;
+        Ok(Captions { feed, roll, pairs: Vec::with_capacity(MAX_PAIRS_PER_FRAME), nal: Vec::new() })
+    }
+
+    /// Put this picture's caption pairs into `au`, a length-prefixed access unit. An access unit
+    /// with no picture is sent as it was, and its pairs are lost.
+    fn add(&mut self, au: &mut Vec<u8>) {
+        while let Some(text) = self.feed.pop() {
+            self.roll.push(&text);
+        }
+        self.roll.frame(&mut self.pairs);
+        if self.pairs.is_empty() {
+            return;
+        }
+        self.nal.clear();
+        sei::sei_nal(Codec::H264, &self.pairs, &mut self.nal);
+        let _ = sei::insert_sei(Codec::H264, au, &self.nal);
+    }
+}
+
 /// The third thread's sink: each packet is shared and offered to every destination.
 struct Publish {
     fanout: Fanout,
@@ -1477,6 +1519,7 @@ struct Publish {
     refused: Arc<AtomicU64>,
     /// A video packet could not be shared, so video waits for the next keyframe.
     video_gap: bool,
+    captions: Option<Captions>,
 }
 
 impl Sink for Publish {
@@ -1489,6 +1532,9 @@ impl Sink for Publish {
         }
         let info = if video { Info::video(item.pts_ns, item.dts_ns, item.keyframe) } else { Info::audio(item.pts_ns) };
         let mut data = item.data;
+        if video && let Some(c) = &mut self.captions {
+            c.add(&mut data);
+        }
         match self.fanout.share(&mut self.pool, &mut data, info) {
             Ok(packet) => {
                 self.video_gap &= !video;
@@ -1580,7 +1626,7 @@ impl Streaming {
         auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
         copy: Option<(PathBuf, copy::Open)>,
     ) -> Result<Streaming, PluginError> {
-        let RateControl::Bitrate { kbps, .. } = job.rate else {
+        let RateControl::Bitrate { kbps, keyframe_s } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
         let encoder = &job.video_encoder;
@@ -1594,7 +1640,15 @@ impl Streaming {
             )));
         }
         check_targets(&targets)?;
-        if copy.is_some() && targets.len() >= MAX_SUBSCRIBERS {
+        // The copy's writer holds each cluster in memory until the next keyframe, so the copy takes
+        // the keyframe interval a recording takes; with a longer one only the copy is refused.
+        let copy_refused = (copy.is_some() && keyframe_s > RECORDING_KEYFRAME_S).then(|| {
+            format!(
+                "the copy of the stream needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}; set the keyframe interval in Settings › Stream"
+            )
+        });
+        let wants_copy = copy.is_some() && copy_refused.is_none();
+        if wants_copy && targets.len() >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!(
                 "a stream that saves a copy can have at most {} destinations, not {}",
                 MAX_SUBSCRIBERS - 1,
@@ -1620,25 +1674,29 @@ impl Streaming {
         let mut headers = None;
         // The copy subscribes before the encoders start, so it gets the first keyframe.
         let mut copy_feed: Option<(Vec<TrackSpec>, Result<Receiver, String>)> = None;
-        let wants_copy = copy.is_some();
         let sink_refused = Arc::clone(&refused);
+        let captions = match &job.captions {
+            Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
+            None => None,
+        };
         let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
             headers = Some(Headers::new(job, kbps, &tracks)?);
             if wants_copy {
                 let rx = fanout.subscribe(ring).map_err(|e| format!("the copy of the stream could not be started: {e}"));
                 copy_feed = Some((tracks, rx));
             }
-            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false }))
+            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false, captions }))
         };
         let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let copy = match (copy, copy_feed) {
-            (Some((path, open)), Some((tracks, Ok(rx)))) => Some(StreamCopy::start(path, open, tracks, rx)),
-            (Some((path, _)), Some((_, Err(e)))) => Some(StreamCopy::failed(path, e)),
-            (Some((path, _)), None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
-            (None, _) => None,
+        let copy = match (copy, copy_feed, copy_refused) {
+            (Some((path, _)), _, Some(e)) => Some(StreamCopy::failed(path, e)),
+            (Some((path, open)), Some((tracks, Ok(rx))), None) => Some(StreamCopy::start(path, open, tracks, rx)),
+            (Some((path, _)), Some((_, Err(e))), None) => Some(StreamCopy::failed(path, e)),
+            (Some((path, _)), None, None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
+            (None, _, _) => None,
         };
         let counts = Arc::new(Counts::default());
         let service = |id: &str| auto.as_ref().and_then(|(_, a)| a.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s));

@@ -305,6 +305,8 @@ impl Studio {
     fn start_audio_tracks(&mut self, anchor: (OutputKind, Tick), origin: Tick) {
         let recording = match anchor.0 {
             OutputKind::Recording => self.output(OutputKind::Recording).map(|r| PathBuf::from(r.target)),
+            // A take that starts while the stream runs is named after the stream's copy too.
+            OutputKind::Streaming if self.output(OutputKind::Streaming).is_some() => self.outputs.stream_copy().map(|c| c.path),
             OutputKind::Streaming | OutputKind::Replay => None,
         };
         self.start_audio_tracks_for(anchor, origin, recording);

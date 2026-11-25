@@ -529,7 +529,7 @@ impl Properties {
                 out.1 = ev.browse;
                 if has_audio {
                     ui.separator();
-                    audio = audio_form(ui, self.source, &src.audio);
+                    audio = audio_form(ui, self.source, &src.audio, studio.filter_latency_frames(self.source));
                 }
             });
             ui.separator();
@@ -556,8 +556,9 @@ impl Properties {
     }
 }
 
-/// The audio rows of a source's Properties window: the commands to run for what changed.
-fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> {
+/// The audio rows of a source's Properties window, with the delay in sample frames that the
+/// source's running audio filters add: the commands to run for what changed.
+fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState, latency_frames: usize) -> Vec<Action> {
     let mut actions = Vec::new();
     ui.strong(tl!("Audio"));
     egui::Grid::new(egui::Id::unique(("props-audio", source.0))).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -569,6 +570,13 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> 
         if r.changed() && ms != state.sync_offset_ms {
             actions.push(("source.sync_offset", json!({"source": source, "ms": ms})));
         }
+        ui.end_row();
+        ui.label(tl!("Filter delay"));
+        let frames = latency_frames.to_string();
+        ui.label(latency_text(latency_frames)).on_hover_text(craft_i18n::fmt(
+            tl!("The audio filters on this source delay its sound by {frames} samples at 48 kHz"),
+            &[("frames", &frames)],
+        ));
         ui.end_row();
         ui.label(tl!("Monitoring")).on_hover_text(tl!("Plays this source on the monitoring device chosen in Settings › Audio"));
         let mut mode = state.monitor;
@@ -592,6 +600,11 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> 
         ui.end_row();
     });
     actions
+}
+
+/// A filter delay of `frames` sample frames as the Properties window shows it, in milliseconds.
+fn latency_text(frames: usize) -> String {
+    format!("{:.1} {}", studiocraft_studio::latency_ms(frames), tl!("ms"))
 }
 
 /// A monitoring mode as the Properties window shows it.
@@ -1028,10 +1041,18 @@ mod tests {
         let mut actions = vec![("x", json!(null))];
         let state = AudioState { sync_offset_ms: 250, ..AudioState::default() };
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            actions = audio_form(ui, SourceId(3), &state);
+            actions = audio_form(ui, SourceId(3), &state, 248);
         });
         out.textures_delta.clear();
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn the_filter_delay_is_shown_in_milliseconds() {
+        // The unit is translated; other tests may switch the language meanwhile.
+        for (frames, shown) in [(0, "0.0 "), (248, "5.2 "), (48_000, "1000.0 ")] {
+            assert!(latency_text(frames).starts_with(shown), "{frames}: {}", latency_text(frames));
+        }
     }
 
     #[test]
@@ -1041,7 +1062,7 @@ mod tests {
             let state = AudioState { monitor: mode, ..AudioState::default() };
             let mut actions = vec![("x", json!(null))];
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                actions = audio_form(ui, SourceId(3), &state);
+                actions = audio_form(ui, SourceId(3), &state, 0);
             });
             out.textures_delta.clear();
             assert!(actions.is_empty(), "{mode:?}");
