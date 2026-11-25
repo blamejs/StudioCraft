@@ -447,8 +447,10 @@ left out. Recordings do not carry closed captions; they get the caption files.
 
 ### Face tracking model
 
-Face tracking uses the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
-ship. `avatar.model_download` downloads it once into the same models folder, as
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
 `face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
 already has. Either way the file is checked against its pinned size and SHA-256 sum before it
 is used, and a file that fails the check is deleted. Both run in the background, can be stopped
