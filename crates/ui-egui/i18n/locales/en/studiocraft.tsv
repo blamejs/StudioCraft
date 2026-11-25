@@ -258,6 +258,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (built in)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (built in)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (built in)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (built in)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (built in)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (built in)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)
@@ -603,6 +606,7 @@
 	Intel Quick Sync HEVC	Intel Quick Sync HEVC
 	Intel Quick Sync AV1	Intel Quick Sync AV1
 	Windows Media Foundation HEVC	Windows Media Foundation HEVC
+	Windows Media Foundation AV1	Windows Media Foundation AV1
 	VideoToolbox H.264	VideoToolbox H.264
 	VideoToolbox HEVC	VideoToolbox HEVC
 	VA-API H.264	VA-API H.264

@@ -62,7 +62,7 @@ description in [docs/features.md](docs/features.md).
 - The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - `scene.thumbnails` names the scenes whose pictures are drawn, 2 times a second by default, and stops them with an empty list ([Control protocol](docs/control-protocol.md#scenethumbnails)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
-- NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in), and VA-API AV1 (built in), record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- NVIDIA NVENC, Windows Media Foundation, AMD AMF, Apple VideoToolbox and VA-API H.264 and HEVC (built in), and NVIDIA NVENC, Windows Media Foundation, AMD AMF and VA-API AV1 (built in), record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
 ### Interface
 
@@ -156,9 +156,9 @@ description in [docs/features.md](docs/features.md).
     output to a share of the canvas, and scenes are laid out again when the canvas size changes.
     The canvas then follows that display when its resolution or scaling changes
     ([Sources](docs/features.md#sources)).
-13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
-    Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
-    process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources
+13. **Intel encoders in StudioCraft's own process, and hardware decoding.** The Intel Quick Sync
+    encoders run only through `ffmpeg` today. They will run in StudioCraft's own process like the
+    NVENC, Media Foundation, AMF, VideoToolbox and VA-API encoders. Media file sources
     will decode video on the GPU, with software decoding as the fallback.
 14. **Interface refinements.** Scene and source lists will get compact rows with type icons, and
     show eye and lock buttons on hover. The icons will be redrawn on one grid, and the audio mixer

@@ -223,7 +223,7 @@ macro_rules! c {
 }
 
 /// Every hardware encoder, in each API's order of H.264, HEVC, AV1.
-pub static CANDIDATES: [Candidate; 16] = [
+pub static CANDIDATES: [Candidate; 17] = [
     c!("nvenc_h264", "NVIDIA NVENC H.264", "h264_nvenc", H264, Nvenc),
     c!("nvenc_hevc", "NVIDIA NVENC HEVC", "hevc_nvenc", Hevc, Nvenc),
     c!("nvenc_av1", "NVIDIA NVENC AV1", "av1_nvenc", Av1, Nvenc),
@@ -235,6 +235,7 @@ pub static CANDIDATES: [Candidate; 16] = [
     c!("qsv_av1", "Intel Quick Sync AV1", "av1_qsv", Av1, Qsv),
     c!("mf_h264", "Windows Media Foundation H.264", "h264_mf", H264, MediaFoundation),
     c!("mf_hevc", "Windows Media Foundation HEVC", "hevc_mf", Hevc, MediaFoundation),
+    c!("mf_av1", "Windows Media Foundation AV1", "av1_mf", Av1, MediaFoundation),
     c!("vt_h264", "VideoToolbox H.264", "h264_videotoolbox", H264, VideoToolbox),
     c!("vt_hevc", "VideoToolbox HEVC", "hevc_videotoolbox", Hevc, VideoToolbox),
     c!("vaapi_h264", "VA-API H.264", "h264_vaapi", H264, Vaapi),
