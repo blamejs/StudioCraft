@@ -67,7 +67,7 @@ pub(crate) fn create(path: &Path) -> Open {
 /// What the copy's thread and the stream share.
 #[derive(Default)]
 struct Shared {
-    /// Bytes in the file.
+    /// Bytes written, counting those still in the file's buffer.
     stats: Arc<EncoderStats>,
     finished: AtomicBool,
     /// Leave the file as it is: the thread ends without finishing it.

@@ -125,7 +125,8 @@ pub trait OutputInstance: Send {
 pub struct StreamCopyState {
     /// The file.
     pub path: PathBuf,
-    /// Bytes written to the file so far.
+    /// Bytes the copy has written so far, as a recording counts them: up to 1 MiB of them can
+    /// still be in the copy's buffer and not yet in the file.
     pub bytes: u64,
     /// Packets the file did not get because the disk fell behind: the copy then waits for the next
     /// keyframe.
