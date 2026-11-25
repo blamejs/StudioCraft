@@ -62,10 +62,11 @@ fn damaged_files_are_errors_not_panics() {
         fb[i] ^= 0x5a;
         let _ = Model::read(&fb);
     }
-    // Every prefix of a real (small) model.
+    // Every prefix of a real (small) model is refused: each one cuts off data the model needs.
     let m = conv_relu();
+    assert!(Model::read(&m).is_ok());
     for n in 0..m.len() {
-        let _ = Model::read(&m[..n]);
+        assert!(Model::read(&m[..n]).is_err(), "a {n}-byte prefix of a {}-byte model loads", m.len());
     }
 }
 
