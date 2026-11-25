@@ -48,6 +48,7 @@ impl Studio {
             video_encoder_settings: Settings::new(),
             rate: RateControl::Lossless,
             audio_bitrate_kbps: 0,
+            audio_streams: Vec::new(),
             ffmpeg: PathBuf::new(),
             stats: Arc::clone(&stats),
             start: self.clock.now(),
