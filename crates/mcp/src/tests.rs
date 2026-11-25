@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use studiocraft_engine::links;
 use studiocraft_studio::StudioError;
 
-use crate::headless::STREAMING_REFUSED;
+use crate::headless::{STREAMING_REFUSED, VIRTUAL_CAMERA_REFUSED, starts_virtual_camera};
 use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server, ServerOptions};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -162,6 +162,26 @@ fn command_list_filters_and_keeps_enabled_commands() {
     assert_eq!(undo(&mut s), 0, "nothing to undo yet");
     ok_json(&call(&mut s, "scene_add", json!({})));
     assert_eq!(undo(&mut s), 1);
+}
+
+#[test]
+fn command_list_marks_starts_the_server_refuses_as_disabled() {
+    let enabled = |s: &mut Server| -> BTreeSet<String> {
+        let list = ok_json(&call(s, "command_list", json!({"enabled_only": true})));
+        list.as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_owned()).collect()
+    };
+    let gated = ["stream.start", "stream.toggle", "vcam.start", "vcam.toggle"];
+    let mut s = server();
+    let on = enabled(&mut s);
+    for id in gated {
+        assert!(!on.contains(id), "{id}");
+    }
+    assert!(on.contains("stream.stop") && on.contains("vcam.stop"), "{on:?}");
+    let mut s = headless_with(ServerOptions { allow_streaming: true, allow_virtual_camera: true, roots: None });
+    let on = enabled(&mut s);
+    for id in gated {
+        assert!(on.contains(id), "{id}");
+    }
 }
 
 #[test]
@@ -413,7 +433,7 @@ fn source_audio_sets_whether_the_source_records_its_own_track() {
 fn audio_tracks_writes_are_held_to_the_write_roots() {
     let dir = root_folders("tracks-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("outside"));
     profile.audio_tracks.enabled = true;
@@ -433,7 +453,7 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
     let text = error_text(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
     assert!(text.contains("not inside the recording folder"), "{text}");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("out"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -447,7 +467,7 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
 fn a_stream_copy_is_held_to_the_write_roots() {
     let dir = root_folders("copy-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("outside"));
     profile.audio_tracks.enabled = false;
@@ -465,7 +485,7 @@ fn a_stream_copy_is_held_to_the_write_roots() {
     // A keyframe interval longer than a recording's starts the stream without a copy, so the
     // recording folder is not checked.
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("outside"));
     profile.audio_tracks.enabled = false;
@@ -488,7 +508,7 @@ fn audio_tracks_open_last_is_held_to_the_read_roots() {
     let start = json!({"start": {"version": 1, "sample_rate": 48000, "channels": 2, "anchor": "recording", "origin_tick": 0, "offset_frames": 0, "started_unix_ms": null, "session": true}});
     std::fs::write(take.join("take.journal"), format!("{start}\n")).unwrap();
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     // Repair works only inside the recording folder.
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("out"));
@@ -514,7 +534,7 @@ fn audio_tracks_open_last_is_held_to_the_read_roots() {
 fn recordings_list_is_held_to_the_read_roots() {
     let dir = root_folders("recordings-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("out"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -522,7 +542,7 @@ fn recordings_list_is_held_to_the_read_roots() {
     let text = error_text(&call(&mut s, "command_run", json!({"id": "recordings.list"})));
     assert!(text.contains("outside the read roots"), "a write root is not enough to list its files: {text}");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("in"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -568,7 +588,7 @@ fn the_pause_media_is_held_to_the_read_roots() {
     let dir = root_folders("pause-roots");
     let outside = text_of(&dir.join("outside").join("break.png"));
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.pause.media = outside.clone();
     h.studio_mut().set_profile(profile).unwrap();
@@ -614,7 +634,7 @@ fn a_pause_without_its_own_media_opens_the_file_the_roots_checked() {
     for media in &given {
         for id in ["pause.start", "pause.toggle"] {
             let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
-            let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+            let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
             let mut profile = h.studio().profile().clone();
             profile.pause.media.clone_from(media);
             h.studio_mut().set_profile(profile).unwrap();
@@ -646,7 +666,7 @@ fn a_linked_pause_media_file_is_held_to_the_read_roots() {
         return;
     }
     let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.pause.media = text_of(&link);
     h.studio_mut().set_profile(profile).unwrap();
@@ -664,7 +684,7 @@ fn a_linked_pause_media_file_is_held_to_the_read_roots() {
     #[cfg(windows)]
     std::os::windows::fs::symlink_file(dir.join("in").join("blob"), &named).unwrap();
     let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.pause.media = text_of(&named);
     h.studio_mut().set_profile(profile).unwrap();
@@ -1319,7 +1339,7 @@ fn headless_with(options: ServerOptions) -> Server {
 
 /// A server held to `read` and `write` roots, without streaming.
 fn confined(read: &[std::path::PathBuf], write: &[std::path::PathBuf]) -> Server {
-    headless_with(ServerOptions { allow_streaming: false, roots: Some(Roots::new(read, write).unwrap()) })
+    headless_with(ServerOptions { roots: Some(Roots::new(read, write).unwrap()), ..Default::default() })
 }
 
 fn outputs(s: &mut Server) -> Value {
@@ -1419,22 +1439,64 @@ fn stream_start_headless_is_refused_without_allow_streaming() {
     assert_eq!(report["steps"][0]["error"], STREAMING_REFUSED, "{report}");
     assert_eq!(outputs(&mut s)["streaming"]["active"], false);
     // Allowed, the call reaches the studio, which reports why it can't stream here.
-    let mut s = headless_with(ServerOptions { allow_streaming: true, roots: None });
+    let mut s = headless_with(ServerOptions { allow_streaming: true, ..Default::default() });
     let text = error_text(&call(&mut s, "stream_start", json!({})));
     assert!(!text.contains("--allow-streaming"), "{text}");
     assert_eq!(outputs(&mut s)["streaming"]["active"], false);
 }
 
 #[test]
+fn vcam_start_headless_is_refused_without_allow_virtual_camera() {
+    let mut s = server();
+    for id in ["vcam.start", "vcam.toggle"] {
+        let text = error_text(&call(&mut s, "command_run", json!({"id": id})));
+        assert_eq!(text, VIRTUAL_CAMERA_REFUSED, "{id}");
+        assert!(text.contains("--allow-virtual-camera"), "{id}: {text}");
+    }
+    let report: Value = serde_json::from_str(&error_text(&call(&mut s, "command_batch", json!({"steps": [{"id": "vcam.start"}]})))).unwrap();
+    assert_eq!(report["steps"][0]["error"], VIRTUAL_CAMERA_REFUSED, "{report}");
+    assert_eq!(ok_json(&call(&mut s, "doc_inspect", json!({})))["virtual_camera"]["active"], false);
+    // Stopping is never refused.
+    ok_json(&call(&mut s, "command_run", json!({"id": "vcam.stop"})));
+    // Streaming permission does not cover the virtual camera.
+    let mut s = headless_with(ServerOptions { allow_streaming: true, ..Default::default() });
+    assert_eq!(error_text(&call(&mut s, "command_run", json!({"id": "vcam.start"}))), VIRTUAL_CAMERA_REFUSED);
+    // Allowed, the call reaches the studio, which reports why it can't start the camera here.
+    let mut s = headless_with(ServerOptions { allow_virtual_camera: true, ..Default::default() });
+    for id in ["vcam.start", "vcam.toggle"] {
+        let reply = call(&mut s, "command_run", json!({"id": id}));
+        if reply["result"]["isError"] == true {
+            assert!(!error_text(&reply).contains("--allow-virtual-camera"), "{id}: {reply}");
+        }
+        ok_json(&call(&mut s, "command_run", json!({"id": "vcam.stop"})));
+    }
+}
+
+#[test]
+fn only_starting_the_virtual_camera_needs_permission() {
+    use studiocraft_engine::Command;
+    assert!(starts_virtual_camera(&Command::VirtualCameraStart {}, false));
+    assert!(starts_virtual_camera(&Command::VirtualCameraStart {}, true));
+    assert!(starts_virtual_camera(&Command::VirtualCameraToggle {}, false));
+    // A toggle of a running camera stops it, and a stop never starts it.
+    assert!(!starts_virtual_camera(&Command::VirtualCameraToggle {}, true));
+    assert!(!starts_virtual_camera(&Command::VirtualCameraStop {}, false));
+    assert!(!starts_virtual_camera(&Command::VirtualCameraStop {}, true));
+    assert!(!starts_virtual_camera(&Command::StreamStart {}, false));
+}
+
+#[test]
 fn describe_names_the_roots_and_the_streaming_permission() {
     let dir = temp_dir("describe");
-    let h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(Roots::new(std::slice::from_ref(&dir), &[]).unwrap()) })
+    let h = Headless::with_options(None, ServerOptions { roots: Some(Roots::new(std::slice::from_ref(&dir), &[]).unwrap()), ..Default::default() })
         .unwrap();
     let text = h.describe();
     assert!(text.starts_with("headless") && text.contains("read roots") && text.contains("write roots none"), "{text}");
-    assert!(text.contains("streaming is off"), "{text}");
-    let h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: None }).unwrap();
-    assert!(h.describe().ends_with("streaming is allowed"), "{}", h.describe());
+    assert!(text.contains("streaming is off") && text.ends_with("the virtual camera is off"), "{text}");
+    let h = Headless::with_options(None, ServerOptions { allow_streaming: true, ..Default::default() }).unwrap();
+    assert!(h.describe().ends_with("streaming is allowed; the virtual camera is off"), "{}", h.describe());
+    let h = Headless::with_options(None, ServerOptions { allow_virtual_camera: true, ..Default::default() }).unwrap();
+    assert!(h.describe().ends_with("streaming is off; the virtual camera is allowed"), "{}", h.describe());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1588,7 +1650,7 @@ fn a_collection_naming_files_outside_the_read_roots_is_not_opened() {
 fn record_start_is_held_to_the_write_roots() {
     let dir = root_folders("record-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("outside"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -1600,7 +1662,7 @@ fn record_start_is_held_to_the_write_roots() {
     assert_eq!(outputs(&mut s)["recording"]["active"], false);
     // Inside the write root the call reaches the studio, which has no graphics device here.
     let mut h =
-        Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(Roots::new(&[], &[dir.join("out")]).unwrap()) }).unwrap();
+        Headless::with_options(None, ServerOptions { roots: Some(Roots::new(&[], &[dir.join("out")]).unwrap()), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("out"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -1629,7 +1691,7 @@ fn replay_tools_report_the_replay_buffer() {
 fn speech_models_are_held_to_the_roots() {
     let dir = root_folders("speech-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     h.studio_mut().set_models_dir(dir.join("outside"));
     let mut s = Server::new(Box::new(h)).unwrap();
     let text = error_text(&call(&mut s, "command_run", json!({"id": "captions.download", "params": {"model": "whisper-tiny"}})));
@@ -1644,11 +1706,44 @@ fn speech_models_are_held_to_the_roots() {
     let rows = status["models"].as_array().unwrap();
     assert!(!rows.is_empty() && rows.iter().all(|m| m["downloaded"].is_null()), "{status}");
     let roots = Roots::new(&[dir.join("outside")], &[]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     h.studio_mut().set_models_dir(dir.join("outside"));
     let mut s = Server::new(Box::new(h)).unwrap();
     let status = ok_json(&call(&mut s, "command_run", json!({"id": "captions.status", "params": {}})));
     assert!(status["models"].as_array().unwrap().iter().all(|m| m["downloaded"] == false), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn face_tracking_models_are_held_to_the_roots() {
+    let dir = root_folders("face-model-roots");
+    std::fs::write(dir.join("in").join("mine.task"), b"abc").unwrap();
+    std::fs::write(dir.join("outside").join("mine.task"), b"abc").unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots.clone()), ..Default::default() }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("outside"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "avatar.model_download", "params": {}})));
+    assert!(text.contains("outside the write roots"), "{text}");
+    assert!(!dir.join("outside").join("face-landmarker").exists(), "nothing was downloaded");
+    let install =
+        |s: &mut Server, file: &std::path::Path| call(s, "command_run", json!({"id": "avatar.model_install", "params": {"path": text_of(file)}}));
+    let text = error_text(&install(&mut s, &dir.join("outside").join("mine.task")));
+    assert!(text.contains("outside the read roots"), "{text}");
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("outside the write roots"), "{text}");
+    // The status does not look at model files outside the read roots.
+    let status = ok_json(&call(&mut s, "command_run", json!({"id": "avatar.models", "params": {}})));
+    let rows = status["models"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.iter().all(|m| m["installed"].is_null()), "{status}");
+    // With the models folder inside the write roots, the file inside the read roots reaches the
+    // studio, which checks its size.
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("out").join("models"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("is 3 bytes"), "{text}");
+    assert!(!dir.join("out").join("models").join("face-landmarker").exists(), "nothing was installed");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1666,13 +1761,13 @@ fn a_linked_speech_model_folder_is_held_to_the_roots() {
         }
     }
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots.clone()) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots.clone()), ..Default::default() }).unwrap();
     h.studio_mut().set_models_dir(dir.join("out").join("models"));
     let mut s = Server::new(Box::new(h)).unwrap();
     let text = error_text(&call(&mut s, "command_run", json!({"id": "captions.download", "params": {"model": "whisper-tiny"}})));
     assert!(text.contains("outside the write roots"), "{text}");
     assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0, "nothing was written through the link");
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     h.studio_mut().set_models_dir(dir.join("in").join("models"));
     let mut s = Server::new(Box::new(h)).unwrap();
     for id in ["captions.start", "captions.toggle"] {
@@ -1687,7 +1782,7 @@ fn a_linked_speech_model_folder_is_held_to_the_roots() {
 fn replay_save_is_held_to_the_write_roots() {
     let dir = root_folders("replay-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
-    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { roots: Some(roots), ..Default::default() }).unwrap();
     let mut profile = h.studio().profile().clone();
     profile.output.folder = text_of(&dir.join("outside"));
     h.studio_mut().set_profile(profile).unwrap();
@@ -1707,7 +1802,7 @@ fn commands_that_write_to_the_recording_folder_use_the_folder_the_roots_checked(
     let given = text_of(&dir.join("out").join("sub").join(".."));
     for id in ["record.start", "record.toggle", "replay.save", "stream.start", "stream.toggle"] {
         let roots = Roots::new(&[], &[dir.join("out")]).unwrap();
-        let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+        let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots), ..Default::default() }).unwrap();
         let mut profile = h.studio().profile().clone();
         profile.output.folder = given.clone();
         profile.audio_tracks.enabled = true;

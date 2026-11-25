@@ -11,8 +11,10 @@ mod audio_tracks;
 mod captions;
 pub mod capture;
 mod events;
+mod face_models;
 pub mod files;
 mod golive;
+mod model_jobs;
 mod monitor;
 mod outputs;
 mod pause;
@@ -372,6 +374,8 @@ pub struct Studio {
     audio_tracks: audio_tracks::AudioTracks,
     /// Speech recognition of the program audio, and the caption files of recordings.
     captions: captions::Captions,
+    /// The download or install of the face tracking model.
+    face_models: face_models::FaceModels,
     /// Markers set during the recording, and the timeline files of recordings that stopped.
     recording_markers: recording_markers::RecordingMarkers,
     /// The scan of the recording folder for `recordings.list`, and its last result.
@@ -530,6 +534,7 @@ impl Studio {
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
+            face_models: face_models::FaceModels::default(),
             recording_markers: recording_markers::RecordingMarkers::default(),
             recordings: recordings::Recordings::default(),
             pause: None,
@@ -592,6 +597,7 @@ impl Studio {
         // Finished caption work is collected first, so a status reads the current state and a
         // start or download does not meet a worker that has already ended.
         self.sync_captions();
+        self.sync_face_models();
         let outcome = self.engine.execute(cmd);
         let outcome = match outcome {
             Ok(o) => o,
@@ -635,6 +641,10 @@ impl Studio {
                 RuntimeAction::CaptionsStatus => result = self.captions_json(),
                 RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
+                RuntimeAction::AvatarModels => result = self.face_models_json(),
+                RuntimeAction::AvatarModelDownload { model } => result = self.download_face_model(model)?,
+                RuntimeAction::AvatarModelDownloadCancel => self.cancel_face_model_job(),
+                RuntimeAction::AvatarModelInstall { path, model } => result = self.install_face_model(path, model)?,
                 RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::FilterMeter { source, filter } => result = self.filter_meter_json(source, filter),
                 RuntimeAction::PauseStart(values) => result = self.start_pause(values)?,
@@ -724,6 +734,9 @@ impl Studio {
         self.watch_gpu();
         if self.engine.revision() != self.seen_revision {
             self.refresh();
+        } else if self.wiring.mixer_dropped(self.mixer.control_dropped()) {
+            // A push since the last refresh dropped a command the mixer had not taken.
+            self.sync_mixer();
         }
         self.place_fit_later();
         if let Some(t) = &self.transition
@@ -744,7 +757,7 @@ impl Studio {
                 self.notices.push(Notice::plain(e.to_string(), true));
             }
         }
-        self.monitor.poll(&self.mixer, &mut self.notices);
+        self.monitor.poll(&mut self.mixer, &mut self.notices);
         self.finish_hardware_tests();
         // Before the poll, which drops a stream that failed.
         self.note_destinations();
@@ -763,6 +776,7 @@ impl Studio {
         self.poll_virtual_camera();
         self.sync_audio_tracks();
         self.sync_captions();
+        self.sync_face_models();
         self.sync_recording_markers();
         self.mixer.free_retired();
     }
@@ -891,14 +905,37 @@ impl Studio {
         if let Some(kind) = switched {
             self.note_event(kind);
         }
-        let mix = self.wiring.mixer_inputs(self.engine.collection(), self.engine.registry(), &self.sources, &mut self.levels, &mut self.notices);
-        if let Some(cmds) = mix {
-            for cmd in cmds {
-                self.mixer.send(cmd);
-            }
-        }
+        self.sync_mixer();
         self.sync_monitor();
         self.publish();
+    }
+
+    /// Send the mixer the commands that bring it in line with the collection. When these pushes
+    /// drop older commands the mixer has not taken, a whole input list follows them, unless they
+    /// were one. A full queue keeps its newest command, and an input list carries every change
+    /// the dropped commands of the wiring carried.
+    fn sync_mixer(&mut self) {
+        if !self.send_mixer_commands() && self.wiring.mixer_dropped(self.mixer.control_dropped()) {
+            self.send_mixer_commands();
+        }
+        self.wiring.mixer_caught_up(self.mixer.control_dropped());
+    }
+
+    /// `true` when the commands sent were a whole input list.
+    fn send_mixer_commands(&mut self) -> bool {
+        let mix = self.wiring.mixer_commands(
+            &self.mixer,
+            self.engine.collection(),
+            self.engine.registry(),
+            &self.sources,
+            &mut self.levels,
+            &mut self.notices,
+        );
+        let whole = matches!(mix.as_deref(), Some([MixerCmd::Inputs(_)]));
+        for cmd in mix.into_iter().flatten() {
+            self.mixer.send(cmd);
+        }
+        whole
     }
 
     /// Open the monitoring device while a source with audio is monitored, and close it when none
@@ -909,12 +946,12 @@ impl Studio {
         // Safe Mode opens no device, the monitoring device included.
         let wanted =
             !self.safe_mode && c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
-        self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &self.mixer, &mut self.notices);
+        self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &mut self.mixer, &mut self.notices);
     }
 
     /// Play monitored sources through `sink` instead of the system's output devices.
     pub fn set_audio_sink(&mut self, sink: Arc<dyn studiocraft_platform::audio::AudioSink>) {
-        self.monitor.set_sink(sink, &self.mixer);
+        self.monitor.set_sink(sink, &mut self.mixer);
         self.sync_monitor();
     }
 
@@ -1808,6 +1845,7 @@ impl Drop for Studio {
         self.finish_audio_tracks_blocking();
         // Caption files of a recording that just stopped are written before the studio closes.
         self.finish_captions_blocking();
+        self.finish_face_models_blocking();
         // So is the marker file, with the recording ending when the app closed.
         self.finish_recording_markers_blocking(closed);
     }

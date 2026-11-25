@@ -150,21 +150,21 @@ impl Monitor {
     }
 
     /// Play on another sink from now on; the device is opened again on the next [`Monitor::sync`].
-    pub(crate) fn set_sink(&mut self, sink: Arc<dyn AudioSink>, mixer: &Mixer) {
+    pub(crate) fn set_sink(&mut self, sink: Arc<dyn AudioSink>, mixer: &mut Mixer) {
         self.stop(mixer);
         self.failed = None;
         self.busy = None;
         self.sink = sink;
     }
 
-    fn stop(&mut self, mixer: &Mixer) {
+    fn stop(&mut self, mixer: &mut Mixer) {
         if self.playing.take().is_some() {
             mixer.send(MixerCmd::MonitorOutput(None));
         }
     }
 
     /// Play on `device` while `wanted` (a source is monitored), else close the device.
-    pub(crate) fn sync(&mut self, wanted: bool, device: &str, mixer: &Mixer, notices: &mut Vec<Notice>) {
+    pub(crate) fn sync(&mut self, wanted: bool, device: &str, mixer: &mut Mixer, notices: &mut Vec<Notice>) {
         if !wanted {
             self.stop(mixer);
             self.failed = None;
@@ -212,7 +212,7 @@ impl Monitor {
 
     /// Open again a device the sink refused as busy, once the sink has room. Stop monitoring when
     /// the device could not open, or when the playing device reported an error.
-    pub(crate) fn poll(&mut self, mixer: &Mixer, notices: &mut Vec<Notice>) {
+    pub(crate) fn poll(&mut self, mixer: &mut Mixer, notices: &mut Vec<Notice>) {
         if self.busy.is_some()
             && !self.sink.busy()
             && let Some(device) = self.busy.take()
@@ -380,36 +380,36 @@ mod tests {
 
     #[test]
     fn a_device_still_opening_is_not_playing_until_it_starts() {
-        let (mut m, sink, mixer) = held();
+        let (mut m, sink, mut mixer) = held();
         let mut notices = Vec::new();
-        m.sync(true, "default", &mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert_eq!(sink.count(), 1, "sync returns while the device opens");
         assert_eq!((m.playing(), m.format()), (false, None));
-        m.poll(&mixer, &mut notices);
-        m.sync(true, "default", &mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert!(notices.is_empty(), "a device still opening is not an error");
         assert_eq!(sink.count(), 1, "a device still opening is not opened again");
         sink.last().set(Ok(())).unwrap();
         assert_eq!((m.playing(), m.format()), (true, Some(STEREO_48K)));
-        m.sync(false, "default", &mixer, &mut notices);
+        m.sync(false, "default", &mut mixer, &mut notices);
         assert!(!m.playing());
     }
 
     #[test]
     fn a_device_that_fails_while_opening_is_reported_as_not_started() {
-        let (mut m, sink, mixer) = held();
+        let (mut m, sink, mut mixer) = held();
         let mut notices = Vec::new();
-        m.sync(true, "default", &mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         sink.last().set(Err("the device is busy".into())).unwrap();
-        m.poll(&mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
         let texts: Vec<String> = notices.iter().filter(|n| n.error).map(|n| n.text()).collect();
         assert_eq!(texts, ["Audio monitoring could not start: the device is busy"]);
         assert!(!m.playing());
-        m.poll(&mixer, &mut notices);
-        m.sync(true, "default", &mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert_eq!((notices.len(), sink.count()), (1, 1), "the failed device is reported once and not tried again");
-        m.sync(false, "default", &mixer, &mut notices);
-        m.sync(true, "default", &mixer, &mut notices);
+        m.sync(false, "default", &mut mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert_eq!(sink.count(), 2, "turning monitoring off and on tries again");
     }
 
@@ -467,19 +467,19 @@ mod tests {
     fn a_busy_device_is_tried_again_on_a_later_tick_without_a_notice() {
         let sink = BusySink::new(2);
         let mut m = Monitor::new(Arc::clone(&sink) as Arc<dyn AudioSink>);
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut notices = Vec::new();
         sink.set_full(true);
-        m.sync(true, "default", &mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert!(!m.playing());
-        m.poll(&mixer, &mut notices);
-        m.poll(&mixer, &mut notices);
-        m.sync(true, "default", &mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
         assert_eq!(sink.opens(), 1, "a busy device is not opened again while the sink is full");
         sink.set_full(false);
-        m.poll(&mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
         assert_eq!((sink.opens(), m.playing()), (2, false), "another open filled the sink first");
-        m.poll(&mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
         assert_eq!((sink.opens(), m.playing()), (3, true), "the device is opened once the sink has room, without another sync");
         assert!(notices.is_empty(), "a busy device is not reported as a failure");
     }
@@ -488,11 +488,11 @@ mod tests {
     fn a_busy_device_is_not_tried_again_once_monitoring_is_off() {
         let sink = BusySink::new(1);
         let mut m = Monitor::new(Arc::clone(&sink) as Arc<dyn AudioSink>);
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut notices = Vec::new();
-        m.sync(true, "default", &mixer, &mut notices);
-        m.sync(false, "default", &mixer, &mut notices);
-        m.poll(&mixer, &mut notices);
+        m.sync(true, "default", &mut mixer, &mut notices);
+        m.sync(false, "default", &mut mixer, &mut notices);
+        m.poll(&mut mixer, &mut notices);
         assert_eq!((sink.opens(), m.playing()), (1, false), "the device is not opened while nothing is monitored");
     }
 
@@ -500,11 +500,11 @@ mod tests {
     fn a_failed_device_is_tried_again_after_switching_through_a_busy_one() {
         let sink = BusySink::failing(vec![PlatformError::Failed("the device is gone".into()), PlatformError::Busy]);
         let mut m = Monitor::new(Arc::clone(&sink) as Arc<dyn AudioSink>);
-        let mixer = Mixer::detached();
+        let mut mixer = Mixer::detached();
         let mut notices = Vec::new();
-        m.sync(true, "a", &mixer, &mut notices);
-        m.sync(true, "b", &mixer, &mut notices);
-        m.sync(true, "a", &mixer, &mut notices);
+        m.sync(true, "a", &mut mixer, &mut notices);
+        m.sync(true, "b", &mut mixer, &mut notices);
+        m.sync(true, "a", &mut mixer, &mut notices);
         assert_eq!((sink.opens(), m.playing()), (3, true), "switching back to the failed device tries it again");
     }
 

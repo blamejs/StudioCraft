@@ -178,3 +178,7 @@ description in [docs/features.md](docs/features.md).
     minimized or that display is disconnected ([Staged windows](docs/features.md#staged-windows)).
     A dock of staged windows with live thumbnails to click, and a transition on each swap are still
     to be built.
+17. **Remote cameras (partly done).** A phone, camcorder or IP camera on the local network will be
+    a source, sending its picture and sound over WebRTC, RTMP or RTSP. `craft-rtp` reads RTP and
+    RTCP, puts packets back in order against network jitter, and rebuilds H.264, VP8, Opus and AAC
+    frames. The app does not use it yet.

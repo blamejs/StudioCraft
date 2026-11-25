@@ -591,6 +591,33 @@ files are written once the phrases up to the recording's end are finished, when 
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
 
+### `avatar.models` and the face tracking model
+
+The face tracking model is kept in the speech models' `models_dir`, as
+`<models_dir>/face-landmarker/face_landmarker.task` (3,758,596 bytes).
+
+`avatar.models` takes no params and returns `models_dir`, `models` (each with `id`, `name`,
+`description`, `bytes`, `installed`, `license`, `license_url`, `author` and `source`), `job` (the
+`model` being downloaded or installed, its `kind`, `download` or `install`, and `done` and `total`
+bytes, or null) and `failure` (why the last download or install failed, or null; it is cleared
+when the next one starts). `installed` says whether the model's file is in place with its pinned
+size; over MCP with roots it is null for a file outside the read roots.
+
+`avatar.model_download` takes `{"model"?}` and downloads that model, by default `face-landmarker`,
+on a background thread. It returns `{"model", "downloading": true, "bytes"}` at once. A file
+already there with its pinned size and SHA-256 sum is kept; otherwise the file is downloaded into
+`face_landmarker.task.part`, checked against them, and renamed into place. A file that fails the
+check is deleted.
+
+`avatar.model_install` takes `{"path", "model"?}` and copies the model file at `path` into the
+models folder. Its size is checked at once, and a file of another size is an error. Its SHA-256 sum
+is checked on a background thread while it is copied, and a file that fails the check is deleted
+without changing a model already in place. It returns `{"model", "installing": true, "bytes"}`.
+
+A status message reports the end of a download or install. `avatar.model_download_cancel` stops
+the one that runs and deletes its partial file. An unknown model, an empty `model` or `path`, a
+missing file, a folder, and a second download or install while one runs are errors.
+
 ### `pause.*`
 
 `pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,

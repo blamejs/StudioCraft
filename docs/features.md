@@ -186,6 +186,12 @@ noise gate, compressor, limiter and a three-band equalizer.
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
 | Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
+A change to an audio filter's settings replaces that filter alone. For one block (1024 samples,
+21.3 ms at 48 kHz) the old and the new settings both process the audio, and the output crossfades
+from the old settings to the new ones. The source's other audio filters keep running, so the
+audio they still hold (a limiter's look-ahead, for example) plays on. When a running audio filter
+refuses new settings, it keeps its last settings and the error is shown.
+
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
 ## Transitions
@@ -224,7 +230,8 @@ A source's Properties window sets two more audio options:
 
 The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
 the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
-Disabled filters and filters whose settings were refused are not counted. The MCP tool
+Disabled filters, and filters that do not run because they refused their settings, are not
+counted. The MCP tool
 `source_audio` and `document.inspect` report the same delay.
 
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
@@ -405,7 +412,8 @@ out as YUYV when the device takes it, otherwise as NV12 or I420. When the device
 frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
 runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
 a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
-and stop it.
+and stop it. The MCP server's in-process studio starts it only when the server was started with
+`--allow-virtual-camera` ([MCP](mcp.md#virtual-camera)).
 
 ### Audio tracks
 
@@ -497,6 +505,18 @@ CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, A
 A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
 captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
 left out. Recordings do not carry closed captions; they get the caption files.
+
+### Face tracking model
+
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
 
 ## Streaming
 
