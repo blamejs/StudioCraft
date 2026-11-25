@@ -2461,6 +2461,44 @@ fn finished_phrases_go_out_as_closed_captions_and_a_late_phrase_holds_nothing_up
 }
 
 #[test]
+fn a_destination_with_its_own_encoder_gets_the_closed_captions_too() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept]);
+    let mut job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let phrases = Arc::new(Fifo::new(8));
+    job.captions = Some(Arc::clone(&phrases));
+    let targets = vec![target("a", &a, "ka"), with_own("b", &b, "kb", own(1200, "speed"))];
+    let mut out = Streaming::start_timed(&job, targets, quick()).unwrap();
+    let feed = Feed::new(&out);
+    let video = |m: Vec<Seen>| -> Vec<Vec<[u8; 2]>> {
+        m.into_iter()
+            .filter_map(|s| match s {
+                Seen::Media { video: true, head: [_, 1], captions, .. } => Some(captions),
+                _ => None,
+            })
+            .collect()
+    };
+    // Both destinations send before the phrase comes.
+    assert!(!video(media(&seen_a, 20)).is_empty());
+    assert!(!video(media(&seen_b, 20)).is_empty());
+    phrases.push("for every destination".to_string());
+    for seen in [&seen_a, &seen_b] {
+        let mut after = Vec::new();
+        for _ in 0..2000 {
+            after.extend(video(media(seen, 1)));
+            if captions_shown(&after) == "for every destination" {
+                break;
+            }
+        }
+        assert_eq!(captions_shown(&after), "for every destination");
+    }
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+    until_closed(&seen_b);
+}
+
+#[test]
 fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let targets: Vec<Target> = (0..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
@@ -2483,7 +2521,7 @@ fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
 fn phrases_from_before_the_stream_are_not_sent() {
     let phrases = Arc::new(Fifo::new(8));
     phrases.push("said before the stream started".to_string());
-    let mut c = Captions::new(Arc::clone(&phrases), 30, 1).unwrap();
+    let mut c = Captions::new(Arc::clone(&phrases), None, 30, 1).unwrap();
     assert!(phrases.is_empty());
     let slice = [0, 0, 0, 2, 0x65, 0x88];
     let mut au = slice.to_vec();
@@ -2499,7 +2537,7 @@ fn phrases_from_before_the_stream_are_not_sent() {
 #[test]
 fn a_stream_at_a_frame_rate_of_zero_is_refused_with_captions() {
     let phrases = Arc::new(Fifo::new(8));
-    let Err(e) = Captions::new(phrases, 0, 1) else { panic!("a zero frame rate was taken") };
+    let Err(e) = Captions::new(phrases, None, 0, 1) else { panic!("a zero frame rate was taken") };
     assert!(e.to_string().contains("frame rate"), "{e}");
 }
 

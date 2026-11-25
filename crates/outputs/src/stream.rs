@@ -8,7 +8,9 @@
 //! - When the job has a caption feed, [`Publish`] takes the phrases waiting in it before each
 //!   video packet, without waiting, and puts the CEA-608 roll-up caption pairs due for that
 //!   picture into the packet as an SEI message ([`craft_closed_captions`]), before its first
-//!   slice. Platforms that read captions embedded in H.264 show them as closed captions.
+//!   slice. Platforms that read captions embedded in H.264 show them as closed captions. The
+//!   stream's encoder copies each phrase into a feed of each encoder a destination runs for
+//!   itself, which puts it into its own packets the same way.
 //! - Each destination that sends has a thread of its own. The thread connects
 //!   ([`craft_rtmp::Publisher`]), sends `onMetaData` and the H.264 and AAC sequence headers, and
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
@@ -804,6 +806,8 @@ struct EncoderFeed {
     ring: RingConfig,
     /// Why its encoders failed, when they did.
     failure: FailureWatch,
+    /// The phrases its encoder puts into the video as closed captions, when the stream has them.
+    captions: Option<Arc<Fifo<String>>>,
 }
 
 /// What the destinations share.
@@ -1713,23 +1717,34 @@ fn send_packet(p: &mut Publisher, packet: &SharedPacket, zero: i64) -> Result<()
 /// no B-frames, so packets come in the order their pictures are shown.
 struct Captions {
     feed: Arc<Fifo<String>>,
+    /// The caption feeds of the encoders destinations run for themselves, which get a copy of
+    /// each phrase this one takes; `None` for those encoders.
+    taps: Option<Arc<CaptionTaps>>,
     roll: RollUp,
     pairs: Vec<[u8; 2]>,
     nal: Vec<u8>,
 }
 
+/// The caption feeds of the encoders a stream's destinations run for themselves.
+type CaptionTaps = ArcSwap<Vec<Arc<Fifo<String>>>>;
+
 impl Captions {
     /// Captions for a stream at `fps_num / fps_den`; the phrases already waiting are left out.
-    fn new(feed: Arc<Fifo<String>>, fps_num: u32, fps_den: u32) -> Result<Captions, PluginError> {
+    fn new(feed: Arc<Fifo<String>>, taps: Option<Arc<CaptionTaps>>, fps_num: u32, fps_den: u32) -> Result<Captions, PluginError> {
         while feed.pop().is_some() {}
         let roll = RollUp::new(fps_num, fps_den, CaptionConfig::default()).map_err(|e| PluginError::Failed(format!("closed captions: {e}")))?;
-        Ok(Captions { feed, roll, pairs: Vec::with_capacity(MAX_PAIRS_PER_FRAME), nal: Vec::new() })
+        Ok(Captions { feed, taps, roll, pairs: Vec::with_capacity(MAX_PAIRS_PER_FRAME), nal: Vec::new() })
     }
 
     /// Put this picture's caption pairs into `au`, a length-prefixed access unit. An access unit
     /// with no picture is sent as it was, and its pairs are lost.
     fn add(&mut self, au: &mut Vec<u8>) {
         while let Some(text) = self.feed.pop() {
+            if let Some(taps) = &self.taps {
+                for tap in taps.load().iter() {
+                    tap.push(text.clone());
+                }
+            }
             self.roll.push(&text);
         }
         self.roll.frame(&mut self.pairs);
@@ -1799,6 +1814,9 @@ pub struct Streaming {
     split: Option<Split>,
     /// The encoders destinations run for themselves, in the order they started.
     own: Mutex<Vec<(Arc<EncoderFeed>, Native)>>,
+    /// The caption feeds of the running encoders in `own`, which the stream's encoder copies each
+    /// phrase into. Changed only with `own` locked.
+    taps: Arc<CaptionTaps>,
     /// The job the stream was started with, for the encoders destinations start while it runs.
     job: OutputJob,
     stopped: bool,
@@ -1833,8 +1851,9 @@ fn encoder_job(job: &OutputJob, own: Option<&OwnEncoder>, start: Tick) -> Result
         stats: Arc::new(EncoderStats::default()),
         start,
         other_encoders: Vec::new(),
-        // The stream's encoder takes every phrase from the caption feed, so this one sends none.
-        captions: None,
+        // The stream's encoder takes every phrase from the caption feed and copies it into this
+        // encoder's own feed, once the encoder is in the stream's taps.
+        captions: job.captions.as_ref().map(|feed| Arc::new(Fifo::new(feed.capacity()))),
         ..job.clone()
     })
 }
@@ -1870,12 +1889,14 @@ fn is_main_encoder(job: &OutputJob, own: &OwnEncoder) -> bool {
 
 /// Open the encoders of `job` and the fan-out that shares what they make with the destinations,
 /// as the encoder `own` names (`None` for the stream's encoder). With `copy`, a subscriber for
-/// the copy is made before the encoders start, so it gets the first keyframe.
+/// the copy is made before the encoders start, so it gets the first keyframe. The stream's
+/// encoder is given `taps`, the caption feeds it copies each phrase into.
 fn open_encoder(
     job: &OutputJob,
     own: Option<OwnEncoder>,
     refused: &Arc<AtomicU64>,
     copy: bool,
+    taps: Option<Arc<CaptionTaps>>,
 ) -> Result<(Native, Arc<EncoderFeed>, Option<CopyFeed>), PluginError> {
     let (kbps, _) = check_stream_encoder(job)?;
     let v = job.video;
@@ -1897,7 +1918,7 @@ fn open_encoder(
     let mut copy_feed: Option<CopyFeed> = None;
     let sink_refused = Arc::clone(refused);
     let captions = match &job.captions {
-        Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
+        Some(feed) => Some(Captions::new(Arc::clone(feed), taps, v.fps_num, v.fps_den)?),
         None => None,
     };
     let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
@@ -1913,7 +1934,8 @@ fn open_encoder(
         return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
     };
     let failure = native.failure_watch();
-    Ok((native, Arc::new(EncoderFeed { own, control, headers, ring, failure }), copy_feed))
+    let captions = job.captions.clone();
+    Ok((native, Arc::new(EncoderFeed { own, control, headers, ring, failure, captions }), copy_feed))
 }
 
 impl Streaming {
@@ -1996,7 +2018,8 @@ impl Streaming {
         }
         let refused = Arc::new(AtomicU64::new(0));
         // The copy holds what the stream's encoder makes.
-        let (native, main, copy_feed) = open_encoder(job, None, &refused, wants_copy)?;
+        let taps: Arc<CaptionTaps> = Arc::default();
+        let (native, main, copy_feed) = open_encoder(job, None, &refused, wants_copy, Some(Arc::clone(&taps)))?;
         let control = main.control.clone();
         // Only a stream with a destination that runs an encoder other than the stream's splits its
         // input.
@@ -2042,6 +2065,7 @@ impl Streaming {
             copy,
             split,
             own: Mutex::new(Vec::new()),
+            taps,
             job: job.clone(),
             stopped: false,
         };
@@ -2080,6 +2104,9 @@ impl Streaming {
             *groups = running;
             ended
         };
+        if !ended.is_empty() {
+            self.set_taps(&groups);
+        }
         drop(ended);
         if let Some((feed, _)) = groups.iter().find(|(f, _)| f.own.as_ref() == Some(own)) {
             return Ok(Arc::clone(feed));
@@ -2094,10 +2121,17 @@ impl Streaming {
             return Err(PluginError::Failed(format!("a stream can run at most {MAX_SUBSCRIBERS} encoders for its destinations")));
         }
         let start = split.newest().unwrap_or(job.start);
-        let (native, feed, _) = open_encoder(&encoder_job(job, Some(own), start)?, Some(own.clone()), &self.refused, false)?;
+        let (native, feed, _) = open_encoder(&encoder_job(job, Some(own), start)?, Some(own.clone()), &self.refused, false, None)?;
         split.add(&Input { video: native.video(), audio: native.audio() })?;
         groups.push((Arc::clone(&feed), native));
+        self.set_taps(&groups);
         Ok(feed)
+    }
+
+    /// Makes the caption feeds of `groups`, the running encoders of `own`, the ones the stream's
+    /// encoder copies each phrase into.
+    fn set_taps(&self, groups: &[(Arc<EncoderFeed>, Native)]) {
+        self.taps.store(Arc::new(groups.iter().filter_map(|(f, _)| f.captions.clone()).collect()));
     }
 
     /// Whether one more destination can send: each destination that sends or tries to, and the
