@@ -366,6 +366,14 @@ impl Timeline {
     }
 }
 
+/// Raise `fence` to `done` unless it already holds that value or a higher one. Returns whether it
+/// holds `done` afterward.
+fn raise_fence(fence: &ID3D12Fence, done: u64) -> bool {
+    // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does not wait.
+    // It is only raised, so a value set later by another side is kept.
+    unsafe { fence.GetCompletedValue() >= done || fence.Signal(done).is_ok() }
+}
+
 impl Drop for Timeline {
     fn drop(&mut self) {
         // SAFETY: as in `after_submitted`; a signal not submitted yet is taken off the list.
@@ -377,13 +385,12 @@ impl Drop for Timeline {
         let reached = unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.ok().filter(|&done| done >= target);
         if let Some(done) = reached {
             // The value read here, not the one `poll` read before it, says the work has finished:
-            // the fence gets it before the semaphore goes.
-            // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does
-            // not wait. It is only raised, so a value set later by another side is kept.
-            unsafe {
-                if self.fence.GetCompletedValue() < done {
-                    let _ = self.fence.Signal(done);
-                }
+            // the fence gets it before the semaphore goes. A fence that cannot be raised leaves
+            // the encoder without the frame, and the ring records why.
+            if !raise_fence(&self.fence, done)
+                && let Some(ring) = &self.ring
+            {
+                ring.refuse(Fallback::ImportFailed);
             }
             // SAFETY: no submission still signals the semaphore: the one not submitted was taken
             // off the list, and the submitted ones have finished.
@@ -397,17 +404,10 @@ impl Drop for Timeline {
         self.queue.on_submitted_work_done(move || {
             // SAFETY: as in `poll`; the semaphore is destroyed only below.
             let reached = unsafe { device.get_semaphore_counter_value(semaphore) }.ok();
-            let finished = crate::export::settle(reached, target, |done| {
-                // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does
-                // not wait. It is only raised, so a value set later by another side is kept.
-                unsafe {
-                    if fence.GetCompletedValue() < done {
-                        let _ = fence.Signal(done);
-                    }
-                }
-            });
-            if !finished && let Some(ring) = ring {
-                ring.refuse(Fallback::DeviceRemoved);
+            if let Some(reason) = crate::export::settle(reached, target, |done| raise_fence(&fence, done))
+                && let Some(ring) = ring
+            {
+                ring.refuse(reason);
             }
             // SAFETY: every submission that signals the semaphore was made before this callback was
             // registered, so all of them have finished, and nothing uses it afterward.
@@ -635,10 +635,14 @@ impl Exported {
     /// The commands that copy `planes`, the luma (R8) and chroma (RG8) textures of one frame, into
     /// texture `slot`'s two planes. The planes must be in `TRANSFER_SRC_OPTIMAL`: the caller's last
     /// use of them, already recorded, is a copy from them. The NV12 image is taken from the
-    /// external queue family, its old contents discarded, and handed back in `GENERAL`.
+    /// external queue family, its old contents discarded, and handed back in `GENERAL`. Planes of
+    /// formats with another texel size are [`Fallback::ImportFailed`].
     pub(crate) fn copy(&self, planes: &[wgpu::Texture], slot: usize) -> Result<wgpu::CommandBuffer, Fallback> {
         let &dst = self.images.get(slot).ok_or(Fallback::ImportFailed)?;
         let (Some(luma), Some(chroma)) = (planes.first(), planes.get(1)) else { return Err(Fallback::ImportFailed) };
+        if !crate::export::nv12_plane_formats(luma.format(), chroma.format()) {
+            return Err(Fallback::ImportFailed);
+        }
         // SAFETY: the guards are only used to read the image handles, which stay owned by wgpu.
         let raw = |t: &wgpu::Texture| unsafe { t.as_hal::<wgpu::hal::api::Vulkan>().map(|h| h.raw_handle()) };
         let (Some(luma_image), Some(chroma_image)) = (raw(luma), raw(chroma)) else { return Err(Fallback::UnsupportedBackend) };
@@ -656,8 +660,9 @@ impl Exported {
         Ok(raw_commands(&self.wgpu_device, "program to encoder", |cmd| {
             // SAFETY: `cmd` is a command buffer of `device` being recorded. The plane images are
             // images of the device in `TRANSFER_SRC_OPTIMAL`, `dst` is an NV12 image of the device,
-            // and each region lies inside both images: `Exporter::copy` refuses planes unless the
-            // luma plane is the NV12 image's size and the chroma plane half of it. The barriers
+            // each plane image has the texel size of the NV12 plane it is copied into (checked
+            // above), and each region lies inside both images: `Exporter::copy` refuses planes
+            // unless the luma plane is the NV12 image's size and the chroma plane half of it. The barriers
             // move `dst` from the encoder side to this queue and back around the copies.
             unsafe {
                 device.cmd_pipeline_barrier(

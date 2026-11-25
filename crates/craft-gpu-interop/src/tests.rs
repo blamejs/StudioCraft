@@ -1063,19 +1063,41 @@ fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
     assert!(!feed.stalled(), "one texture is still free");
 }
 
+/// How long a test waits for another thread before it reports that thread as stuck.
+const WAIT: Duration = Duration::from_secs(10);
+
 #[test]
 fn a_release_while_another_is_signaling_returns_at_once_and_its_value_is_signaled() {
-    let gate = export::ReleaseGate::default();
+    let gate = std::sync::Arc::new(export::ReleaseGate::default());
     let mut signaled = Vec::new();
+    let mut contender = None;
+    let mut returned = None;
     let held = gate.release(5, |value| {
         if signaled.is_empty() {
-            // A second thread releases while this call holds the gate; it must not wait for it.
-            let other = std::thread::scope(|s| s.spawn(|| gate.release(9, |_| panic!("only the caller that holds the gate signals"))).join());
-            assert!(matches!(other, Ok(true)), "the second release returns without signaling");
+            // A second thread releases while this call holds the gate; it must not wait for it. A
+            // release that waited would never return while the gate is held, so the holder stops
+            // waiting after `WAIT` and opens the gate, and the test fails instead of hanging.
+            let (done, answer) = std::sync::mpsc::channel();
+            let other = std::sync::Arc::clone(&gate);
+            let signaled_too = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = std::sync::Arc::clone(&signaled_too);
+            let thread = std::thread::spawn(move || {
+                let result = other.release(9, |_| {
+                    flag.store(true, std::sync::atomic::Ordering::Release);
+                    true
+                });
+                let _ = done.send(result);
+            });
+            returned = Some(answer.recv_timeout(WAIT).ok());
+            contender = Some((thread, signaled_too));
         }
         signaled.push(value);
         true
     });
+    let (thread, signaled_too) = contender.unwrap();
+    assert!(thread.join().is_ok());
+    assert_eq!(returned, Some(Some(true)), "the second release returns at once, without signaling");
+    assert!(!signaled_too.load(std::sync::atomic::Ordering::Acquire), "only the caller that holds the gate signals");
     assert!(held);
     assert_eq!(signaled, [5, 9], "the holder signals the value left while it was signaling");
     // A value not above the highest one signaled is not signaled again.
@@ -1101,21 +1123,31 @@ fn a_removed_device_counts_no_frame_as_done_and_records_why() {
     let frame = exported(&ring, 0, 1);
     assert!(frame.ring().completed(export::REMOVED) < frame.ready());
     let mut slots = SlotTable::default();
-    let slot = slots.pick_released(0).unwrap();
-    slots.fill_released(slot, Instant::now()).unwrap();
-    assert_ne!(slots.pick_released(ring.completed(export::REMOVED)), Some(slot));
+    for _ in 0..SLOTS {
+        let slot = slots.pick_released(0).unwrap();
+        slots.fill_released(slot, Instant::now()).unwrap();
+    }
+    assert!(slots.pick_released(export::REMOVED).is_some(), "the raw value would free a texture");
+    assert_eq!(slots.pick_released(ring.completed(export::REMOVED)), None, "every texture holds a frame");
 }
 
 /// Once the queue has finished, a fence is raised only to the value its semaphore was read at:
-/// a short or unread value leaves the later frames not done and says the work did not finish.
+/// a short or unread value leaves the later frames not done and says the work did not finish. A
+/// fence that cannot be raised to a value the semaphore reached is recorded as a failed import.
 #[test]
 fn a_fence_is_raised_only_to_the_value_its_semaphore_reached() {
     let mut raised = Vec::new();
-    assert!(export::settle(Some(3), 3, |v| raised.push(v)));
-    assert!(export::settle(Some(4), 3, |v| raised.push(v)));
-    assert!(!export::settle(Some(2), 3, |v| raised.push(v)), "a device lost before the last signal");
-    assert!(!export::settle(None, 3, |v| raised.push(v)), "a value that could not be read");
+    let mut raise = |v| {
+        raised.push(v);
+        true
+    };
+    assert_eq!(export::settle(Some(3), 3, &mut raise), None);
+    assert_eq!(export::settle(Some(4), 3, &mut raise), None);
+    assert_eq!(export::settle(Some(2), 3, &mut raise), Some(Fallback::DeviceRemoved), "a device lost before the last signal");
+    assert_eq!(export::settle(None, 3, &mut raise), Some(Fallback::DeviceRemoved), "a value that could not be read");
     assert_eq!(raised, [3, 4, 2]);
+    assert_eq!(export::settle(Some(3), 3, |_| false), Some(Fallback::ImportFailed), "the fence could not be set");
+    assert_eq!(export::settle(Some(2), 3, |_| false), Some(Fallback::DeviceRemoved), "a short value stays a lost device");
 }
 
 #[test]
@@ -1194,6 +1226,30 @@ fn a_stopped_encoders_textures_go_back_once_their_copies_finish() {
         slots.fill_released(slot, Instant::now()).unwrap();
     }
     assert!(slots.pick_released(ring.released()).is_some());
+}
+
+/// A session that starts while the compositor hands back a stopped encoder's frame still refuses
+/// that frame: the frame stays counted as handed back between the reads of the ring's counters.
+#[test]
+fn a_session_started_while_a_stopped_encoders_frame_is_reclaimed_refuses_that_frame() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    assert!(feed.offer(exported(&ring, 2, 3), 3).is_none());
+    // The encoder stops during the copy of frame 3, and the copy then finishes.
+    assert_eq!(feed.drain(), 1);
+    ring.set_ready(3);
+    assert_eq!(ring.released(), 0);
+    // The compositor reclaims frame 3 while the next session reads the ring.
+    let weak = std::sync::Arc::downgrade(&ring);
+    *ring.between_reads.lock().unwrap() = Some(Box::new(move || {
+        if let Some(ring) = weak.upgrade() {
+            ring.reclaim();
+        }
+    }));
+    let mut next = Feed::default();
+    assert_eq!(next.offer(exported(&ring, 2, 3), 3).map(|f| f.ready()), Some(3), "frame 3's texture went back");
+    assert_eq!(ring.released(), 3, "the reclaim ran during the reads");
+    assert!(next.offer(exported(&ring, 0, 4), 4).is_none(), "a newer frame is taken");
 }
 
 #[test]
@@ -1666,13 +1722,12 @@ mod gpu {
         assert!(crate::dmabuf_ffi::padding_regions((0, 0), (16, 16), vk::ImageAspectFlags::PLANE_0).is_empty());
     }
 
-    /// The raw copy into a Linux export image reads planes of one byte per texel for luma and two
-    /// for chroma: the converter's R8 and RG8 formats. A four-byte texture of the right size is
-    /// refused.
-    #[cfg(target_os = "linux")]
+    /// The raw copy into an export texture, on every backend, reads planes of one byte per texel
+    /// for luma and two for chroma: the converter's R8 and RG8 formats. A four-byte texture of the
+    /// right size is refused.
     #[test]
-    fn a_linux_export_copy_reads_only_planes_of_the_nv12_texel_sizes() {
-        use crate::dmabuf_ffi::nv12_plane_formats;
+    fn an_export_copy_reads_only_planes_of_the_nv12_texel_sizes() {
+        use crate::export::{copy_planes_fit, nv12_plane_formats};
         use wgpu::TextureFormat as F;
         assert!(nv12_plane_formats(F::R8Uint, F::Rg8Uint), "the converter's planes");
         assert!(nv12_plane_formats(F::R8Unorm, F::Rg8Unorm));
@@ -1680,6 +1735,11 @@ mod gpu {
         assert!(!nv12_plane_formats(F::R8Unorm, F::Rgba8Unorm), "a four-byte chroma texture");
         assert!(!nv12_plane_formats(F::Rg8Unorm, F::R8Unorm), "the planes swapped");
         assert!(!nv12_plane_formats(F::Stencil8, F::Rg8Unorm), "a stencil texture");
+        // `Exporter::copy` checks the formats as well as the sizes before it records any command.
+        assert!(copy_planes_fit(64, 2, ((64, 2), F::R8Uint), ((32, 1), F::Rg8Uint)));
+        assert!(!copy_planes_fit(64, 2, ((64, 2), F::Rgba8Unorm), ((32, 1), F::Rg8Uint)), "a four-byte luma texture of the ring's size");
+        assert!(!copy_planes_fit(64, 2, ((64, 2), F::R8Uint), ((32, 1), F::Rgba8Unorm)), "a four-byte chroma texture of half the size");
+        assert!(!copy_planes_fit(64, 2, ((128, 2), F::R8Uint), ((32, 1), F::Rg8Uint)), "a luma plane wider than the ring");
     }
 
     /// The Linux export image is one non-disjoint NV12 image too, so its barriers name the color

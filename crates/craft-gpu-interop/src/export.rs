@@ -24,13 +24,17 @@ pub(crate) const REMOVED: u64 = u64::MAX;
 /// Raise a fence through `raise` to `reached`, the value a timeline semaphore was read at once the
 /// queue had finished the work submitted before it (`None` when it could not be read), and never
 /// to `target`, the newest value that work signals: a lost device also finishes the work, without
-/// signaling it. Returns whether the semaphore reached `target`.
+/// signaling it. `raise` returns whether the fence holds the value afterward. Returns `None` when
+/// the fence reached `target`, [`Fallback::DeviceRemoved`] when the semaphore fell short of it or
+/// could not be read, and [`Fallback::ImportFailed`] when the semaphore reached it but the fence
+/// could not be raised.
 #[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
-pub(crate) fn settle(reached: Option<u64>, target: u64, raise: impl FnOnce(u64)) -> bool {
-    if let Some(done) = reached {
-        raise(done);
+pub(crate) fn settle(reached: Option<u64>, target: u64, raise: impl FnOnce(u64) -> bool) -> Option<Fallback> {
+    let raised = reached.map(raise);
+    match reached {
+        Some(done) if done >= target => (raised != Some(true)).then_some(Fallback::ImportFailed),
+        _ => Some(Fallback::DeviceRemoved),
     }
-    reached.is_some_and(|done| done >= target)
 }
 
 /// The NV12 textures and fences one encoder reads the compositor's program frames from. On
@@ -56,6 +60,10 @@ pub struct ExportRing {
     /// Set in tests while a detached ring's releases stay queued instead of completing.
     #[cfg(test)]
     pub(crate) hold_releases: AtomicBool,
+    /// Run once by [`ExportRing::handed_back`] between its reads, in tests of work another thread
+    /// does at that moment.
+    #[cfg(test)]
+    pub(crate) between_reads: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// The newest frame of an encoder that stopped while its copy was still running, whose texture
     /// goes back once that copy has finished; 0 when there is none.
     abandoned: AtomicU64,
@@ -250,6 +258,8 @@ impl ExportRing {
             detached_queued: AtomicU64::new(0),
             #[cfg(test)]
             hold_releases: AtomicBool::new(false),
+            #[cfg(test)]
+            between_reads: std::sync::Mutex::new(None),
             abandoned: AtomicU64::new(0),
             #[cfg(windows)]
             nv12: None,
@@ -435,6 +445,14 @@ impl ExportRing {
     /// stopped during its copy. An encoder session must not take a frame at or below it, since the
     /// compositor may write its texture again.
     pub fn handed_back(&self) -> u64 {
+        // `abandoned` is read first: [`ExportRing::reclaim`] queues the release of that frame
+        // before it clears `abandoned`, so a cleared value read here means the release counters
+        // read next already hold the frame.
+        let abandoned = self.abandoned.load(Ordering::Acquire);
+        #[cfg(test)]
+        if let Some(between) = self.between_reads.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            between();
+        }
         #[cfg(windows)]
         let queued = match &self.nv12 {
             Some(nv12) => nv12.queued(),
@@ -442,7 +460,7 @@ impl ExportRing {
         };
         #[cfg(not(windows))]
         let queued = self.detached_queued.load(Ordering::Acquire);
-        self.released().max(queued).max(self.abandoned.load(Ordering::Acquire))
+        self.released().max(queued).max(abandoned)
     }
 
     /// Record that an encoder stopped while the copy of the frame with value `value` was still
@@ -603,8 +621,13 @@ impl Feed {
     /// it is refused. A session on a ring read before also counts the releases that session
     /// queued and has not finished ([`ExportRing::handed_back`]).
     pub fn accepts(&self, frame: &ExportFrame) -> bool {
-        let handed = if self.handed == 0 { frame.ring.handed_back() } else { self.handed };
-        frame.ready > self.offered.max(handed)
+        frame.ready > self.offered.max(self.handed_for(frame))
+    }
+
+    /// The newest ready value handed back, for `frame`: on a session's first frame, the ring's
+    /// [`ExportRing::handed_back`], read once.
+    fn handed_for(&self, frame: &ExportFrame) -> u64 {
+        if self.handed == 0 { frame.ring.handed_back() } else { self.handed }
     }
 
     /// Add `frame`, shown at `pts`, after the frames already waiting. A frame that
@@ -614,13 +637,13 @@ impl Feed {
     /// would also hand back the older frames still being encoded; the next frame handed back
     /// covers it.
     pub fn offer(&mut self, frame: ExportFrame, pts: i64) -> Option<ExportFrame> {
-        if !self.accepts(&frame) {
+        // One reading decides whether the frame is taken and where this session's releases start:
+        // on a ring another session read before, its frames up to there went back already.
+        let handed = self.handed_for(&frame);
+        if frame.ready <= self.offered.max(handed) {
             return Some(frame);
         }
-        if self.handed == 0 {
-            // A ring another session read before: its frames up to here went back already.
-            self.handed = frame.ring.handed_back();
-        }
+        self.handed = handed;
         self.offered = frame.ready;
         self.waiting.push_back((frame, pts));
         if self.waiting.len() > SLOTS {
@@ -715,21 +738,52 @@ pub struct Exporter {
     slots: crate::ring::SlotTable,
     /// One-texel textures of the planes' formats that [`Exporter::prepare`] copies into.
     scratch: Option<Vec<wgpu::Texture>>,
-    /// The planes each texture of the ring was last copied from. The copy's commands name the
-    /// planes' images without wgpu tracking them, so the planes are kept until the texture is
-    /// written again, which happens only after the copy has finished, and when the exporter is
-    /// dropped, until the queue has finished the work submitted so far.
-    held: Held<wgpu::Texture>,
     /// The ready value of the newest ticket handed to [`Exporter::submitted`].
     signaled: u64,
+    /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device,
+    /// and the planes the copies read stay alive, until the last copy recorded into them has been
+    /// submitted.
+    shared: Arc<Shared>,
+}
+
+/// The parts of an [`Exporter`] that each [`Ticket`] also holds. Once the last of them is dropped,
+/// the textures and planes go after the queue has finished the work submitted so far, without
+/// waiting.
+#[cfg(feature = "wgpu")]
+struct Shared {
+    /// The planes each texture of the ring was last copied from. The copy's commands name the
+    /// planes' images without wgpu tracking them, so the planes are kept until the texture is
+    /// written again, which happens only after the copy has finished. Only the exporter locks it.
+    held: std::sync::Mutex<Held<wgpu::Texture>>,
     queue: wgpu::Queue,
-    /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device
-    /// until the last copy recorded into them has been submitted.
     #[cfg(windows)]
-    raw: Arc<Raw>,
-    /// Boxed: it holds the device's function tables.
+    raw: Raw,
     #[cfg(target_os = "linux")]
-    raw: Box<crate::dmabuf_ffi::Exported>,
+    raw: crate::dmabuf_ffi::Exported,
+}
+
+#[cfg(feature = "wgpu")]
+impl Shared {
+    fn new(queue: &wgpu::Queue, #[cfg(windows)] raw: Raw, #[cfg(target_os = "linux")] raw: crate::dmabuf_ffi::Exported) -> Arc<Shared> {
+        Arc::new(Shared {
+            held: std::sync::Mutex::new(Held::default()),
+            queue: queue.clone(),
+            #[cfg(any(windows, target_os = "linux"))]
+            raw,
+        })
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl Drop for Shared {
+    fn drop(&mut self) {
+        // A copy from the planes may still run: they are dropped once the queue has finished the
+        // work submitted so far, without waiting here. The textures' own drop does the same.
+        let held = self.held.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if !held.is_empty() {
+            self.queue.on_submitted_work_done(move || drop(held));
+        }
+    }
 }
 
 #[cfg(all(feature = "wgpu", windows))]
@@ -767,16 +821,15 @@ pub(crate) fn scratch_for(device: &wgpu::Device, planes: &[wgpu::Texture], kept:
 }
 
 /// A copy recorded by [`Exporter::copy`], to hand to [`Exporter::submitted`] once its command
-/// buffer has been submitted. It keeps the ring's textures open on the compositor's device, even
-/// after the [`Exporter`] is dropped, so drop it only after the command buffer has been submitted
-/// or dropped.
+/// buffer has been submitted. It keeps the ring's textures open on the compositor's device, and
+/// the planes the copy reads alive, even after the [`Exporter`] is dropped, so drop it only after
+/// the command buffer has been submitted or dropped.
 #[cfg(feature = "wgpu")]
 #[must_use = "the frame is only handed to the encoder by `Exporter::submitted`"]
 pub struct Ticket {
     slot: usize,
     ready: u64,
-    #[cfg(windows)]
-    _textures: Arc<Raw>,
+    _shared: Arc<Shared>,
 }
 
 #[cfg(feature = "wgpu")]
@@ -791,6 +844,23 @@ impl std::fmt::Debug for Ticket {
 #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
 pub(crate) fn planes_fit(width: u32, height: u32, luma: (u32, u32), chroma: (u32, u32)) -> bool {
     luma == (width, height) && chroma == (width / 2, height / 2)
+}
+
+/// Whether `luma` and `chroma` are formats a copy into an NV12 texture's planes can read: one
+/// byte per texel for the luma plane and two for the chroma plane, as the plane formats
+/// `R8_UNORM` and `R8G8_UNORM` have.
+#[cfg(feature = "wgpu")]
+pub(crate) fn nv12_plane_formats(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
+    use wgpu::TextureFormat as F;
+    matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
+}
+
+/// Whether `luma` and `chroma`, the size and format of each of a frame's planes, are planes
+/// [`Exporter::copy`] copies into a texture of a `width × height` ring: of the sizes
+/// [`planes_fit`] takes and the formats [`nv12_plane_formats`] takes.
+#[cfg(feature = "wgpu")]
+pub(crate) fn copy_planes_fit(width: u32, height: u32, luma: ((u32, u32), wgpu::TextureFormat), chroma: ((u32, u32), wgpu::TextureFormat)) -> bool {
+    planes_fit(width, height, luma.0, chroma.0) && nv12_plane_formats(luma.1, chroma.1)
 }
 
 /// The two planes a texture of a ring was last copied from, for each texture.
@@ -887,15 +957,7 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter {
-                ring,
-                slots: crate::ring::SlotTable::default(),
-                scratch: None,
-                held: Held::default(),
-                signaled: 0,
-                queue: queue.clone(),
-                raw: Arc::new(raw),
-            })
+            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, signaled: 0, shared: Shared::new(queue, raw) })
         }
         #[cfg(target_os = "linux")]
         {
@@ -904,15 +966,7 @@ impl Exporter {
             }
             crate::fallback::check_export(backend, compositor)?;
             let (ring, raw) = crate::dmabuf_ffi::export(device, queue, width, height)?;
-            Ok(Exporter {
-                ring,
-                slots: crate::ring::SlotTable::default(),
-                scratch: None,
-                held: Held::default(),
-                signaled: 0,
-                queue: queue.clone(),
-                raw: Box::new(raw),
-            })
+            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, signaled: 0, shared: Shared::new(queue, raw) })
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -921,9 +975,8 @@ impl Exporter {
                 ring,
                 slots: crate::ring::SlotTable::default(),
                 scratch: None,
-                held: Held::default(),
                 signaled: 0,
-                queue: queue.clone(),
+                shared: Shared::new(queue),
             })
         }
     }
@@ -962,7 +1015,8 @@ impl Exporter {
     /// before the one returned. Returns the command buffer to submit and its ticket, or
     /// `None` when every texture is still being encoded (the frame is not exported). Returns the
     /// reason, also recorded on the ring, when the frames cannot stay on the GPU. Planes of other
-    /// sizes than the ring's luma and chroma planes are refused with [`Fallback::ImportFailed`].
+    /// sizes than the ring's luma and chroma planes, or of formats with another texel size, are
+    /// refused with [`Fallback::ImportFailed`].
     pub fn copy(
         &mut self,
         device: &wgpu::Device,
@@ -976,8 +1030,8 @@ impl Exporter {
         if let Some(reason) = self.ring.fallback() {
             return Err(reason);
         }
-        let size = |t: &wgpu::Texture| (t.width(), t.height());
-        if !matches!(planes, [luma, chroma] if planes_fit(self.ring.width(), self.ring.height(), size(luma), size(chroma))) {
+        let plane = |t: &wgpu::Texture| ((t.width(), t.height()), t.format());
+        if !matches!(planes, [luma, chroma] if copy_planes_fit(self.ring.width(), self.ring.height(), plane(luma), plane(chroma))) {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         }
@@ -985,14 +1039,14 @@ impl Exporter {
         // only once the encoder has released it.
         let Some(slot) = self.slots.pick_released(released) else { return Ok(None) };
         #[cfg(windows)]
-        let commands = match &*self.raw {
+        let commands = match &self.shared.raw {
             Raw::Dx12(r) => r.copy(device, planes, slot),
             Raw::Vulkan(r) => r.copy(planes, slot),
         };
         #[cfg(target_os = "linux")]
         let commands = {
             let _ = device;
-            self.raw.copy(planes, slot)
+            self.shared.raw.copy(planes, slot)
         };
         #[cfg(not(any(windows, target_os = "linux")))]
         let commands: Result<wgpu::CommandBuffer, Fallback> = {
@@ -1004,13 +1058,8 @@ impl Exporter {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
-        self.held.keep(slot, planes);
-        let ticket = Ticket {
-            slot,
-            ready,
-            #[cfg(windows)]
-            _textures: Arc::clone(&self.raw),
-        };
+        self.shared.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).keep(slot, planes);
+        let ticket = Ticket { slot, ready, _shared: Arc::clone(&self.shared) };
         Ok(Some((commands, ticket)))
     }
 
@@ -1025,7 +1074,7 @@ impl Exporter {
             return Err(Fallback::ImportFailed);
         }
         #[cfg(windows)]
-        let signaled = match &*self.raw {
+        let signaled = match &self.shared.raw {
             Raw::Dx12(r) => r.signal(ticket.ready),
             Raw::Vulkan(r) => {
                 r.signal(ticket.ready);
@@ -1034,7 +1083,7 @@ impl Exporter {
         };
         #[cfg(target_os = "linux")]
         let signaled: Result<(), Fallback> = {
-            self.raw.signal(ticket.ready);
+            self.shared.raw.signal(ticket.ready);
             Ok(())
         };
         #[cfg(not(any(windows, target_os = "linux")))]
@@ -1050,24 +1099,12 @@ impl Exporter {
     /// itself ([`ExportRing::ready`]).
     pub fn poll(&self) {
         #[cfg(windows)]
-        if let Raw::Vulkan(r) = &*self.raw
+        if let Raw::Vulkan(r) = &self.shared.raw
             && !r.poll()
         {
             self.ring.refuse(Fallback::ImportFailed);
         }
         #[cfg(target_os = "linux")]
-        self.raw.poll();
-    }
-}
-
-#[cfg(feature = "wgpu")]
-impl Drop for Exporter {
-    fn drop(&mut self) {
-        // A copy from the planes may still run: they are dropped once the queue has finished the
-        // work submitted so far, without waiting here.
-        if !self.held.is_empty() {
-            let held = self.held.take();
-            self.queue.on_submitted_work_done(move || drop(held));
-        }
+        self.shared.raw.poll();
     }
 }

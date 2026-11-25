@@ -104,7 +104,7 @@ pub(crate) fn dmabuf_in_memory(len: u64) -> std::io::Result<OwnedFd> {
 #[cfg(feature = "wgpu")]
 pub(crate) use export::{Exported, export, export_backend};
 #[cfg(all(feature = "wgpu", test))]
-pub(crate) use export::{export_barriers, nv12_plane_formats, padding_regions};
+pub(crate) use export::{export_barriers, padding_regions};
 #[cfg(feature = "wgpu")]
 pub(crate) use vulkan::{Imported, caps, open};
 
@@ -647,14 +647,6 @@ mod export {
         ))
     }
 
-    /// Whether `luma` and `chroma` are formats a copy into an NV12 image's planes can read: one
-    /// byte per texel for the luma plane and two for the chroma plane, as the plane formats
-    /// `R8_UNORM` and `R8G8_UNORM` have.
-    pub(crate) fn nv12_plane_formats(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
-        use wgpu::TextureFormat as F;
-        matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
-    }
-
     /// The copies that fill the padding of a plane of `dst` texels from a source plane of `src`
     /// texels at its top left: the source's last column into each column past it, its last row into
     /// each row past it, and its corner texel into each texel of the corner. The padding then
@@ -753,7 +745,7 @@ mod export {
             let (w, h) = self.size;
             if (luma.width(), luma.height()) != (w, h)
                 || (chroma.width(), chroma.height()) != (w / 2, h / 2)
-                || !nv12_plane_formats(luma.format(), chroma.format())
+                || !crate::export::nv12_plane_formats(luma.format(), chroma.format())
             {
                 return Err(Fallback::ImportFailed);
             }
