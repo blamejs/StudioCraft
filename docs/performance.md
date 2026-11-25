@@ -93,8 +93,10 @@ benches yet.
 `cargo bench -p craft-gpu-interop --features wgpu` times how a 1080p and a 4K BGRA picture reach
 a compositor's source texture: `write_texture upload`, from CPU memory as a CPU capture is
 uploaded, and `opaque GPU copy`, from a texture already on the GPU as a shared capture is drawn.
-Each iteration waits until the GPU has finished. The bench prints the adapter it ran on, and on a
-machine without a graphics adapter it measures nothing.
+Each iteration waits until the GPU has finished. On Windows the bench runs each case on a
+Direct3D 12 and on a Vulkan device, the two backends a shared capture opens on, and ends each
+name with `dx12` or `vulkan` (`opaque GPU copy 1080p vulkan`). The bench prints the adapter it ran
+on, and on a machine without a graphics adapter it measures nothing.
 
 Measured on 2026-11-23 on Linux, in a release build, on the llvmpipe software adapter (Vulkan,
 LLVM 21.1.8). That adapter draws on the CPU, so these numbers do not show the GPU copy's cost on

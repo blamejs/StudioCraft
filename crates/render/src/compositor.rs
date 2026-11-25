@@ -823,6 +823,9 @@ impl Compositor {
         }
         if st.shared.as_ref().is_some_and(|i| i.pending().is_some()) {
             Self::draw_shared(device, queue, &self.pipes, st);
+        } else if let Some(importer) = &st.shared {
+            // Shared textures whose draws have finished go back to the capture.
+            importer.poll();
         }
     }
 

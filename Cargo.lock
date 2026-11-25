@@ -1585,6 +1585,7 @@ dependencies = [
 name = "craft-gpu-interop"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "criterion",
  "pollster 0.4.0",
  "wgpu",

@@ -291,7 +291,7 @@ mod tests {
         assert!(matches!(step(Ok(Grab::Frame(frame))), Step::Give(SharedGrab::Frame(f)) if f.ready() == 1));
         assert!(matches!(step(Ok(Grab::Unchanged)), Step::Give(SharedGrab::Unchanged)));
         assert!(matches!(step(Err(CaptureError::Lost("mode".into()))), Step::Reopen));
-        for e in [CaptureError::Fallback(craft_gpu_interop::Fallback::NotDx12), CaptureError::Failed("x".into())] {
+        for e in [CaptureError::Fallback(craft_gpu_interop::Fallback::UnsupportedBackend), CaptureError::Failed("x".into())] {
             assert!(matches!(step(Err(e)), Step::Stop));
         }
     }

@@ -24,7 +24,7 @@ fn raw(device: &wgpu::Device) -> Option<(ID3D12Device, ID3D12CommandQueue)> {
 
 /// Open `ring` on `device`.
 pub(crate) fn import(device: &wgpu::Device, ring: &SharedRing) -> Result<Imported, Fallback> {
-    let Some((raw_device, queue)) = raw(device) else { return Err(Fallback::NotDx12) };
+    let Some((raw_device, queue)) = raw(device) else { return Err(Fallback::UnsupportedBackend) };
     // SAFETY: `raw_device` is a valid device; reading its adapter's identifier has no other effect.
     let luid = unsafe { raw_device.GetAdapterLuid() };
     check_import(Backend::Dx12, ring.adapter(), Some(AdapterId::from_parts(luid.LowPart, luid.HighPart)))?;

@@ -133,9 +133,9 @@ fn a_finished_frame_is_drawn_while_the_newer_one_is_copied() {
 fn the_first_fallback_reason_is_kept() {
     let ring = SharedRing::detached(1, 1);
     assert_eq!(ring.fallback(), None);
-    ring.refuse(Fallback::NotDx12);
+    ring.refuse(Fallback::UnsupportedBackend);
     ring.refuse(Fallback::OtherAdapter);
-    assert_eq!(ring.fallback(), Some(Fallback::NotDx12));
+    assert_eq!(ring.fallback(), Some(Fallback::UnsupportedBackend));
     for f in Fallback::ALL {
         assert_eq!(Fallback::from_code(f.code()), Some(f));
         assert!(!f.to_string().is_empty());
@@ -150,9 +150,44 @@ fn an_import_needs_direct3d_12_on_the_display_adapter() {
     let a = AdapterId::from_parts(7, 0);
     let b = AdapterId::from_parts(7, 1);
     assert_eq!(check_import(Backend::Dx12, a, Some(a)), Ok(()));
-    assert_eq!(check_import(Backend::Other, a, Some(a)), Err(Fallback::NotDx12));
+    assert_eq!(check_import(Backend::Other, a, Some(a)), Err(Fallback::UnsupportedBackend));
     assert_eq!(check_import(Backend::Dx12, a, Some(b)), Err(Fallback::OtherAdapter));
     assert_eq!(check_import(Backend::Dx12, a, None), Err(Fallback::OtherAdapter));
+}
+
+#[test]
+fn a_vulkan_import_needs_the_display_adapter_the_external_memory_extension_and_timeline_semaphores() {
+    let a = AdapterId::from_parts(7, 0);
+    let b = AdapterId::from_parts(8, 0);
+    let with = Backend::Vulkan { external_memory: true, timeline: true };
+    let without = Backend::Vulkan { external_memory: false, timeline: true };
+    let no_timeline = Backend::Vulkan { external_memory: true, timeline: false };
+    assert_eq!(check_import(with, a, Some(a)), Ok(()), "a Vulkan compositor on the display's adapter opens the ring");
+    assert_eq!(check_import(without, a, Some(a)), Err(Fallback::MissingExtension));
+    assert_eq!(check_import(no_timeline, a, Some(a)), Err(Fallback::MissingExtension));
+    assert_eq!(check_import(Backend::Vulkan { external_memory: false, timeline: false }, a, Some(a)), Err(Fallback::MissingExtension));
+    // The adapter is checked before the extension: either way the ring cannot be opened.
+    assert_eq!(check_import(with, a, Some(b)), Err(Fallback::OtherAdapter));
+    assert_eq!(check_import(without, a, Some(b)), Err(Fallback::OtherAdapter));
+    // A driver that does not report its adapter counts as another adapter.
+    assert_eq!(check_import(with, a, None), Err(Fallback::OtherAdapter));
+    assert_eq!(check_import(Backend::Other, a, None), Err(Fallback::UnsupportedBackend));
+}
+
+#[test]
+fn a_failed_open_destroys_the_resources_opened_before_it() {
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| if h == 3 { Err(Fallback::ImportFailed) } else { Ok(h * 10) }, |r| destroyed.push(r));
+    assert_eq!(result, Err(Fallback::ImportFailed));
+    assert_eq!(destroyed, [10, 20], "both textures opened before the failure are destroyed");
+
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| Ok::<_, Fallback>(h * 10), |r| destroyed.push(r));
+    assert_eq!(result, Ok(vec![10, 20, 30]));
+    assert!(destroyed.is_empty(), "nothing is destroyed when every open succeeds");
+
+    let result = crate::fallback::open_all(&[1], |_| Err::<u32, _>(Fallback::ImportFailed), |_| panic!("nothing was opened"));
+    assert_eq!(result, Err(Fallback::ImportFailed));
 }
 
 #[test]
@@ -160,6 +195,19 @@ fn an_adapter_id_keeps_both_parts() {
     assert_eq!(AdapterId::from_parts(1, 2).0, (2 << 32) | 1);
     assert_eq!(AdapterId::from_parts(u32::MAX, -1).0, u64::MAX);
     assert_ne!(AdapterId::from_parts(0, -1), AdapterId::from_parts(0, 1));
+    for (low, high) in [(0, 0), (1, 2), (u32::MAX, -1), (0x1234_5678, i32::MIN)] {
+        assert_eq!(AdapterId::from_parts(low, high).parts(), (low, high));
+    }
+}
+
+#[test]
+fn an_adapter_id_from_vulkan_is_the_one_windows_reports() {
+    // Vulkan's deviceLUID is the Windows LUID's bytes: the low part, then the high part.
+    let mut bytes = [0u8; 8];
+    bytes[..4].copy_from_slice(&0x0000_d2a1u32.to_le_bytes());
+    bytes[4..].copy_from_slice(&(-2i32).to_le_bytes());
+    assert_eq!(AdapterId::from_luid_bytes(bytes), AdapterId::from_parts(0x0000_d2a1, -2));
+    assert_eq!(AdapterId::from_luid_bytes([0; 8]), AdapterId(0));
 }
 
 #[cfg(not(windows))]
@@ -255,6 +303,7 @@ mod gpu {
             Some(texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default()))
         };
         let mut importer = Importer::new();
+        importer.poll();
         assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Ok(Drawn::Idle));
         importer.offer(frame(&ring, 0, 1));
         let reason = importer.draw(&device, &queue, format, |_, _| target()).unwrap_err();
@@ -266,5 +315,62 @@ mod gpu {
         assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Err(reason));
         assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Ok(Drawn::Idle));
         assert_eq!(asked.get(), 0, "no target is made for a frame that is not drawn");
+    }
+
+    /// A device on wgpu's Vulkan backend, opened with those of `features` the adapter has.
+    #[cfg(windows)]
+    fn vulkan(features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::VULKAN;
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no Vulkan adapter: this test is skipped");
+            return None;
+        };
+        let desc = wgpu::DeviceDescriptor { required_features: features & adapter.features(), ..Default::default() };
+        pollster::block_on(adapter.request_device(&desc)).ok()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_vulkan_compositor_opens_rings_of_its_own_adapter() {
+        let Some((device, queue)) = vulkan(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32) else { return };
+        let (Some(own), timeline) = crate::vulkan_ffi::adapter(&device).expect("a Vulkan device") else {
+            eprintln!("the Vulkan driver does not report its adapter: this test is skipped");
+            return;
+        };
+        // A ring of another adapter is refused for the adapter, not for the backend.
+        let other = SharedRing::detached_on(64, 1, AdapterId(own.0 ^ 1));
+        let mut importer = Importer::new();
+        importer.offer(frame(&other, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| None), Err(Fallback::OtherAdapter));
+        assert_eq!(other.fallback(), Some(Fallback::OtherAdapter));
+        // A ring of its own adapter gets past both checks; this one has no shared handles to open.
+        let ring = SharedRing::detached_on(64, 1, own);
+        let expected = if timeline && device.features().contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32) {
+            Fallback::ImportFailed
+        } else {
+            Fallback::MissingExtension
+        };
+        assert_eq!(crate::vulkan_ffi::import(&device, &queue, &ring).err(), Some(expected));
+        // A device opened without the extension cannot open the textures.
+        let Some((plain, plain_queue)) = vulkan(wgpu::Features::empty()) else { return };
+        assert_eq!(crate::vulkan_ffi::import(&plain, &plain_queue, &ring).err(), Some(Fallback::MissingExtension));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_direct3d_12_device_is_not_opened_as_vulkan() {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::DX12;
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no Direct3D 12 adapter: this test is skipped");
+            return;
+        };
+        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
+        assert!(crate::vulkan_ffi::adapter(&device).is_none());
+        let ring = SharedRing::detached(64, 1);
+        assert_eq!(crate::vulkan_ffi::import(&device, &queue, &ring).err(), Some(Fallback::UnsupportedBackend));
     }
 }
