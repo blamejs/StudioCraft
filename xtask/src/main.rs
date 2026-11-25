@@ -105,14 +105,18 @@ const WASM_CRATES: &[&str] =
     &["studiocraft-model", "studiocraft-plugin", "craft-flv", "craft-scopes", "craft-ease", "craft-transitions", "craft-closed-captions"];
 
 fn wasm() -> Result<(), String> {
+    let packages: Vec<&str> = WASM_CRATES.iter().chain(WASM_APPS).copied().collect();
     let mut c = cargo();
     c.args(["check", "--target", "wasm32-unknown-unknown"]);
-    for k in WASM_CRATES {
+    for k in &packages {
         c.args(["-p", k]);
     }
-    run(c, &format!("cargo check --target wasm32-unknown-unknown -p {}", WASM_CRATES.join(" -p ")))
+    run(c, &format!("cargo check --target wasm32-unknown-unknown -p {}", packages.join(" -p ")))
         .map_err(|e| format!("{e} (add the target with `rustup target add wasm32-unknown-unknown`)"))
 }
+
+/// The apps that run in the browser, checked with the crates above.
+const WASM_APPS: &[&str] = &["studiocraft-web"];
 
 fn ci() -> Result<(), String> {
     fmt()?;

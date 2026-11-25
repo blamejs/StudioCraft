@@ -4,8 +4,8 @@ This page describes how StudioCraft's code is organized: its crates and layers, 
 how data moves between them, and where new features plug in. It is for contributors.
 
 StudioCraft is a Cargo workspace. The desktop app is the root package (`src/`). The libraries are
-in `crates/`, the command-line tool is in `apps/studiocraft-cli`, and the workspace tooling is in
-`xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
+in `crates/`, the command-line tool is in `apps/studiocraft-cli`, the browser editor for scene
+collections is in `apps/studiocraft-web`, and the workspace tooling is in `xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
 
 ## Layers
 
@@ -45,6 +45,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
 | app | `studiocraft` | The desktop binary, its control channel and the screenshot and self-test harness. |
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
+| app | `studiocraft-web` | The browser editor for scene collection files: an `Editor` that runs the engine's scene and source commands on an opened file, and the page in `index.html` that draws it, reads the picked file and offers the edited collection as a download. |
 | tool | `xtask` | `cargo xtask` checks. |
 
 These crates have no operating-system or GPU dependency, and `cargo xtask wasm` checks that they
@@ -57,6 +58,11 @@ build for `wasm32-unknown-unknown`:
 - `craft-ease`
 - `craft-transitions`
 - `craft-closed-captions`
+
+`cargo xtask wasm` also checks the browser editor, `studiocraft-web`, and with it
+`studiocraft-engine`. The editor uses only the engine's commands and undo history. The engine's
+source threads, mixer and frame scheduler do not run in the browser. On `wasm32-unknown-unknown`
+the undo history reads no clock, so each change is its own undo step there.
 
 ## Threads and data flow
 

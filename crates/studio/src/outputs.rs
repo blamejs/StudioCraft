@@ -1319,6 +1319,15 @@ impl Studio {
         Ok(())
     }
 
+    /// Start the next try of the destination `id` of the running stream at once, when it waits to
+    /// try again or waits for the network; whether it was waiting.
+    pub fn retry_stream_destination(&self, id: &str) -> Result<bool, StudioError> {
+        let Some(a) = self.outputs.active.get(&OutputKind::Streaming) else {
+            return Err(StudioError::Output("the stream is not running".into()));
+        };
+        Ok(a.instance.retry_destination(id)?)
+    }
+
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             self.stop_output(kind);
@@ -2212,6 +2221,8 @@ mod tests {
                 bytes: 0,
                 dropped: 0,
                 reconnects: self.reconnects.load(Ordering::SeqCst),
+                next_try: None,
+                max_tries: 10,
             }]
         }
         fn reconnects(&self) -> u64 {

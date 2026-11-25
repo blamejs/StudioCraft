@@ -46,7 +46,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Streaming
 
-- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, the status bar and notices say when destinations lose their connection and reconnect, each try looks the server's name up again with a 10 s limit that a stop does not wait for, one refused right after a lost connection is tried again up to 3 times, and with no network route a destination waits and tries as soon as the route returns; Check Connection, and a check after a destination's third failed try or its giving up, test the route, the lookup, the connection to the server and its RTMP handshake (with no command or key) and name one cause, telling a port that takes the connection but does not answer as a stream server from one that cannot be reached ([Streaming](docs/features.md#streaming)).
+- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, the status bar and notices say when destinations lose their connection and reconnect, each try looks the server's name up again with a 10 s limit that a stop does not wait for, one refused right after a lost connection is tried again up to 3 times, with no network route a destination waits and tries as soon as the route returns, and a destination that waits shows its try number out of its tries and a countdown to its next try, which Try Now starts at once; Check Connection, and a check after a destination's third failed try or its giving up, test the route, the lookup, the connection to the server and its RTMP handshake (with no command or key) and name one cause, telling a port that takes the connection but does not answer as a stream server from one that cannot be reached ([Streaming](docs/features.md#streaming)).
 - `golive.check` lists what would stop a stream or spoil it (destinations, the encoder, free space for recordings, sources and live captions), each item passing, a problem or unknown, and the window does not show it yet ([Streaming](docs/features.md#streaming)).
 - Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero. The Pause button after Go Live, with its menu of countdowns, and File › Pause Program start it; the button, a banner above the program with +1 min and Resume, and File › Resume Program end it ([Pause screen](docs/features.md#pause-screen)).
 
@@ -68,6 +68,7 @@ description in [docs/features.md](docs/features.md).
 - The interface fonts come from `craft-ui`'s font stack ([Fonts](docs/features.md#fonts)).
 - Nineteen interface languages are built in, and Arabic and Hebrew run right to left ([Languages](docs/features.md#languages)).
 - Profiles and scene collections can be switched, and Scene Collection › Import… and Export… read and write collection files ([Profiles and scene collections](docs/features.md#profiles-and-scene-collections)).
+- A browser editor opens a scene collection file, adds, renames, reorders and removes its scenes, places, renames, reorders and removes the sources in each scene, undoes and redoes each edit, and saves the result as a download ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)).
 - The stats window and View › Scopes show the program's timing and levels ([Stats and scopes](docs/features.md#stats-and-scopes)).
 - Help › Check for Updates…, the check at start and the step that finishes installing a downloaded update on Windows run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
 - Help › About StudioCraft shows the credits, with a choice of username, display name or real name, and the license texts ([Help and updates](docs/features.md#help-and-updates)).
@@ -103,8 +104,10 @@ description in [docs/features.md](docs/features.md).
    use them yet, and a stream still goes to one server through `ffmpeg`. The list of
    destinations and publishing from StudioCraft's own process are still to be built. The virtual
    camera works on Linux; the Windows and macOS devices are still to be built.
-3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
-   scene collections is the first step.
+3. **Web build (partly done).** The browser editor in `apps/studiocraft-web` edits the scenes and
+   sources of a scene collection file
+   ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)). Adding
+   new sources, source settings, filters and transitions in the browser are still to be built.
 4. **Frames on the GPU from capture to the encoder (partly done).** On Windows a Display capture
    source hands its pictures to the compositor's Direct3D 12 device in shared textures, and copies
    them through CPU memory when the compositor cannot open them
