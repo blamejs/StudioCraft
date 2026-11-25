@@ -17,6 +17,8 @@
 //! - [`Encoder::encode`] hands the frame to the encoder and returns the packets that are ready
 //!   without waiting for the frame's own; it waits only while the encoder's input queue is full,
 //!   for up to 10 seconds. [`Encoder::flush`] waits for the rest, also for up to 10 seconds.
+//! - Packets that came out before a call failed are kept, and the next call that succeeds returns
+//!   them first.
 
 use crate::Codec;
 use crate::amf_ffi::{self, Engine, OpenError, Output, Params, Session};
@@ -90,6 +92,8 @@ pub struct Encoder {
     /// Whether the record came from a second instance of the encoder, so the first frame of this
     /// one must carry parameter sets (AV1: a sequence header) to check it against.
     unchecked: bool,
+    /// Packets that came out before a call failed, for the next call that succeeds.
+    held: Vec<Packet>,
 }
 
 impl Encoder {
@@ -111,7 +115,7 @@ impl Encoder {
             }
         };
         let (track, record) = track_of(cfg, &header)?;
-        Ok(Encoder { session, cfg: *cfg, record, track, unchecked })
+        Ok(Encoder { session, cfg: *cfg, record, track, unchecked, held: Vec::new() })
     }
 
     /// The `avcC` (H.264), `hvcC` (HEVC) or `av1C` (AV1) record a container stores with the track.
@@ -134,12 +138,12 @@ impl Encoder {
         if pts < 0 {
             return Err(Error::Failed(format!("the timestamp {pts} is negative")));
         }
-        encode_on(&mut self.session, &mut self.track, &mut self.unchecked, frame, pts, &mut amf_ffi::waiter())
+        encode_on(&mut self.session, &mut self.track, &mut self.unchecked, &mut self.held, frame, pts, &mut amf_ffi::waiter())
     }
 
     /// End the stream: every frame still inside comes out.
     pub fn flush(&mut self) -> Result<Vec<Packet>, Error> {
-        flush_on(&mut self.session, &mut self.track, &mut self.unchecked, &mut amf_ffi::waiter())
+        flush_on(&mut self.session, &mut self.track, &mut self.unchecked, &mut self.held, &mut amf_ffi::waiter())
     }
 }
 
@@ -164,20 +168,31 @@ fn packets(track: &mut Track, unchecked: &mut bool, outputs: Vec<Output>) -> Res
     outputs.into_iter().map(|o| track.packet(o)).collect()
 }
 
-/// Drain `engine` and return the packets of every frame still inside.
-fn flush_on(engine: &mut impl Engine, track: &mut Track, unchecked: &mut bool, wait: &mut impl FnMut(bool) -> bool) -> Result<Vec<Packet>, Error> {
+/// Drain `engine` and return the packets of every frame still inside, after the packets in
+/// `held`. When the drain fails, the packets that came out before it join `held`.
+fn flush_on(
+    engine: &mut impl Engine,
+    track: &mut Track,
+    unchecked: &mut bool,
+    held: &mut Vec<Packet>,
+    wait: &mut impl FnMut(bool) -> bool,
+) -> Result<Vec<Packet>, Error> {
     let mut outputs = Vec::new();
-    amf_ffi::drain(engine, &mut outputs, wait).map_err(Error::Failed)?;
-    packets(track, unchecked, outputs)
+    let drained = amf_ffi::drain(engine, &mut outputs, wait);
+    held.extend(packets(track, unchecked, outputs)?);
+    drained.map_err(Error::Failed)?;
+    Ok(std::mem::take(held))
 }
 
-/// Send one frame with the timestamp `pts` to `engine` and return the packets that came out. A
-/// frame the encoder did not take is not waited for. A frame it took stays expected when
-/// collecting the outputs after it fails, so its output can come out with a later call.
+/// Send one frame with the timestamp `pts` to `engine` and return the packets that came out,
+/// after the packets in `held`. A frame the encoder did not take is not waited for. A frame it
+/// took stays expected when collecting the outputs after it fails, so its output can come out
+/// with a later call. When the call fails, the packets that came out before it join `held`.
 fn encode_on(
     engine: &mut impl Engine,
     track: &mut Track,
     unchecked: &mut bool,
+    held: &mut Vec<Packet>,
     frame: &[u8],
     pts: i64,
     wait: &mut impl FnMut(bool) -> bool,
@@ -189,9 +204,9 @@ fn encode_on(
         track.pending.pop_back();
     }
     let sent = sent.and_then(|()| amf_ffi::collect_ready(engine, &mut outputs).map(drop));
-    let packets = packets(track, unchecked, outputs)?;
+    held.extend(packets(track, unchecked, outputs)?);
     sent.map_err(Error::Failed)?;
-    Ok(packets)
+    Ok(std::mem::take(held))
 }
 
 /// The output of one gray frame from a separate instance of the encoder for `cfg`: the parameter
@@ -402,16 +417,16 @@ mod tests {
         // The first frame's packet is not ready when its encode call ends; the record waits to be
         // checked against it.
         let mut unchecked = true;
-        let first = encode_on(&mut e, &mut track, &mut unchecked, &[], 0, &mut wait).unwrap();
+        let first = encode_on(&mut e, &mut track, &mut unchecked, &mut Vec::new(), &[], 0, &mut wait).unwrap();
         assert!(first.is_empty() && unchecked);
         e.polls.push_back(out(&KEY, 0));
-        let second = encode_on(&mut e, &mut track, &mut unchecked, &[], 1, &mut wait).unwrap();
+        let second = encode_on(&mut e, &mut track, &mut unchecked, &mut Vec::new(), &[], 1, &mut wait).unwrap();
         assert_eq!(second.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(0, true)]);
         assert!(!unchecked, "the first frame's parameter sets were checked");
         assert_eq!(waits.get(), 0, "nothing waited");
         let frame_time = e.taken[1];
         e.polls.push_back(out(&P, frame_time));
-        let rest = flush_on(&mut e, &mut track, &mut unchecked, &mut wait).unwrap();
+        let rest = flush_on(&mut e, &mut track, &mut unchecked, &mut Vec::new(), &mut wait).unwrap();
         assert_eq!(rest.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(1, false)]);
     }
 
@@ -420,17 +435,17 @@ mod tests {
         // A first frame without parameter sets cannot confirm the record.
         let mut e = Script::default();
         e.polls.push_back(out(&P, 0));
-        let r = encode_on(&mut e, &mut h264_track(), &mut true, &[], 0, &mut |_| true);
+        let r = encode_on(&mut e, &mut h264_track(), &mut true, &mut Vec::new(), &[], 0, &mut |_| true);
         assert!(matches!(&r, Err(Error::Failed(why)) if why.contains("no parameter sets")), "{r:?}");
         // A first frame whose parameter sets differ from the record is an error.
         let mut e = Script::default();
         e.polls.push_back(out(&[0, 0, 0, 1, 0x67, 9, 0, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 3], 0));
-        let r = encode_on(&mut e, &mut h264_track(), &mut true, &[], 0, &mut |_| true);
+        let r = encode_on(&mut e, &mut h264_track(), &mut true, &mut Vec::new(), &[], 0, &mut |_| true);
         assert!(matches!(&r, Err(Error::Failed(why)) if why.contains("changed")), "{r:?}");
         // The same frame without parameter sets is fine when the record came from this encoder.
         let mut e = Script::default();
         e.polls.push_back(out(&P, 0));
-        assert_eq!(encode_on(&mut e, &mut h264_track(), &mut false, &[], 0, &mut |_| true).unwrap().len(), 1);
+        assert_eq!(encode_on(&mut e, &mut h264_track(), &mut false, &mut Vec::new(), &[], 0, &mut |_| true).unwrap().len(), 1);
         assert!(!carries_header(Codec::Hevc, &[]) && !carries_header(Codec::Av1, &[]));
         assert!(carries_header(Codec::H264, &KEY) && !carries_header(Codec::H264, &P));
     }
@@ -442,7 +457,7 @@ mod tests {
         e.polls.extend([Polled::Empty, out(&KEY, 0)]);
         let mut track = h264_track();
         let mut pauses = 0;
-        let packets = encode_on(&mut e, &mut track, &mut false, &[], 0, &mut |pause| {
+        let packets = encode_on(&mut e, &mut track, &mut false, &mut Vec::new(), &[], 0, &mut |pause| {
             pauses += usize::from(pause);
             true
         })
@@ -453,7 +468,7 @@ mod tests {
         let mut stuck = Script::default();
         stuck.submits.extend((0..4).map(|_| Ok(Submitted::Full)));
         let mut budget = 2;
-        let r = encode_on(&mut stuck, &mut track, &mut false, &[], 1, &mut |_| {
+        let r = encode_on(&mut stuck, &mut track, &mut false, &mut Vec::new(), &[], 1, &mut |_| {
             budget -= 1;
             budget >= 0
         });
@@ -472,13 +487,14 @@ mod tests {
         assert_eq!(got.len(), 3, "the outputs collected before the limit are kept");
         let mut failing = Script::default();
         failing.submits.push_back(Err("SubmitInput failed (AMF_FAIL)".into()));
-        assert!(encode_on(&mut failing, &mut track, &mut false, &[], 2, &mut |_| true).is_err());
+        assert!(encode_on(&mut failing, &mut track, &mut false, &mut Vec::new(), &[], 2, &mut |_| true).is_err());
         assert!(track.pending.is_empty());
     }
 
-    /// A scripted encoder whose first `fails` polls are errors.
+    /// A scripted encoder whose next `fails` polls after the next `after` are errors.
     struct PollFails {
         script: Script,
+        after: usize,
         fails: usize,
     }
 
@@ -487,7 +503,9 @@ mod tests {
             self.script.submit(f, t, d)
         }
         fn poll(&mut self) -> Result<Polled, String> {
-            if self.fails > 0 {
+            if self.after > 0 {
+                self.after -= 1;
+            } else if self.fails > 0 {
                 self.fails -= 1;
                 return Err("QueryOutput failed (AMF_FAIL)".into());
             }
@@ -500,23 +518,49 @@ mod tests {
 
     #[test]
     fn a_frame_the_encoder_took_keeps_its_timestamp_when_collecting_fails() {
-        let mut e = PollFails { script: Script::default(), fails: 1 };
+        let mut e = PollFails { script: Script::default(), after: 0, fails: 1 };
         let mut track = h264_track();
-        let r = encode_on(&mut e, &mut track, &mut false, &[], 0, &mut |_| true);
+        let r = encode_on(&mut e, &mut track, &mut false, &mut Vec::new(), &[], 0, &mut |_| true);
         assert!(matches!(&r, Err(Error::Failed(why)) if why.contains("QueryOutput")), "{r:?}");
         assert_eq!(track.pending.len(), 1, "the encoder took the frame, so its output is still expected");
         // The frame's output comes out with the next call, with its own timestamp.
         let time = e.script.taken[0];
         e.script.polls.push_back(out(&KEY, time));
-        let late = encode_on(&mut e, &mut track, &mut false, &[], 1, &mut |_| true).unwrap();
+        let late = encode_on(&mut e, &mut track, &mut false, &mut Vec::new(), &[], 1, &mut |_| true).unwrap();
         assert_eq!(late.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(0, true)]);
         // A poll that fails while the input queue is full ends the call before the encoder took
         // the frame, so the frame is not expected back.
-        let mut full = PollFails { script: Script::default(), fails: 1 };
+        let mut full = PollFails { script: Script::default(), after: 0, fails: 1 };
         full.script.submits.push_back(Ok(Submitted::Full));
         let mut track = h264_track();
-        assert!(encode_on(&mut full, &mut track, &mut false, &[], 0, &mut |_| true).is_err());
+        assert!(encode_on(&mut full, &mut track, &mut false, &mut Vec::new(), &[], 0, &mut |_| true).is_err());
         assert!(full.script.taken.is_empty() && track.pending.is_empty());
+    }
+
+    #[test]
+    fn packets_that_came_out_before_a_failed_poll_come_out_once_with_the_next_call() {
+        // The first frame's packet comes out, then the poll after it fails.
+        let mut e = PollFails { script: Script::default(), after: 1, fails: 1 };
+        e.script.polls.push_back(out(&KEY, 0));
+        let (mut track, mut held) = (h264_track(), Vec::new());
+        let r = encode_on(&mut e, &mut track, &mut false, &mut held, &[], 0, &mut |_| true);
+        assert!(matches!(&r, Err(Error::Failed(why)) if why.contains("QueryOutput")), "{r:?}");
+        let next = encode_on(&mut e, &mut track, &mut false, &mut held, &[], 1, &mut |_| true).unwrap();
+        assert_eq!(next.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(0, true)], "the kept keyframe comes first");
+        let time = e.script.taken[1];
+        e.script.polls.push_back(out(&P, time));
+        let rest = flush_on(&mut e, &mut track, &mut false, &mut held, &mut |_| true).unwrap();
+        assert_eq!(rest.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(1, false)], "the kept packet does not come out twice");
+        // A drain whose poll fails after an output keeps that output for the next flush.
+        let mut e = PollFails { script: Script::default(), after: 1, fails: 1 };
+        let (mut track, mut held) = (h264_track(), Vec::new());
+        assert!(encode_on(&mut e, &mut track, &mut false, &mut held, &[], 0, &mut |_| true).unwrap().is_empty());
+        e.script.polls.push_back(out(&KEY, 0));
+        e.after = 1;
+        assert!(flush_on(&mut e, &mut track, &mut false, &mut held, &mut |_| true).is_err());
+        let rest = flush_on(&mut e, &mut track, &mut false, &mut held, &mut |_| true).unwrap();
+        assert_eq!(rest.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(0, true)]);
+        assert!(held.is_empty());
     }
 
     #[test]
