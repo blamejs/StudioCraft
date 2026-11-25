@@ -397,6 +397,8 @@ struct StreamData {
     /// The DMA-BUF buffers kept from the producer until the compositor has read their frames. The
     /// stream thread's wake callback shares them ([`read_stream`]).
     held: Rc<RefCell<HeldBuffers>>,
+    /// Set by the stream thread's wake callback when it asked for the memory formats.
+    left_gpu: Rc<Cell<bool>>,
     /// How many buffers the stream has.
     buffers: usize,
 }
@@ -406,6 +408,15 @@ impl StreamData {
     /// them calls another, so the buffers are always free here.
     fn held(&self) -> Option<std::cell::RefMut<'_, HeldBuffers>> {
         self.held.try_borrow_mut().ok()
+    }
+
+    /// After the wake callback asked for the memory formats, the stream no longer takes its
+    /// buffers as DMA-BUFs and does not offer DMA-BUF formats again. Each callback calls this first.
+    fn catch_up(&mut self) {
+        if self.left_gpu.take() {
+            self.dmabuf.set_format(None);
+            self.caps = None;
+        }
     }
 
     /// Stop offering DMA-BUFs and ask for the memory formats only, once. Buffers of the old format
@@ -445,6 +456,7 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
     let caps = if slot.gpu_requested() { craft_gpu_interop::dmabuf_caps() } else { None };
     let params = offered_params(caps.as_deref()).map_err(|_| pw::Error::CreationFailed)?;
     let held = Rc::new(RefCell::new(HeldBuffers::new()));
+    let left_gpu = Rc::new(Cell::new(false));
     let data = StreamData {
         slot: Arc::clone(slot),
         layout: None,
@@ -454,11 +466,13 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
         caps,
         dmabuf: DmabufStream::new(),
         held: Rc::clone(&held),
+        left_gpu: Rc::clone(&left_gpu),
         buffers: 0,
     };
     let _listener = stream
         .add_local_listener_with_user_data(data)
         .param_changed(|stream, data, id, param| {
+            data.catch_up();
             let Some(param) = param else { return };
             if id != spa::param::ParamType::Format.as_raw() {
                 return;
@@ -528,6 +542,7 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
             }
         })
         .process(|stream, data| {
+            data.catch_up();
             // The buffers whose frames the GPU has read, or whose frames were dropped undrawn, go
             // back to the producer.
             let released = data.dmabuf.released();
@@ -616,6 +631,8 @@ fn read_stream(node: u32, fd: OwnedFd, slot: &Arc<FrameSlot>, stop: PipeReader, 
                 && let Some(stream) = stream.upgrade()
             {
                 slot.set_on_gpu(false);
+                // The stream's callbacks stop taking DMA-BUFs ([`StreamData::catch_up`]).
+                left_gpu.set(true);
                 // The frame not taken yet is gone, so its buffer, and any other buffer whose frame
                 // was dropped undrawn, goes back now. A value of 0 gives back no buffer the GPU may
                 // still be reading; those go back with the next picture's callback.
@@ -776,6 +793,34 @@ mod tests {
         assert!(properties(&offered[2]).iter().all(|p| p.key != FormatProperties::VideoModifier.as_raw()));
         // Without caps the stream offers memory only.
         assert_eq!(offered_params(None).unwrap(), vec![format_param().unwrap()]);
+    }
+
+    #[test]
+    fn a_stream_woken_off_the_gpu_takes_no_more_dmabufs_and_offers_none_again() {
+        let device = craft_gpu_interop::AdapterId(7);
+        let left_gpu = Rc::new(Cell::new(false));
+        let mut data = StreamData {
+            slot: Arc::new(FrameSlot::default()),
+            layout: Some(Layout::Bgrx),
+            width: 2,
+            height: 2,
+            connected: true,
+            caps: Some(Arc::new(DmabufCaps { device, formats: vec![(DmabufFormat::Bgrx, vec![0])] })),
+            dmabuf: DmabufStream::new(),
+            held: Rc::new(RefCell::new(HeldBuffers::new())),
+            left_gpu: Rc::clone(&left_gpu),
+            buffers: 2,
+        };
+        data.dmabuf.set_format(Some((2, 2, DmabufLayout { format: DmabufFormat::Bgrx, modifier: 0 }, device)));
+        // Before a wake the stream keeps its DMA-BUFs.
+        data.catch_up();
+        assert!(data.dmabuf.active());
+        assert!(data.caps.is_some());
+        left_gpu.set(true);
+        data.catch_up();
+        assert!(!data.dmabuf.active(), "the buffers are no longer taken as DMA-BUFs");
+        assert!(data.caps.is_none(), "the stream does not offer DMA-BUF formats again");
+        assert!(!left_gpu.get());
     }
 
     #[test]
