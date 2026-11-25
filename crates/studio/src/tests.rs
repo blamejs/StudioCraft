@@ -660,6 +660,55 @@ fn a_destination_added_or_changed_while_the_stream_runs_starts_without_a_restart
 }
 
 #[test]
+fn destinations_added_and_removed_while_the_stream_runs_leave_no_records_behind() {
+    use studiocraft_model::{Destination, KeyRef};
+    use studiocraft_plugin::DestinationStatus;
+    // Only a broken build waits this long for a connection that should come at once.
+    const GUARD: Duration = Duration::from_secs(60);
+    // More than the 64 destinations a stream lists, so the added ones take the places of ended ones.
+    const ADDED: usize = 80;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let a_url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+    let a = connections(l);
+    // The added destinations' server closes each connection, so each one fails and ends at once.
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let closing = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+    std::thread::spawn(move || l.incoming().for_each(drop));
+    let mut p = small_profile();
+    p.stream.key = "profile-key".into();
+    p.stream.destinations = vec![Destination { id: "a".into(), server: a_url, key: KeyRef::Profile, ..Destination::default() }];
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    s.start_output(OutputKind::Streaming).unwrap();
+    let a_conn = a.recv_timeout(GUARD).expect("the destination connects at the start");
+    let status = |s: &Studio, id: &str| s.stream_destinations().into_iter().find(|d| d.id == id).map(|d| d.status);
+    for i in 0..ADDED {
+        let id = format!("added{i}");
+        let mut p = s.profile().clone();
+        p.stream.destinations.push(Destination { id: id.clone(), server: closing.clone(), key: KeyRef::Profile, ..Destination::default() });
+        s.set_profile(p).unwrap();
+        s.set_stream_destination(&id, true).unwrap();
+        s.set_stream_destination(&id, false).unwrap();
+        let waited = std::time::Instant::now();
+        while !matches!(status(&s, &id), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))) {
+            assert!(waited.elapsed() < GUARD, "`{id}` did not end: {:?}", status(&s, &id));
+            std::thread::yield_now();
+        }
+        let mut p = s.profile().clone();
+        p.stream.destinations.retain(|d| d.id != id);
+        s.set_profile(p).unwrap();
+    }
+    // Only the destinations the stream still lists keep their records.
+    let listed: Vec<String> = s.stream_destinations().into_iter().map(|d| d.id).collect();
+    assert!(listed.len() < ADDED, "{listed:?}");
+    for ids in s.outputs.stream_record_ids() {
+        assert!(ids.iter().all(|id| listed.iter().any(|l| l == id)), "records of destinations no longer listed: {ids:?}");
+        assert!(ids.contains(&"a") && ids.contains(&format!("added{}", ADDED - 1).as_str()), "{ids:?}");
+    }
+    drop(a_conn);
+    s.stop_output(OutputKind::Streaming);
+}
+
+#[test]
 fn a_streams_automatic_check_follows_its_profile_and_ends_with_it() {
     use studiocraft_model::{Destination, KeyRef};
     // Only a broken build waits this long for a connection that should come at once.

@@ -494,6 +494,9 @@ struct Dest {
     /// either reaches a thread that goes on or finds none.
     alive: AtomicBool,
     thread: Mutex<Option<JoinHandle<()>>>,
+    /// Times [`Dest::sending`] found `thread` locked and waited for it.
+    #[cfg(test)]
+    waits: AtomicU32,
 }
 
 impl Dest {
@@ -523,6 +526,8 @@ impl Dest {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
+            #[cfg(test)]
+            waits: AtomicU32::new(0),
         }
     }
 
@@ -682,8 +687,27 @@ impl Dest {
     /// clears `alive` with `thread` locked when it decides to end, so a thread that has not decided
     /// by then goes on sending, and the start that follows finds one that has decided ended.
     fn sending(&self) -> bool {
-        let _slot = lock(&self.thread);
+        let _slot = self.slot();
         self.running() && !self.stopping()
+    }
+
+    /// `thread`, locked.
+    #[cfg(not(test))]
+    fn slot(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+        lock(&self.thread)
+    }
+
+    /// `thread`, locked, counted in `waits` when it was locked already.
+    #[cfg(test)]
+    fn slot(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+        match self.thread.try_lock() {
+            Ok(slot) => slot,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.waits.fetch_add(1, Ordering::SeqCst);
+                lock(&self.thread)
+            }
+        }
     }
 
     /// Asks the thread to stop, and wakes it from a wait before a try again.

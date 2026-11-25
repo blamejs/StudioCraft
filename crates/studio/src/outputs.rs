@@ -428,6 +428,18 @@ impl Outputs {
         &self.stream_prints
     }
 
+    /// The ids of the keys, servers, names and fingerprints recorded for the stream's
+    /// destinations.
+    #[cfg(test)]
+    pub(crate) fn stream_record_ids(&self) -> [Vec<&str>; 4] {
+        [
+            self.stream_keys.keys().map(String::as_str).collect(),
+            self.stream_servers.keys().map(String::as_str).collect(),
+            self.stream_names.keys().map(String::as_str).collect(),
+            self.stream_prints.keys().map(String::as_str).collect(),
+        ]
+    }
+
     /// The running stream's status; `None` while no stream runs.
     pub(crate) fn stream_status(&self) -> Option<OutputStatus> {
         self.active.get(&OutputKind::Streaming).map(|a| a.instance.status())
@@ -1513,6 +1525,16 @@ impl Studio {
             self.outputs.stream_servers.insert(id.to_string(), server);
             self.outputs.stream_names.insert(id.to_string(), name);
             self.outputs.stream_prints.insert(id.to_string(), print);
+            // A destination added to a full stream takes the place of one that ended. The records
+            // of the destinations the stream no longer lists and the profile does not have are
+            // dropped.
+            let listed: Vec<String> = a.instance.destinations().into_iter().map(|d| d.id).collect();
+            let profile = &self.profile.stream.destinations;
+            let keep = |id: &String| listed.contains(id) || profile.iter().any(|d| &d.id == id);
+            self.outputs.stream_keys.retain(|id, _| keep(id));
+            self.outputs.stream_servers.retain(|id, _| keep(id));
+            self.outputs.stream_names.retain(|id, _| keep(id));
+            self.outputs.stream_prints.retain(|id, _| keep(id));
             return Ok(());
         }
         // A held key is looked up again, so one held after the stream started is used. Where a

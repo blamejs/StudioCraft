@@ -850,6 +850,24 @@ fn a_start_that_finds_its_thread_ending_takes_the_new_setup() {
     b.alive.store(true, Ordering::SeqCst);
     let applied = std::thread::scope(|s| {
         let start = s.spawn(|| out.start_destination_as(&setup("b", &c, "kc")));
+        // The start waits for the slot before it decides whether the thread sends. A start that
+        // decides without the slot ends while `b` still shows as running. GUARD only ends a test
+        // that would otherwise hang. The slot is let go before a failure, so the start can end.
+        let waited = Instant::now();
+        while b.waits.load(Ordering::SeqCst) == 0 {
+            let fault = if start.is_finished() {
+                Some("the start decided while the thread held its slot")
+            } else if waited.elapsed() >= GUARD {
+                Some("the start never waited for the thread's slot")
+            } else {
+                None
+            };
+            if let Some(fault) = fault {
+                drop(slot);
+                panic!("{fault}");
+            }
+            std::thread::yield_now();
+        }
         // The thread decides to end with its slot locked, as `ends` and `fail` do.
         b.alive.store(false, Ordering::SeqCst);
         drop(slot);
@@ -2124,7 +2142,7 @@ fn a_stopped_destination_that_gives_its_place_keeps_no_check() {
     let d1 = out.hub.find("d1").unwrap();
     assert!(set_up(&d1, Some("k"), Some(("rtmp://check.example.test/live", None))));
     check_after(&out.hub, &d1, &Failure::new(Cause::Refused, "refused"), &d1.setup());
-    looked.recv().unwrap();
+    looked.recv_timeout(GUARD).unwrap_or_else(|e| panic!("the check of d1 did not look up its server: {e}"));
     assert!(matches!(checks.state("Show", "d1"), Some(diagnose::CheckState::Running { .. })));
     // An added destination takes d1's place, and d1's check ends with it.
     out.hub.find_or_add("new", None).unwrap();
@@ -2705,8 +2723,11 @@ fn a_copy_whose_file_failed_leaves_its_place_to_a_destination() {
     let targets: Vec<Target> = (1..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
     let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
     let mut out = Streaming::start_copying(&job, targets, slow, "/videos/Stream.mkv".into(), open).unwrap();
-    // The copy's thread ends after its file fails to open, and its receiver goes with it.
+    // The copy's thread ends after its file fails to open, and its receiver goes with it. GUARD
+    // only ends a test that would otherwise hang.
+    let waited = Instant::now();
     while out.copy.as_ref().is_some_and(StreamCopy::subscribed) {
+        assert!(waited.elapsed() < GUARD, "the copy still holds its subscription after its file failed: {:?}", out.stream_copy());
         std::thread::yield_now();
     }
     assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("not opened")));
