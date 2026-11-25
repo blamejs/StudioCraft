@@ -583,7 +583,7 @@ impl Dest {
             Some(e) => format!("its video encoder stopped: {e}"),
             None => "its video encoder stopped".to_string(),
         };
-        Some((feed, Failure::new(Cause::Other, detail)))
+        Some((feed, Failure::new(Cause::Encoder, detail)))
     }
 
     /// Its setup now: the server, key and service from one change.
@@ -2174,7 +2174,7 @@ impl Streaming {
             let feed = match s.feed_for(d.target.encoder.as_ref()) {
                 Ok(feed) => feed,
                 Err(e) => {
-                    d.fail(Failure::new(Cause::Other, format!("its video encoder could not start: {e}")));
+                    d.fail(Failure::new(Cause::Encoder, format!("its video encoder could not start: {e}")));
                     continue;
                 }
             };

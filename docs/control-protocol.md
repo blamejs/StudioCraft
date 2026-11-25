@@ -758,6 +758,7 @@ when a route to the server returns.
 | `lost` | The connection was lost after the stream started. |
 | `bad_address` | The server address is not valid. |
 | `bad_key` | The stream key is not valid. |
+| `encoder` | The video encoder the destination runs for itself could not start or stopped; `error` holds the encoder's text. |
 | `other` | Anything else, including a refusal of `createStream` or of the stream after it started; `error` holds the server's code and description. |
 
 When no address of the server accepted the TCP connection, the destination also has `addresses`:
@@ -795,7 +796,7 @@ other encoder, and `hardware` while the stream's encoder is another, and change 
 stream's encoder is changed later, a destination left on `hardware` fails alone as the stream
 starts, and the other destinations start. An encoder of a destination's own that cannot start fails
 that destination alone, and one that stops while the stream runs fails its destinations with
-`cause` `other`. The other destinations go on. When every destination of the stream has then
+`cause` `encoder`. The other destinations go on. When every destination of the stream has then
 stopped or failed, the stream itself fails and ends, as it does when its last sending destination
 fails for another reason, and a destination can no longer be started in it. A destination with an
 encoder of its own can join a running stream only when the

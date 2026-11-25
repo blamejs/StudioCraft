@@ -479,6 +479,7 @@
 	the server's name could not be looked up	the server's name could not be looked up
 	the server's name does not exist; check the server address	the server's name does not exist; check the server address
 	the stream key is not valid	the stream key is not valid
+	its video encoder stopped or could not start; check its video encoder settings	its video encoder stopped or could not start; check its video encoder settings
 	This filter has no settings.	This filter has no settings.
 	this computer has no network route to the server addresses tried	this computer has no network route to the server addresses tried
 	this computer has no network route to this address	this computer has no network route to this address

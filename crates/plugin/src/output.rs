@@ -309,13 +309,15 @@ pub enum Cause {
     BadAddress,
     /// The stream key is not valid.
     BadKey,
+    /// The video encoder the destination runs for itself could not start or stopped.
+    Encoder,
     /// Anything else.
     Other,
 }
 
 impl Cause {
     /// Every cause, in the order of [`Cause::id`]'s list.
-    pub const ALL: [Cause; 20] = [
+    pub const ALL: [Cause; 21] = [
         Cause::NoRoute,
         Cause::LookupFailed,
         Cause::LookupNotFound,
@@ -335,6 +337,7 @@ impl Cause {
         Cause::Lost,
         Cause::BadAddress,
         Cause::BadKey,
+        Cause::Encoder,
         Cause::Other,
     ];
 
@@ -360,6 +363,7 @@ impl Cause {
             Cause::Lost => "lost",
             Cause::BadAddress => "bad_address",
             Cause::BadKey => "bad_key",
+            Cause::Encoder => "encoder",
             Cause::Other => "other",
         }
     }

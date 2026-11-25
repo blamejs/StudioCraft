@@ -1839,7 +1839,7 @@ fn an_encoder_end_after_a_stop_shows_the_destination_stopped() {
     let (a, _seen) = server(vec![Plan::Accept]);
     let mut out = Streaming::start_timed(&job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 }), vec![target("a", &a, "k")], quick()).unwrap();
     let d = Dest::new(named("b"), Arc::default(), None, Arc::clone(&out.hub.main));
-    let ended = || (Arc::clone(&out.hub.main), Failure::new(Cause::Other, "its video encoder stopped"));
+    let ended = || (Arc::clone(&out.hub.main), Failure::new(Cause::Encoder, "its video encoder stopped"));
     // Asked to stop while its thread read the encoder's end: the stop wins.
     d.stop.store(true, Ordering::SeqCst);
     assert!(d.fail_ended(&out.hub, ended()));
@@ -2953,8 +2953,10 @@ fn a_destination_whose_encoder_cannot_start_fails_alone() {
     starts_with_headers_and_a_keyframe(&media(&seen, 3));
     let DestinationStatus::Failed(b) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
     assert_eq!(b.detail, "its video encoder could not start: there is no video encoder `none-such` for a destination to run");
+    assert_eq!(b.cause, Cause::Encoder);
     let DestinationStatus::Failed(c) = until(&out, "c", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
     assert!(c.detail.contains("must be 100 to 200000 kbps, not 50"), "{}", c.detail);
+    assert_eq!(c.cause, Cause::Encoder);
     assert!(lock(&out.own).is_empty());
     media(&seen, 20);
     assert_eq!(until(&out, "a", |d| d.status == DestinationStatus::Live).status, DestinationStatus::Live);
@@ -3052,7 +3054,7 @@ fn a_destination_waiting_to_try_again_fails_when_its_own_encoder_stops() {
     let _ = lock(&out.own)[0].1.stop();
     let DestinationStatus::Failed(f) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
     assert!(f.detail.starts_with("its video encoder stopped"), "{}", f.detail);
-    assert_eq!(f.cause, Cause::Other);
+    assert_eq!(f.cause, Cause::Encoder);
     drop(feed);
     let _ = out.stop();
     until_closed(&seen);
@@ -3112,7 +3114,7 @@ fn a_destination_waiting_for_the_network_fails_when_its_own_encoder_stops() {
     let _ = lock(&out.own)[0].1.stop();
     let DestinationStatus::Failed(f) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
     assert!(f.detail.starts_with("its video encoder stopped"), "{}", f.detail);
-    assert_eq!(f.cause, Cause::Other);
+    assert_eq!(f.cause, Cause::Encoder);
     drop(feed);
     // Its only destination failed, so the stop reports why.
     let Err(PluginError::Failed(e)) = out.stop() else { panic!("the stream stopped without the failure") };

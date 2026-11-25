@@ -250,6 +250,7 @@ pub(crate) fn cause_text(cause: Cause) -> &'static str {
         Cause::Lost => tl!("the connection was lost"),
         Cause::BadAddress => tl!("the server address is not valid"),
         Cause::BadKey => tl!("the stream key is not valid"),
+        Cause::Encoder => tl!("its video encoder stopped or could not start; check its video encoder settings"),
         Cause::Other => tl!("the connection failed"),
     }
 }

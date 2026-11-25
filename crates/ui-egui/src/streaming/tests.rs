@@ -763,6 +763,11 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
     // Every cause has its own text.
     let texts: std::collections::HashSet<&str> = Cause::ALL.iter().map(|c| cause_text(*c)).collect();
     assert_eq!(texts.len(), Cause::ALL.len());
+    // A destination whose own encoder stopped says so, with the encoder's error on hover.
+    let ended = state("a", DestinationStatus::Failed(Failure::new(Cause::Encoder, "its video encoder stopped: out of memory")));
+    assert_eq!(status_text(&d, true, Some(&ended)).0, "Failed: its video encoder stopped or could not start; check its video encoder settings");
+    assert_eq!(status_detail(true, Some(&ended)).as_deref(), Some("its video encoder stopped: out of memory"));
+    assert_eq!(listed(&d, true, Some(&ended), false)["cause"], json!("encoder"));
 }
 
 #[test]
