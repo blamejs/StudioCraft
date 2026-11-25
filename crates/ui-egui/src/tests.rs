@@ -1384,6 +1384,8 @@ fn long_switcher_names_leave_the_readouts_whole_in_the_narrowest_window() {
     let long = |what: &str| format!("{what} {}", "w".repeat(99 - what.len()));
     a.named(Named::NewProfile, &long("Profile")).unwrap();
     a.named(Named::NewCollection, &long("Collection")).unwrap();
+    // The default docks match Classic, which the switcher would name instead of the saved layout.
+    run(&mut a, &ctx, "dock.sources", json!({})).unwrap();
     run(&mut a, &ctx, "dock.layout_save", json!({"name": long("Layout")})).unwrap();
     assert_eq!(a.studio().profile().name.chars().count(), 100);
     let size = egui::vec2(760.0, 480.0);
@@ -1399,16 +1401,20 @@ fn long_switcher_names_leave_the_readouts_whole_in_the_narrowest_window() {
     let (fps, dropped) = (member(" fps  "), member("dropped "));
     assert!(bar.contains_rect(fps) && bar.contains_rect(dropped), "{fps:?} {dropped:?} in {bar:?}");
     // The switchers are collected wherever they are drawn, so one pushed out of the bar fails below.
-    let mut drawn: Vec<(String, egui::Rect)> = tree
+    let mut drawn: Vec<(String, String, egui::Rect)> = tree
         .with_role(craft_ui::contract::Role::COMBO_BOX)
         .into_iter()
-        .filter_map(|k| Some((tree.name_of(k)?.to_string(), tree.bounds_of(k)?)))
-        .filter(|(name, _)| ["Profile", "Collection", "Layout"].contains(&name.as_str()))
+        .filter_map(|k| Some((tree.name_of(k)?.to_string(), tree.description_of(k).unwrap_or("").to_string(), tree.bounds_of(k)?)))
+        .filter(|(name, _, _)| ["Profile", "Collection", "Layout"].contains(&name.as_str()))
         .collect();
-    drawn.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
-    let names: Vec<&str> = drawn.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, ["Profile", "Collection", "Layout"], "{drawn:?}");
-    for (name, r) in &drawn {
+    drawn.sort_by(|a, b| a.2.left().total_cmp(&b.2.left()));
+    let shown: Vec<(&str, &str)> = drawn.iter().map(|(n, d, _)| (n.as_str(), d.as_str())).collect();
+    assert_eq!(
+        shown,
+        [("Profile", long("Profile").as_str()), ("Collection", long("Collection").as_str()), ("Layout", long("Layout").as_str())],
+        "{drawn:?}"
+    );
+    for (name, _, r) in &drawn {
         assert!(bar.contains_rect(*r), "{name} at {r:?} is outside {bar:?}");
         assert!(!r.intersects(fps) && !r.intersects(dropped), "{name} at {r:?} covers {fps:?} or {dropped:?}");
         assert!(r.width() < 300.0, "{name} is {} points wide", r.width());
