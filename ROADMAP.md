@@ -41,6 +41,7 @@ description in [docs/features.md](docs/features.md).
 - MKV files are recorded with the built-in H.264 and AAC encoders without ffmpeg ([Encoders](docs/features.md#encoders)).
 - MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
+- On Linux the virtual camera sends the program to a v4l2loopback device that other apps open as a camera ([Virtual camera](docs/features.md#virtual-camera)).
 - Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
 - Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 - One marker command marks the recording and the audio tracks at the same moment, and lists the session's markers ([Recording markers](docs/features.md#recording-markers)).
@@ -104,8 +105,8 @@ description in [docs/features.md](docs/features.md).
    carries, `craft-packet` shares each encoded packet by reference with every destination's
    bounded ring, and `craft-rtmp` publishes a stream to an RTMP or RTMPS server. The app does not
    use them yet, and a stream still goes to one server through `ffmpeg`. The list of
-   destinations, publishing from StudioCraft's own process and the virtual camera are still to
-   be built.
+   destinations and publishing from StudioCraft's own process are still to be built. The virtual
+   camera works on Linux; the Windows and macOS devices are still to be built.
 3. **Web build (partly done).** The browser editor in `apps/studiocraft-web` edits the scenes and
    sources of a scene collection file
    ([Scene collections in the browser](docs/features.md#scene-collections-in-the-browser)). Adding

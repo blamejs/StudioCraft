@@ -379,6 +379,18 @@ seconds, 20 by default) and the memory limit (32 to 16384 MB, 512 by default). S
 Replay Buffer and Save Replay can be given shortcuts in Settings › Hotkeys. While the buffer runs,
 the status bar shows REPLAY with the time it has run.
 
+### Virtual camera
+
+File › Virtual Camera sends the program at the output size and frame rate to a virtual camera
+device, which video call and other camera apps then list as a camera. It runs no encoder and sends
+no audio. On Linux the device is a v4l2loopback output device: load the module first, for example
+with `sudo modprobe v4l2loopback exclusive_caps=1`, and the first such device is used. Frames go
+out as YUYV when the device takes it, otherwise as NV12 or I420. When the device is busy, older
+frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
+runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
+a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
+and stop it.
+
 ### Audio tracks
 
 Settings › Output › Audio tracks writes each audio source and the program mix to their own 32-bit
@@ -923,7 +935,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer or the virtual camera. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

@@ -7,6 +7,7 @@
 //!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
+//! - [`virtual_camera`]: send the program to a device other apps open as a camera (Linux).
 //! - [`net`]: whether this computer has a network route, without sending anything.
 //!
 //! Capture is implemented on Windows, macOS and Linux. On Linux, displays and windows are chosen in
@@ -32,6 +33,7 @@ mod portal;
 mod pw_loop;
 mod screen_frames;
 pub mod shell;
+pub mod virtual_camera;
 pub mod window;
 
 /// Why an operating-system service failed.

@@ -371,7 +371,7 @@
 	Video	映像
 	Video bitrate	映像ビットレート
 	Video encoder	映像エンコーダー
-	Video settings can't change while recording, streaming or running the replay buffer.	録画中、配信中、リプレイバッファーの実行中は映像の設定を変更できません。
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	録画中、配信中、リプレイバッファーや仮想カメラの実行中は映像の設定を変更できません。
 	View	表示
 	waiting for a choice in the system picker	システムの選択画面での選択を待っています
 	waiting for the camera	カメラを待っています

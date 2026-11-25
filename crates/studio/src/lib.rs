@@ -19,6 +19,7 @@ mod pause;
 mod recording_markers;
 mod recordings;
 pub mod session_marker;
+mod virtual_camera;
 mod wiring;
 
 use std::collections::HashMap;
@@ -357,6 +358,8 @@ pub struct Studio {
     /// showed a picture with those pictures' sizes, when [`Studio::place_fit_later`] last looked.
     fit_seen: Option<(u64, usize, u64)>,
     outputs: outputs::Outputs,
+    /// The virtual camera, while it runs.
+    vcam: Option<virtual_camera::VirtualCamera>,
     /// What the go-live check keeps between calls: how each destination did on earlier streams,
     /// and the free space query.
     golive: golive::GoLive,
@@ -520,6 +523,7 @@ impl Studio {
             fit_layout: None,
             fit_seen: None,
             outputs: outputs::Outputs::default(),
+            vcam: None,
             golive: golive::GoLive::default(),
             notices: Vec::new(),
             scope_feed: None,
@@ -622,6 +626,9 @@ impl Studio {
                 RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
                 RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
                 RuntimeAction::SaveReplay => self.save_replay()?,
+                RuntimeAction::StartVirtualCamera => self.start_virtual_camera()?,
+                RuntimeAction::StopVirtualCamera => self.stop_virtual_camera(),
+                RuntimeAction::ToggleVirtualCamera => self.toggle_virtual_camera()?,
                 RuntimeAction::CaptionsStart { model, language } => result = self.start_captions(model, language)?,
                 RuntimeAction::CaptionsStop => self.stop_captions(),
                 RuntimeAction::CaptionsToggle => result = self.toggle_captions()?,
@@ -753,6 +760,7 @@ impl Studio {
         for id in events.removed {
             self.mixer.send(MixerCmd::RemoveOutput { id });
         }
+        self.poll_virtual_camera();
         self.sync_audio_tracks();
         self.sync_captions();
         self.sync_recording_markers();
@@ -786,6 +794,7 @@ impl Studio {
             for kind in [OutputKind::Recording, OutputKind::Streaming, OutputKind::Replay] {
                 self.stop_output(kind);
             }
+            self.stop_virtual_camera();
         }
         let Some(gpu) = &self.gpu else { return };
         let Some(loss) = &mut self.gpu_loss else { return };
@@ -822,13 +831,17 @@ impl Studio {
         self.gpu.as_ref()
     }
 
-    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor.
+    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor. A running
+    /// virtual camera keeps running when the compositor starts again, and stops when it does not.
     pub fn set_gpu(&mut self, gpu: Option<Gpu>) {
         self.recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
         self.gpu = gpu;
         self.gpu_loss = None;
         self.outputs.forget_hardware_tests();
         self.restart_video();
+        if self.video.is_none() {
+            self.stop_virtual_camera();
+        }
     }
 
     /// Bring sources, the mixer and the compositor in line with the collection, and start a
@@ -1543,6 +1556,9 @@ impl Studio {
         if video_changed && self.outputs.any_active() {
             return Err(StudioError::Output("stop recording, streaming and the replay buffer before changing the video settings".into()));
         }
+        if video_changed && self.vcam.is_some() {
+            return Err(StudioError::Output("stop the virtual camera before changing the video settings".into()));
+        }
         if let Ok(mut f) = self.ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
         }
@@ -1703,6 +1719,11 @@ impl Studio {
                 }
             }
             o.insert("replay".into(), replay);
+            let vcam = self.virtual_camera().map_or(
+                json!({"active": false}),
+                |s| json!({"active": true, "status": s.status_text(), "target": s.target, "seconds": s.elapsed.as_secs_f64(), "bytes": s.bytes}),
+            );
+            o.insert("virtual_camera".into(), vcam);
             o.insert("transitioning".into(), json!(self.transition.is_some()));
             let mut monitoring = json!({"device": self.profile.audio.monitoring_device, "playing": self.monitor.playing()});
             if let (Some(m), Some(f)) = (monitoring.as_object_mut(), self.monitor.format()) {
@@ -1732,7 +1753,8 @@ impl Studio {
     fn update_encode_target(&mut self) {
         let Some(v) = &self.video else { return };
         let vs = self.profile.video.sanitized();
-        let sinks = self.outputs.video_sinks();
+        let mut sinks = self.outputs.video_sinks();
+        sinks.extend(self.virtual_camera_sink());
         let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks });
         v.shared.encode.publish(target);
     }
@@ -1768,6 +1790,7 @@ impl Drop for Studio {
         self.stop_audio_tracks();
         let closed = self.clock.now();
         self.outputs.stop_all_blocking();
+        self.stop_virtual_camera();
         self.finish_audio_tracks_blocking();
         // Caption files of a recording that just stopped are written before the studio closes.
         self.finish_captions_blocking();

@@ -389,10 +389,12 @@
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
+	Start or Stop Virtual Camera	Start or Stop Virtual Camera
 	Start Recording	Start Recording
 	Start Replay Buffer	Start Replay Buffer
 	Start Stream Destination	Start Stream Destination
 	Start Streaming	Start Streaming
+	Start Virtual Camera	Start Virtual Camera
 	Starting…	Starting…
 	Stats	Stats
 	Status Bar	Status Bar
@@ -402,6 +404,7 @@
 	Stop Replay Buffer	Stop Replay Buffer
 	Stop Stream Destination	Stop Stream Destination
 	Stop Streaming	Stop Streaming
+	Stop Virtual Camera	Stop Virtual Camera
 	Stop this destination before removing it	Stop this destination before removing it
 	Stopped	Stopped
 	Stopping Replay Buffer…	Stopping Replay Buffer…
@@ -550,8 +553,9 @@
 	Video	Video
 	Video bitrate	Video bitrate
 	Video encoder	Video encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.
 	View	View
+	Virtual Camera	Virtual Camera
 	waiting for a choice in the system picker	waiting for a choice in the system picker
 	waiting for the camera	waiting for the camera
 	Waiting for the program picture…	Waiting for the program picture…
@@ -691,6 +695,8 @@
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended
 @msg	The stream stopped: {error}	The stream stopped: {error}
+@msg	The virtual camera could not be stopped: {error}	The virtual camera could not be stopped: {error}
+@msg	The virtual camera stopped: {error}	The virtual camera stopped: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
 	Record as its own track	Record as its own track
