@@ -361,6 +361,7 @@ mod tests {
             video_encoder_settings: Settings::new(),
             rate: studiocraft_plugin::RateControl::Quality(23),
             audio_bitrate_kbps: 128,
+            audio_streams: Vec::new(),
             ffmpeg: std::path::PathBuf::new(),
             stats: Arc::new(EncoderStats::default()),
             start: studiocraft_media::Tick(0),
