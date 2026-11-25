@@ -270,7 +270,7 @@ impl Importer {
             }
         }
         let Some(opened) = &mut self.opened else { return Ok(Drawn::Idle) };
-        let done = self.handoff.pending().map_or(0, |f| completed(opened, f));
+        let done = completed(opened, &self.handoff);
         // A frame whose texture the capture side took back is dropped, and the next one is tried.
         let frame = loop {
             match self.handoff.take_ready(done) {
@@ -423,23 +423,24 @@ fn hand_back(_opened: &Opened, _device: &wgpu::Device, _slot: usize) -> Option<w
     None
 }
 
-/// The ready value up to which `frame`'s ring has finished writing, without waiting.
+/// The ready value up to which the waiting frames' ring has finished writing, without waiting.
 #[cfg(windows)]
-fn completed(opened: &Opened, _frame: &SharedFrame) -> u64 {
+fn completed(opened: &Opened, _handoff: &Handoff) -> u64 {
     match &opened.raw {
         Raw::Dx12(r) => r.completed(),
         Raw::Vulkan(r) => r.completed(),
     }
 }
 
-/// On Linux: `frame`'s own value once its buffer has no pending write, else 0.
+/// On Linux: the newest waiting frame's own value once its buffer has no pending write, else the
+/// older frame's once its buffer has none, else 0.
 #[cfg(target_os = "linux")]
-fn completed(_opened: &Opened, frame: &SharedFrame) -> u64 {
-    crate::dmabuf::completed(frame)
+fn completed(_opened: &Opened, handoff: &Handoff) -> u64 {
+    crate::dmabuf::completed_in(handoff)
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn completed(_opened: &Opened, _frame: &SharedFrame) -> u64 {
+fn completed(_opened: &Opened, _handoff: &Handoff) -> u64 {
     0
 }
 

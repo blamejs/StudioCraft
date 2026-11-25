@@ -447,6 +447,13 @@ impl Handoff {
         self.pending.as_ref()
     }
 
+    /// The frame the newest one replaced, while it still waits.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn older(&self) -> Option<&SharedFrame> {
+        self.older.as_ref()
+    }
+
     /// Forget the waiting frames.
     pub fn clear(&mut self) {
         self.pending = None;

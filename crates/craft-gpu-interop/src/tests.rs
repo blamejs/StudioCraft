@@ -415,6 +415,31 @@ mod dmabuf {
     }
 
     #[test]
+    fn a_finished_dmabuf_frame_is_drawn_while_the_newer_buffer_is_written() {
+        let (old_reader, mut old_writer) = std::io::pipe().unwrap();
+        let (new_reader, mut new_writer) = std::io::pipe().unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(old_reader.as_raw_fd(), 0, 16).unwrap()));
+        assert!(ring.set_plane(1, DmabufPlane::duplicate(new_reader.as_raw_fd(), 0, 16).unwrap()));
+        let mut handoff = Handoff::default();
+        handoff.offer(frame(&ring, 0, 1));
+        handoff.offer(frame(&ring, 1, 2));
+        // Neither buffer is finished: both frames wait.
+        assert_eq!(crate::dmabuf::completed_in(&handoff), 0);
+        // The older buffer is finished and the newer one is not: the older frame is drawn and the
+        // newer one keeps waiting.
+        old_writer.write_all(&[1]).unwrap();
+        let done = crate::dmabuf::completed_in(&handoff);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(0));
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(2));
+        assert_eq!(crate::dmabuf::completed_in(&handoff), 0, "the older frame is taken once");
+        new_writer.write_all(&[1]).unwrap();
+        let done = crate::dmabuf::completed_in(&handoff);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(1));
+        assert_eq!(crate::dmabuf::completed_in(&Handoff::default()), 0, "nothing offered");
+    }
+
+    #[test]
     fn a_dmabuf_ring_has_a_slot_per_buffer_and_each_slot_gets_one_plane() {
         let (reader, _writer) = std::io::pipe().unwrap();
         let plane = || DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap();

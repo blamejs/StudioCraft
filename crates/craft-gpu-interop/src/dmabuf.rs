@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use crate::fallback::Fallback;
 use crate::ring::AdapterId;
 #[cfg(target_os = "linux")]
-use crate::ring::{SharedFrame, SharedRing};
+use crate::ring::{Handoff, SharedFrame, SharedRing};
 
 /// Buffers one stream format can have in a ring. A stream that hands over more starts a new ring.
 pub const MAX_BUFFERS: usize = 16;
@@ -297,6 +297,15 @@ impl<T> HoldQueue<T> {
 #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
 pub(crate) fn completed(frame: &SharedFrame) -> u64 {
     if frame.ring().plane(frame.slot()).is_some_and(DmabufPlane::ready) { frame.ready() } else { 0 }
+}
+
+/// The ready value at which the compositor may read a frame of `handoff`: the newest frame's value
+/// once its buffer has no pending write, else the older frame's once its own buffer has none, else
+/// 0, so both keep waiting.
+#[cfg(target_os = "linux")]
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) fn completed_in(handoff: &Handoff) -> u64 {
+    handoff.pending().into_iter().chain(handoff.older()).map(completed).find(|&ready| ready != 0).unwrap_or(0)
 }
 
 /// The capture side's record of one stream's DMA-BUF buffers: the format it negotiated, the ring
