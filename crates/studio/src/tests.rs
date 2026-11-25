@@ -2656,6 +2656,37 @@ mod pause_screen {
     }
 
     #[test]
+    fn the_status_reports_the_settings_the_running_pause_uses() {
+        let mut s = headless();
+        let given = json!({
+            "text": "Back in {time}", "zero_text": "Any moment now", "anchor": "bottom_right", "size_pct": 9,
+            "fit": "stretch", "background": "#10203040", "mute_scene": false
+        });
+        s.run("pause.start", &given).unwrap();
+        let (status, _) = s.run("pause.status", &json!({})).unwrap();
+        for key in ["text", "zero_text", "anchor", "size_pct", "fit", "background", "mute_scene"] {
+            assert_eq!(status[key], given[key], "{key}");
+        }
+        // A value given while paused shows in the status at once.
+        let (status, _) = s.run("pause.start", &json!({"anchor": "center", "size_pct": 3})).unwrap();
+        assert_eq!((&status["anchor"], &status["size_pct"], &status["text"]), (&json!("center"), &json!(3), &given["text"]));
+        s.run("pause.stop", &json!({})).unwrap();
+
+        // A pause that gives no values reports the profile's settings.
+        let profile = s.profile().pause.clone();
+        let (status, _) = s.run("pause.start", &json!({})).unwrap();
+        assert_eq!(status["text"], json!(profile.text));
+        assert_eq!(status["zero_text"], json!(profile.zero_text));
+        assert_eq!(status["anchor"], json!(profile.anchor.id()));
+        assert_eq!(status["size_pct"], json!(profile.size_pct));
+        assert_eq!(status["fit"], json!(profile.fit));
+        assert_eq!(status["background"], json!(profile.background));
+        assert_eq!(status["mute_scene"], json!(profile.mute_scene));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(s.run("pause.status", &json!({})).unwrap().0, json!({"paused": false}), "a resumed program reports no settings");
+    }
+
+    #[test]
     fn a_scene_switch_while_paused_changes_what_resuming_shows() {
         let (mut s, _) = with_a_scene_source();
         s.run("pause.start", &json!({})).unwrap();
