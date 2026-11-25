@@ -334,16 +334,24 @@ pub(crate) fn waiter() -> impl FnMut(bool) -> bool {
     }
 }
 
-/// Every output that is ready, appended to `out`, without waiting; whether there was one.
+/// The most outputs one [`collect_ready`] call takes. An encoder that still has an output ready
+/// after that many is an error.
+pub(crate) const MAX_READY: usize = 64;
+
+/// Every output that is ready, appended to `out`, without waiting; whether there was one. More
+/// than [`MAX_READY`] outputs in one call is an error; every output polled stays in `out`.
 pub(crate) fn collect_ready(e: &mut impl Engine, out: &mut Vec<Output>) -> Result<bool, String> {
-    let mut got = false;
+    let mut got = 0;
     loop {
         match e.poll()? {
             Polled::Output(o) => {
                 out.push(o);
-                got = true;
+                got += 1;
+                if got > MAX_READY {
+                    return Err(format!("the encoder returned more than {MAX_READY} outputs in a row"));
+                }
             }
-            Polled::Empty => return Ok(got),
+            Polled::Empty => return Ok(got > 0),
             Polled::Ended => return Err("the encoder ended its stream before it was drained".into()),
         }
     }

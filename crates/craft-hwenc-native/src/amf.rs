@@ -598,6 +598,22 @@ mod tests {
         assert!(amf_ffi::encode(&mut early, &[], 0, 1, &mut Vec::new(), &mut |_| true).is_err(), "an end before the drain");
     }
 
+    #[test]
+    fn an_encoder_that_keeps_returning_outputs_ends_the_call() {
+        let mut flood = Script::default();
+        flood.polls.extend((0..10_000).map(|t| out(&P, t)));
+        let mut got = Vec::new();
+        let r = amf_ffi::encode(&mut flood, &[], 0, 1, &mut got, &mut |_| true);
+        assert!(r.is_err_and(|why| why.contains("outputs in a row")));
+        assert_eq!(got.len(), amf_ffi::MAX_READY + 1, "every output polled is kept");
+        // Exactly the limit is fine.
+        let mut full = Script::default();
+        full.polls.extend((0..).take(amf_ffi::MAX_READY).map(|t| out(&P, t)));
+        let mut got = Vec::new();
+        assert!(amf_ffi::encode(&mut full, &[], 0, 1, &mut got, &mut |_| true).is_ok());
+        assert_eq!(got.len(), amf_ffi::MAX_READY);
+    }
+
     /// A scripted encoder whose polls never report the end of the stream.
     struct NeverEnds(Script);
 
