@@ -492,10 +492,11 @@ impl Mixer {
     /// them: no more fader moves than the fader queue holds, and no more other commands than the
     /// control queue holds. A full queue drops its oldest command, so a later push drops one of
     /// `cmds` only when they are more than their queue holds. Tap sets are not counted: the latest
-    /// replaces the one before.
+    /// replaces the one before. Balance and mono changes are not counted either: they go into no
+    /// queue.
     pub fn fits(&self, cmds: &[MixerCmd]) -> bool {
         let gains = cmds.iter().filter(|c| matches!(c, MixerCmd::Gain { .. })).count();
-        let control = cmds.iter().filter(|c| !matches!(c, MixerCmd::Gain { .. } | MixerCmd::Taps { .. })).count();
+        let control = cmds.iter().filter(|c| !matches!(c, MixerCmd::Gain { .. } | MixerCmd::Taps { .. } | MixerCmd::Channels { .. })).count();
         gains <= self.gains.capacity() && control <= self.control.capacity()
     }
 
@@ -1812,6 +1813,15 @@ mod tests {
         assert!(!mixer.fits(&moves(gains + 1).collect::<Vec<_>>()));
         assert!(!mixer.fits(&holds(CONTROL_QUEUE + 1).collect::<Vec<_>>()));
         assert!(mixer.fits(&[]));
+    }
+
+    /// Balance and mono changes go into no queue, so any number of them fits.
+    #[test]
+    fn balance_and_mono_changes_fit_in_any_number() {
+        let mixer = Mixer::detached();
+        let changes: Vec<_> = (0..CONTROL_QUEUE * 2).map(|_| MixerCmd::Channels { source: SourceId(1), balance: 0.5, mono: true }).collect();
+        assert!(mixer.fits(&changes));
+        assert!(mixer.fits(&changes.into_iter().chain((0..CONTROL_QUEUE).map(|_| MixerCmd::Hold(false))).collect::<Vec<_>>()));
     }
 
     /// The input lists a send that races the mixer leaves behind all go back to the sending thread.
