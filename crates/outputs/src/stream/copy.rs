@@ -11,13 +11,13 @@
 //! - A disk that falls more than the ring's length behind loses packets up to the next keyframe,
 //!   as a destination does; [`StreamCopyState::lost_packets`] counts them. The encoders, the
 //!   destinations and the other subscribers never wait for the copy.
-//! - A file that cannot be created or written stops the copy and keeps what was written. The
-//!   stream goes on.
+//! - A file that cannot be created or written stops the copy and keeps what was written. A file
+//!   that already holds data when the copy opens it is not written to. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
 //!   waits up to its limit for that, then leaves the file as it is; it plays up to its last whole
 //!   cluster.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,11 +50,15 @@ fn lost(s: &Stats) -> u64 {
     s.dropped_packets.saturating_add(s.skipped_packets).saturating_add(s.discarded_packets)
 }
 
-/// A new file at `path`, written through a 1 MiB buffer.
+/// The file at `path`, written through a 1 MiB buffer: the empty file reserved for the copy, or a
+/// new one when none is there. A file that already holds data is left as it is, and the copy fails.
 pub(crate) fn create(path: &Path) -> Open {
     let path = path.to_path_buf();
     Box::new(move || {
-        let file = File::create(&path)?;
+        let file = OpenOptions::new().write(true).create(true).truncate(false).open(&path)?;
+        if file.metadata()?.len() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already holds data", path.display())));
+        }
         Ok(Box::new(BufWriter::with_capacity(1 << 20, file)) as Box<dyn CopyFile>)
     })
 }

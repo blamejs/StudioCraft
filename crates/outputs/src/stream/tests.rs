@@ -2018,6 +2018,21 @@ fn a_copy_that_cannot_be_written_stops_alone() {
 }
 
 #[test]
+fn a_copy_leaves_a_file_that_already_holds_data_as_it_is() {
+    let path = temp_file("stream-copy-taken");
+    // The reserved empty file opens for writing.
+    std::fs::File::create(&path).unwrap();
+    assert!(copy::create(&path)().is_ok());
+    // A file put in its place that holds data is not opened, and keeps its data.
+    std::fs::write(&path, b"someone else's file").unwrap();
+    let err = copy::create(&path)().err().map(|e| e.to_string()).unwrap_or_default();
+    let kept = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    assert!(err.contains("already holds data"), "{err}");
+    assert_eq!(kept, b"someone else's file");
+}
+
+#[test]
 fn a_copy_needs_the_keyframe_interval_of_a_recording() {
     let (url, seen) = server(vec![Plan::Accept]);
     let opened = Arc::new(AtomicBool::new(false));
