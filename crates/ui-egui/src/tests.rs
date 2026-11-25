@@ -2314,6 +2314,32 @@ fn set_up_puts_studio_mode_back_as_it_was_before_live() {
 }
 
 #[test]
+fn live_chosen_again_after_studio_mode_went_off_and_on_keeps_the_mode_it_is_chosen_in() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let on = |a: &StudioApp| a.studio().engine().studio_mode();
+    // Off before Live, turned off and on again on Live, a dock moved, and Live chosen again with
+    // Studio Mode on: Set up leaves it on.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert!(on(&a));
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was last chosen");
+    // Off before Live and on without a break through a moved dock: Live chosen again keeps the
+    // mode from before the first Live, and Set up turns it off.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    assert!(!on(&a));
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a), "Studio Mode was off before the first Live");
+}
+
+#[test]
 fn view_side_keeps_the_shown_side_and_the_bar_groups_and_refuses_unknown_sides() {
     let mut a = app();
     let ctx = crate::test_context();

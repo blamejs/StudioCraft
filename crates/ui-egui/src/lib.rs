@@ -300,6 +300,9 @@ pub struct StudioApp {
     /// Whether Studio Mode was on when Live was chosen with the switch (`view.side`), until Set up
     /// is chosen and puts it back; `None` when Live has not been chosen since.
     live_from: Option<bool>,
+    /// Whether Studio Mode was seen off while `live_from` held a mode; the next Live then saves
+    /// the mode it is chosen in.
+    live_mode_broken: bool,
     frames: u64,
     /// Where the editable view was drawn last: its rectangle and screen points per canvas pixel.
     last_view: Option<(egui::Rect, f32)>,
@@ -453,6 +456,7 @@ impl StudioApp {
             changed_at: None,
             fullscreen: false,
             live_from: None,
+            live_mode_broken: false,
             frames: 0,
             last_view: None,
             dock_rects: Vec::with_capacity(control::DOCK_NAMES.len()),
@@ -845,6 +849,7 @@ impl StudioApp {
     /// notice in the interface language and returned in English.
     pub fn perform(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, String> {
         let r = if commands::is_ui_command(&cmd.id) { self.ui_command(ctx, cmd) } else { self.engine_command(ctx, cmd) };
+        self.note_studio_mode();
         r.map_err(|e| {
             let english = e.english();
             self.notify(e, true);
@@ -1692,6 +1697,7 @@ impl StudioApp {
         if shown == Some(side) {
             if side == output_bar::Side::SetUp {
                 self.live_from = None;
+                self.live_mode_broken = false;
             }
             return Ok(json!({"side": side.name(), "changed": false, "studio_mode": studio_mode}));
         }
@@ -1706,19 +1712,28 @@ impl StudioApp {
         }
         match side {
             // Live chosen again keeps the mode from before the first Live while Studio Mode stayed
-            // on, and takes off when it was turned off since. Live chosen while Set up is in force
-            // takes the mode it is chosen in.
+            // on, and takes the mode it is chosen in when Studio Mode was turned off since. Live
+            // chosen while Set up is in force takes the mode it is chosen in.
             output_bar::Side::Live => {
-                if !studio_mode || self.live_from.is_none() || shown == Some(output_bar::Side::SetUp) {
+                if !studio_mode || self.live_mode_broken || self.live_from.is_none() || shown == Some(output_bar::Side::SetUp) {
                     self.live_from = Some(studio_mode);
                 }
             }
             output_bar::Side::SetUp => self.live_from = None,
         }
+        self.live_mode_broken = false;
         if !arranged {
             self.set_docks(store::Docks { controls: now.controls, transitions: now.transitions, ..layout.docks });
         }
         Ok(json!({"side": side.name(), "changed": true, "studio_mode": want}))
+    }
+
+    /// Note that Studio Mode is off while Live holds a saved mode, so the next Live saves the
+    /// mode it is chosen in.
+    fn note_studio_mode(&mut self) {
+        if self.live_from.is_some() && !self.studio.engine().studio_mode() {
+            self.live_mode_broken = true;
+        }
     }
 
     /// Save the current docks as the layout `name`; whether a layout with that name was replaced.
@@ -1854,6 +1869,7 @@ impl StudioApp {
         self.asked_pictures = None;
         // The new collection opens with Studio Mode off, so Set up has no earlier mode to restore.
         self.live_from = None;
+        self.live_mode_broken = false;
         self.studio.mark_saved();
         self.collection_on_disk = true;
         self.selected = None;
@@ -2848,6 +2864,7 @@ impl StudioApp {
         if ctx.current_pass_index() == 0 {
             self.frames += 1;
         }
+        self.note_studio_mode();
         self.before(&ctx);
         self.dialog_answers(&ctx);
         let background = theme::with_root(&ctx, |cx| theme::color(cx, cx.tokens.color.surface.background));
