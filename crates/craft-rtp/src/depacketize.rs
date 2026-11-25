@@ -22,13 +22,16 @@ pub struct AacConfig {
     /// Samples per access unit, for the timestamps of several units in one packet: 1024 for AAC
     /// LC.
     pub frame_samples: u32,
+    /// Whether an access unit may be split over several packets: `false` in the AAC-lbr mode
+    /// (RFC 3640 section 3.3.5), where a fragment is refused.
+    pub fragments: bool,
 }
 
 impl AacConfig {
-    /// The AAC-hbr mode: 13, 3 and 3 bits, 1024 samples per unit.
-    pub const HBR: AacConfig = AacConfig { size_length: 13, index_length: 3, index_delta_length: 3, frame_samples: 1024 };
-    /// The AAC-lbr mode: 6, 2 and 2 bits, 1024 samples per unit.
-    pub const LBR: AacConfig = AacConfig { size_length: 6, index_length: 2, index_delta_length: 2, frame_samples: 1024 };
+    /// The AAC-hbr mode: 13, 3 and 3 bits, 1024 samples per unit, units in fragments allowed.
+    pub const HBR: AacConfig = AacConfig { size_length: 13, index_length: 3, index_delta_length: 3, frame_samples: 1024, fragments: true };
+    /// The AAC-lbr mode: 6, 2 and 2 bits, 1024 samples per unit, no fragments.
+    pub const LBR: AacConfig = AacConfig { size_length: 6, index_length: 2, index_delta_length: 2, frame_samples: 1024, fragments: false };
 }
 
 /// The payload format of a stream.
@@ -96,11 +99,12 @@ pub struct Depacketizer {
     open: bool,
     /// H.264: the NAL unit header of the open FU-A fragment run.
     fu_header: u8,
-    /// H.264: whether the frame's first slice has a `first_mb_in_slice` of 0, once a slice came.
-    first_slice: Option<bool>,
-    /// H.264: the open FU-A fragment run is the frame's first slice and none of its body bytes
-    /// has come yet.
+    /// H.264: a slice of the frame has a `first_mb_in_slice` of 0.
+    starts: bool,
+    /// H.264: the open FU-A fragment run is a slice and none of its body bytes has come yet.
     slice_pending: bool,
+    /// H.264: a body byte of the open FU-A fragment run has come.
+    fu_body: bool,
     /// AAC: the size of the access unit whose fragments are being joined.
     aac_size: Option<usize>,
     /// AAC: the AU-Index of the access unit whose fragments are being joined.
@@ -136,8 +140,9 @@ impl Depacketizer {
             need_key: codec.is_video(),
             open: false,
             fu_header: 0,
-            first_slice: None,
+            starts: false,
             slice_pending: false,
+            fu_body: false,
             aac_size: None,
             aac_index: 0,
             stats: DepacketizerStats::default(),
@@ -211,6 +216,21 @@ impl Depacketizer {
         }
     }
 
+    /// Takes a sender that started again, which the jitter buffer reports as
+    /// [`Event::Restart`](crate::Event::Restart): the frame being built is dropped and counted,
+    /// video waits for the next key frame, and the next payload starts a new frame whatever its
+    /// timestamp.
+    pub fn restart(&mut self) {
+        let building = if self.codec.is_video() { self.timestamp.is_some() } else { self.aac_size.is_some() };
+        if building {
+            self.stats.dropped += 1;
+        }
+        if self.codec.is_video() {
+            self.need_key = true;
+        }
+        self.reset();
+    }
+
     /// `true` while video waits for a key frame.
     pub fn wants_key_frame(&self) -> bool {
         self.need_key
@@ -227,15 +247,17 @@ impl Depacketizer {
         self.key = false;
         self.broken = false;
         self.open = false;
-        self.first_slice = None;
+        self.starts = false;
         self.slice_pending = false;
+        self.fu_body = false;
         self.aac_size = None;
         self.aac_index = 0;
     }
 
     /// Ends the video frame being built and gives it out unless it is broken or video waits for a
-    /// key frame and this is not one. While video waits, an H.264 key frame whose first slice does
-    /// not start at macroblock 0 lost its start and is dropped too.
+    /// key frame and this is not one. While video waits, an H.264 key frame none of whose slices
+    /// starts at macroblock 0 lost its start and is dropped too. The slices may come in any order
+    /// (RFC 6184 section 7.1).
     fn finish(&mut self, emit: &mut impl FnMut(Frame<'_>)) {
         let Some(timestamp) = self.timestamp else { return };
         // A fragmented H.264 NAL unit that never ended, or a VP8 frame whose start never came.
@@ -248,7 +270,7 @@ impl Depacketizer {
         if self.broken {
             self.need_key = true;
         }
-        let starts = self.codec != Codec::H264 || self.first_slice == Some(true);
+        let starts = self.codec != Codec::H264 || self.starts;
         if self.broken || self.buf.is_empty() || (self.need_key && !(self.key && starts)) {
             self.stats.dropped += 1;
         } else {
@@ -275,14 +297,18 @@ impl Depacketizer {
         if header & 0x80 != 0 {
             return Err(Error::Invalid("an H.264 NAL unit has the forbidden bit set"));
         }
-        self.saw_nal(header, nal.get(1).copied(), false);
+        if nal.len() == 1 && is_slice(header) {
+            return Err(Error::Invalid("an H.264 slice holds no slice data"));
+        }
+        self.saw_nal(header, nal.get(1).copied());
         self.append(&[&START_CODE, nal])
     }
 
     /// Notes a NAL unit with `header` whose next byte is `next`: an IDR slice makes the frame a
-    /// key frame, and the first slice says whether the frame starts at its first macroblock. With
-    /// `wait`, a first slice without a next byte leaves that open until a later fragment brings one.
-    fn saw_nal(&mut self, header: u8, next: Option<u8>, wait: bool) {
+    /// key frame, and a slice that starts at the first macroblock makes it start. A slice without
+    /// a next byte, the start of a FU-A fragment run, leaves that open until a later fragment
+    /// brings one.
+    fn saw_nal(&mut self, header: u8, next: Option<u8>) {
         let nal_type = header & 0x1F;
         if nal_type == 5 {
             self.key = true;
@@ -291,10 +317,10 @@ impl Depacketizer {
         // Coded slices and slice data partition A start with the slice header, whose first field,
         // first_mb_in_slice, is an Exp-Golomb code: 0 is the single bit 1 (H.264 sections 7.3.3
         // and 9.1).
-        if matches!(nal_type, 1 | 2 | 5) && self.first_slice.is_none() {
+        if matches!(nal_type, 1 | 2 | 5) {
             match next {
-                None if wait => self.slice_pending = true,
-                _ => self.first_slice = Some(next.is_some_and(|b| b & 0x80 != 0)),
+                Some(b) => self.starts |= b & 0x80 != 0,
+                None => self.slice_pending = true,
             }
         }
     }
@@ -361,9 +387,10 @@ impl Depacketizer {
                     }
                     // RFC 6184 section 5.8 allows a FU payload of no bytes, so the slice header
                     // may come in a later fragment.
-                    self.saw_nal(header, data.first().copied(), true);
+                    self.saw_nal(header, data.first().copied());
                     self.append(&[&START_CODE, &[header], data])?;
                     self.fu_header = header;
+                    self.fu_body = !data.is_empty();
                     self.open = true;
                 } else if !self.open {
                     // The start fragment was lost: the NAL unit cannot be rebuilt.
@@ -373,18 +400,19 @@ impl Depacketizer {
                     return Err(Error::Invalid("a FU-A fragment does not continue the NAL unit before it"));
                 } else {
                     self.append(&[data])?;
-                    if self.slice_pending {
-                        if let Some(&b) = data.first() {
-                            self.first_slice = Some(b & 0x80 != 0);
-                            self.slice_pending = false;
-                        } else if end {
-                            // A slice with no slice header does not start the frame.
-                            self.first_slice = Some(false);
+                    if let Some(&b) = data.first() {
+                        if self.slice_pending {
+                            self.starts |= b & 0x80 != 0;
                             self.slice_pending = false;
                         }
+                        self.fu_body = true;
                     }
                     if end {
                         self.open = false;
+                        self.slice_pending = false;
+                        if !self.fu_body && is_slice(header) {
+                            return Err(Error::Invalid("an H.264 slice holds no slice data"));
+                        }
                     }
                 }
                 Ok(())
@@ -453,6 +481,12 @@ impl Depacketizer {
             // The unit being joined, or the first unit the packet holds, is dropped once.
             self.stats.dropped += 1;
             self.reset();
+            if !marker {
+                // RFC 3640 section 3.1: more fragments of the unit follow a packet without the
+                // marker bit. They are dropped with it, up to the marker or the next timestamp.
+                self.timestamp = Some(timestamp);
+                self.broken = true;
+            }
         }
         r
     }
@@ -513,6 +547,9 @@ impl Depacketizer {
                 if marker {
                     return Err(Error::Invalid("an AAC access unit is longer than its packet"));
                 }
+                if !c.fragments {
+                    return Err(Error::Invalid("an AAC access unit is fragmented in a mode without fragments"));
+                }
                 self.buf.clear();
                 self.append(&[data])?;
                 self.aac_size = Some(size);
@@ -528,6 +565,10 @@ impl Depacketizer {
         if at != data.len() {
             return Err(Error::Invalid("the AAC access units do not fill the packet"));
         }
+        // RFC 3640 section 3.1: a packet of complete access units has the M bit set.
+        if !marker {
+            return Err(Error::Invalid("a packet of complete AAC access units does not have the marker bit"));
+        }
         let mut reader = Bits { data: headers, at: 0 };
         let mut at = 0usize;
         for i in 0..units {
@@ -541,6 +582,12 @@ impl Depacketizer {
         }
         Ok(())
     }
+}
+
+/// Whether the NAL unit with `header` is a coded slice or a slice data partition (types 1 to 5),
+/// which holds more than its header.
+fn is_slice(header: u8) -> bool {
+    matches!(header & 0x1F, 1..=5)
 }
 
 /// Reads big-endian bit fields.

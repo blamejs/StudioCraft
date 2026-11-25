@@ -166,7 +166,7 @@ proptest! {
             while let Some(e) = jb.pop(now) {
                 match e {
                     Event::Packet(r) => released.push(r.sequence.wrapping_sub(start)),
-                    Event::Gap { missing } => gaps += missing,
+                    Event::Gap { missing } | Event::Restart { missing } => gaps += missing,
                 }
             }
             let seq = start.wrapping_add(offset);
@@ -181,7 +181,7 @@ proptest! {
                     prop_assert_eq!(r.payload, &[r.sequence.wrapping_sub(start) as u8][..]);
                     released.push(r.sequence.wrapping_sub(start));
                 }
-                Event::Gap { missing } => gaps += missing,
+                Event::Gap { missing } | Event::Restart { missing } => gaps += missing,
             }
         }
         prop_assert_eq!(jb.held(), 0);

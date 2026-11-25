@@ -403,18 +403,114 @@ fn h264_an_empty_fu_a_start_fragment_takes_the_first_slice_from_the_next_fragmen
     assert_eq!(frames, [Got { timestamp: 1, key: true, data: annexb(&[IDR]) }]);
     assert!(!d.wants_key_frame());
 
-    // A first slice whose header, read from the later fragment, does not start at macroblock 0.
+    // A slice whose header, read from the later fragment, does not start at macroblock 0.
     let mut d = Depacketizer::new(Codec::H264).unwrap();
-    let (frames, _) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, false, &[0x7C, 0x45, 0x40, 0x11]), (1, true, IDR)]);
+    let (frames, _) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, true, &[0x7C, 0x45, 0x40, 0x11])]);
     assert_eq!(frames, []);
     assert!(d.wants_key_frame());
 
-    // A fragment run with no body byte at all does not start the frame, and the slice after it
-    // does not decide for it.
+    // A fragment run with no body byte at all is refused, and the slice after it does not save
+    // the frame.
     let mut d = Depacketizer::new(Codec::H264).unwrap();
     let (frames, _) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, false, &[0x7C, 0x45]), (1, true, IDR)]);
     assert_eq!(frames, []);
     assert!(d.wants_key_frame());
+}
+
+#[test]
+fn h264_after_a_gap_an_idr_whose_slices_come_in_another_order_starts_video() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR)]);
+    d.lost();
+    // RFC 6184 section 7.1: with arbitrary slice order, the slice at macroblock 0 may come second.
+    let (frames, errors) = run(&mut d, &[(2, false, IDR_SECOND_SLICE), (2, true, IDR)]);
+    assert_eq!(errors, []);
+    assert_eq!(frames, [Got { timestamp: 2, key: true, data: annexb(&[IDR_SECOND_SLICE, IDR]) }]);
+    assert!(!d.wants_key_frame());
+}
+
+#[test]
+fn h264_slices_without_slice_data_are_refused() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR)]);
+    // A slice of only its NAL unit header.
+    let (frames, errors) = run(&mut d, &[(2, true, &[0x41])]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("an H.264 slice holds no slice data")]);
+    // A FU-A run whose start and end fragments both have no body.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR)]);
+    let (frames, errors) = run(&mut d, &[(2, false, &[0x5C, 0x81]), (2, true, &[0x5C, 0x41])]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("an H.264 slice holds no slice data")]);
+    // Empty fragments of a run that has a body are kept, and so is a NAL unit that is only its
+    // header and is not a slice, such as the end of a sequence.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    let (frames, errors) =
+        run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, false, &[0x7C, 0x05, 0x88, 0x84]), (1, false, &[0x7C, 0x45]), (1, true, &[0x0A])]);
+    assert_eq!(errors, []);
+    assert_eq!(frames, [Got { timestamp: 1, key: true, data: annexb(&[&[0x65, 0x88, 0x84], &[0x0A]]) }]);
+}
+
+#[test]
+fn h264_a_restart_does_not_keep_the_old_frame_timestamp() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR), (5, false, IDR)]);
+    // The sender started again, and its first key frame happens to have the same timestamp.
+    d.restart();
+    assert!(d.wants_key_frame());
+    let (frames, _) = run(&mut d, &[(5, true, IDR)]);
+    assert_eq!(frames, [Got { timestamp: 5, key: true, data: annexb(&[IDR]) }]);
+    // The frame cut off by the restart is counted once.
+    assert_eq!(d.stats().dropped, 1);
+}
+
+#[test]
+fn aac_a_rejected_fragment_drops_the_rest_of_its_unit_once() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::HBR)).unwrap();
+    let a = aac_hbr(&[&[1, 2]], Some(6));
+    let mut b = aac_hbr(&[&[3, 4]], Some(6));
+    // The AU-Index of the middle fragment is 1.
+    b[3] |= 1;
+    let c = aac_hbr(&[&[5, 6]], Some(6));
+    let (frames, errors) = run(&mut d, &[(0, false, &a), (0, false, &b), (0, true, &c)]);
+    assert_eq!(frames, []);
+    assert_eq!(
+        errors,
+        [
+            Error::Invalid("an AAC fragment does not continue the access unit before it"),
+            Error::Invalid("an AAC fragment belongs to an access unit that was lost"),
+        ]
+    );
+    assert_eq!(d.stats().dropped, 1);
+    // The next unit reads as usual.
+    let (frames, _) = run(&mut d, &[(1024, true, &aac_hbr(&[&[7]], None))]);
+    assert_eq!(frames.len(), 1);
+}
+
+#[test]
+fn aac_lbr_units_are_not_fragmented() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::LBR)).unwrap();
+    // One 8-bit AU-header of size 4, and two bytes of the unit in each packet.
+    let (frames, errors) = run(&mut d, &[(0, false, &[0, 8, 4 << 2, 1, 2]), (0, true, &[0, 8, 4 << 2, 3, 4])]);
+    assert_eq!(frames, []);
+    assert_eq!(
+        errors,
+        [
+            Error::Invalid("an AAC access unit is fragmented in a mode without fragments"),
+            Error::Invalid("an AAC fragment belongs to an access unit that was lost"),
+        ]
+    );
+    assert_eq!(d.stats().dropped, 1);
+}
+
+#[test]
+fn aac_a_packet_of_complete_units_has_the_marker_bit() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::HBR)).unwrap();
+    let (frames, errors) = run(&mut d, &[(0, false, &aac_hbr(&[&[1, 2]], None))]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("a packet of complete AAC access units does not have the marker bit")]);
+    assert_eq!(d.stats().dropped, 1);
 }
 
 #[test]

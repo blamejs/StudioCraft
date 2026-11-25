@@ -16,6 +16,7 @@ fn pkt(sequence: u16, timestamp: u32) -> Packet<'static> {
 enum Out {
     P(u16),
     Gap(u64),
+    Restart(u64),
 }
 
 fn drain(jb: &mut JitterBuffer, now: Duration) -> Vec<Out> {
@@ -24,6 +25,7 @@ fn drain(jb: &mut JitterBuffer, now: Duration) -> Vec<Out> {
         out.push(match e {
             Event::Packet(r) => Out::P(r.sequence),
             Event::Gap { missing } => Out::Gap(missing),
+            Event::Restart { missing } => Out::Restart(missing),
         });
     }
     out
@@ -177,7 +179,8 @@ fn a_sender_that_starts_again_is_followed_after_two_packets_in_sequence() {
     assert_eq!(jb.push(&pkt(40_000, 0), ms(3)), Push::Stray);
     assert_eq!(jb.push(&pkt(40_001, 0), ms(4)), Push::Restarted);
     assert_eq!(jb.push(&pkt(40_002, 0), ms(4)), Push::Stored);
-    assert_eq!(drain(&mut jb, ms(100)), [Out::Gap(3), Out::P(40_001), Out::P(40_002)]);
+    // The restart is its own event, so a depacketizer does not keep the old frame's timestamp.
+    assert_eq!(drain(&mut jb, ms(100)), [Out::Restart(3), Out::P(40_001), Out::P(40_002)]);
     let s = jb.stats();
     assert_eq!((s.stray, s.restarts, s.dropped), (2, 1, 3));
     // The report counts from the new start.
@@ -293,6 +296,51 @@ fn small_reordered_packets_do_not_keep_large_buffers_past_the_byte_limit() {
         jb.push(&Packet::new(96, s + 50, 0, 7, false, &[1]), t);
         assert!(jb.held_capacity() <= 1000, "{} bytes allocated for {} held", jb.held_capacity(), jb.bytes());
     }
+    // The one-byte packets fit, so none of them was dropped to stay within the limit.
+    let released: Vec<Out> = drain(&mut jb, ms(100)).into_iter().filter(|o| matches!(o, Out::P(_))).collect();
+    assert_eq!(released, (51..=70).map(Out::P).collect::<Vec<_>>());
+    assert_eq!(jb.stats().dropped, 0);
+}
+
+#[test]
+fn a_late_packet_is_measured_for_the_jitter() {
+    // A 1 kHz clock. Sequence 2 arrives after it was given up on, 80 ms after its timestamp
+    // against 0 ms for the others: a transit change of 80 ticks, so the estimate is 80 / 16.
+    let mut jb = JitterBuffer::new(Config::new(1000)).unwrap();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    jb.push(&pkt(3, 20), ms(20));
+    assert_eq!(drain(&mut jb, ms(80)), [Out::P(1), Out::Gap(1), Out::P(3)]);
+    assert_eq!(jb.push(&pkt(2, 10), ms(90)), Push::Late);
+    assert_eq!(jb.stats().jitter, 5);
+    assert_eq!(jb.report_block(1, None, ms(90)).unwrap().jitter, 5);
+}
+
+#[test]
+fn the_span_limit_counts_from_the_packet_that_arrived_first() {
+    let mut jb = JitterBuffer::new(Config { max_span: ms(100), ..Config::new(90_000) }).unwrap();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    assert_eq!(drain(&mut jb, ms(60)), [Out::P(1)]);
+    // Sequence 3 arrives before sequence 2, and is 139 ms old when sequence 4 arrives.
+    jb.push(&pkt(3, 0), ms(61));
+    jb.push(&pkt(2, 0), ms(150));
+    assert_eq!(jb.held(), 2);
+    jb.push(&pkt(4, 0), ms(200));
+    // Sequences 2 and 3 are dropped in sequence order.
+    assert_eq!(jb.held(), 1);
+    assert_eq!(jb.stats().dropped, 2);
+    assert_eq!(drain(&mut jb, ms(300)), [Out::Gap(2), Out::P(4)]);
+}
+
+#[test]
+fn the_span_limit_gives_up_on_a_long_hole_at_once() {
+    let mut jb = JitterBuffer::new(Config { max_span: ms(100), ..Config::new(90_000) }).unwrap();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    assert_eq!(drain(&mut jb, ms(60)), [Out::P(1)]);
+    jb.push(&pkt(2999, 0), ms(61));
+    jb.push(&pkt(3000, 0), ms(200));
+    let s = jb.stats();
+    assert_eq!((s.missing, s.dropped), (2997, 1));
+    assert_eq!(drain(&mut jb, ms(300)), [Out::Gap(2998), Out::P(3000)]);
 }
 
 #[test]

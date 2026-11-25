@@ -75,7 +75,7 @@ pub enum Push {
     /// taken to have started again.
     Stray,
     /// The packet followed a stray one in sequence, so the buffer dropped what it held and
-    /// started again from this packet, which it holds. The next event is a gap.
+    /// started again from this packet, which it holds. The next event is [`Event::Restart`].
     Restarted,
     /// The payload is larger than [`Config::max_bytes`] and was not copied. The packet keeps its
     /// place in sequence, counts as received in the report block and is not listed for a NACK,
@@ -107,10 +107,19 @@ pub enum Event<'a> {
     /// The next packet in sequence.
     Packet(Released<'a>),
     /// The stream continues after a break: `missing` sequence numbers did not arrive in time or
-    /// were dropped, or the sender started again (then `missing` counts the packets dropped and
-    /// may be 0). A depacketizer drops the frame it is building.
+    /// were dropped. A depacketizer drops the frame it is building, with
+    /// [`Depacketizer::lost`](crate::Depacketizer::lost).
     Gap {
         /// Sequence numbers skipped.
+        missing: u64,
+    },
+    /// The sender started again ([`Push::Restarted`]), and the packets after this event are its
+    /// new stream. A depacketizer drops the frame it is building and starts the next one from the
+    /// next packet whatever its timestamp, with
+    /// [`Depacketizer::restart`](crate::Depacketizer::restart).
+    Restart {
+        /// Sequence numbers skipped: the packets dropped, which may be 0, and any sequence numbers
+        /// given up on before the restart that no event reported yet.
         missing: u64,
     },
 }
@@ -199,7 +208,12 @@ pub struct JitterBuffer {
     /// The capacity of the buffers of the packets held, at least `bytes`. It is kept within
     /// [`Config::max_bytes`].
     held_bytes: usize,
+    /// No packet held arrived before this time, while one is held. It may be earlier than the
+    /// earliest arrival.
+    oldest_bound: Duration,
     gap: Option<u64>,
+    /// The next gap event is a restart.
+    restarted: bool,
     bad_seq: Option<u16>,
     now: Duration,
     last_transit: Option<i64>,
@@ -240,7 +254,9 @@ impl JitterBuffer {
             held: 0,
             bytes: 0,
             held_bytes: 0,
+            oldest_bound: Duration::ZERO,
             gap: None,
+            restarted: false,
             bad_seq: None,
             now: Duration::ZERO,
             last_transit: None,
@@ -291,11 +307,14 @@ impl JitterBuffer {
             self.stats.late += 1;
             if ext >= self.base {
                 self.received_since_base += 1;
+                // RFC 3550 section 6.4.1 measures every packet in the order it arrives, whether or
+                // not it is still played.
+                self.measure(packet.timestamp, now);
             }
             return Push::Late;
         }
-        while ext - self.head >= SLOTS as i64 {
-            self.drop_head();
+        if ext - self.head >= SLOTS as i64 {
+            self.drop_through(ext - SLOTS as i64);
         }
         if matches!(self.slot(ext), Some(Slot::Full(_))) {
             self.stats.duplicates += 1;
@@ -314,6 +333,9 @@ impl JitterBuffer {
     pub fn pop(&mut self, now: Duration) -> Option<Event<'_>> {
         let now = self.tick(now);
         if let Some(missing) = self.gap.take() {
+            if std::mem::take(&mut self.restarted) {
+                return Some(Event::Restart { missing });
+            }
             return Some(Event::Gap { missing });
         }
         if self.held == 0 {
@@ -524,6 +546,7 @@ impl JitterBuffer {
         self.stats.dropped += dropped;
         self.stats.restarts += 1;
         self.gap = Some(self.gap.unwrap_or(0) + dropped);
+        self.restarted = true;
         self.last_transit = None;
         self.start_at(ext);
     }
@@ -544,6 +567,9 @@ impl JitterBuffer {
         };
         self.bytes += data.len();
         self.held_bytes += data.capacity();
+        if self.held == 0 {
+            self.oldest_bound = now;
+        }
         self.held += 1;
         self.received_since_base += 1;
         let held = Held {
@@ -580,34 +606,66 @@ impl JitterBuffer {
         }
     }
 
+    /// Gives up on the oldest packets, in sequence order, while the packets held are over
+    /// [`Config::max_bytes`] or the packet that arrived first is older than
+    /// [`Config::max_span`].
     fn enforce_limits(&mut self, now: Duration) {
         while self.held > 0 {
-            let oldest = match self.slot(self.head) {
-                Some(Slot::Full(h)) => Some(h.arrival),
-                _ => self.next_held().map(|(_, a)| a),
-            };
-            let span = oldest.map_or(Duration::ZERO, |a| now.saturating_sub(a));
-            if self.held_bytes <= self.config.max_bytes && span <= self.config.max_span {
+            let end = if self.held_bytes > self.config.max_bytes {
+                self.next_held().map(|(ext, _)| ext)
+            } else if now.saturating_sub(self.oldest_bound) <= self.config.max_span {
                 break;
-            }
-            self.drop_head();
+            } else {
+                // Packets are not held in the order they arrived, so the first to arrive may be
+                // behind others in sequence.
+                let Some((ext, arrival)) = self.earliest_held() else { break };
+                self.oldest_bound = arrival;
+                if now.saturating_sub(arrival) <= self.config.max_span {
+                    break;
+                }
+                Some(ext)
+            };
+            let Some(end) = end else { break };
+            self.drop_through(end);
         }
     }
 
-    /// Gives up on the oldest sequence number waited for, dropping its packet if it is held.
-    fn drop_head(&mut self) {
-        match self.take_slot(self.head) {
-            Some(Slot::Full(h)) => {
-                self.held -= 1;
-                self.bytes -= h.data.len();
-                self.held_bytes -= h.data.capacity();
-                self.stats.dropped += 1;
-                self.recycle(h.data);
+    /// The held packet that arrived first, the first in sequence of those that arrived at once,
+    /// and its arrival.
+    fn earliest_held(&self) -> Option<(i64, Duration)> {
+        let mut earliest: Option<(i64, Duration)> = None;
+        for ext in self.head..=self.highest {
+            if let Some(Slot::Full(h)) = self.slot(ext)
+                && earliest.is_none_or(|(_, a)| h.arrival < a)
+            {
+                earliest = Some((ext, h.arrival));
             }
-            _ => self.stats.missing += 1,
         }
-        self.gap = Some(self.gap.unwrap_or(0) + 1);
-        self.head += 1;
+        earliest
+    }
+
+    /// Gives up on the sequence numbers from the oldest one waited for through `end` in one pass,
+    /// dropping the packets held there.
+    fn drop_through(&mut self, end: i64) {
+        if end < self.head {
+            return;
+        }
+        let mut skipped = 0;
+        for ext in self.head..=end {
+            match self.take_slot(ext) {
+                Some(Slot::Full(h)) => {
+                    self.held -= 1;
+                    self.bytes -= h.data.len();
+                    self.held_bytes -= h.data.capacity();
+                    self.stats.dropped += 1;
+                    self.recycle(h.data);
+                }
+                _ => self.stats.missing += 1,
+            }
+            skipped += 1;
+        }
+        self.gap = Some(self.gap.unwrap_or(0) + skipped);
+        self.head = self.head.max(end + 1);
         self.highest = self.highest.max(self.head - 1);
     }
 

@@ -52,20 +52,21 @@ the stream's sender reports. A report that differs from the mapping by more than
   `MAX_MISORDER`) is stray. When the next packet follows a stray one in sequence, the sender has
   started again: the buffer drops what it holds and starts from that packet (RFC 3550 A.1).
 - `pop(now)` gives the next packet once its delay has passed since it arrived, or `Gap { missing }`
-  when packets did not arrive in time or were dropped. A missing packet is waited for until the
-  delay has passed since the first packet after it arrived. `next_wake` gives the time of the
-  next event.
+  when packets did not arrive in time or were dropped, or `Restart { missing }` after a sender
+  that started again. A missing packet is waited for until the delay has passed since the first
+  packet after it arrived. `next_wake` gives the time of the next event.
 - `nacks(out, max)` lists the missing sequence numbers that have not been listed before, so each
   one is asked for once.
 - `report_block(ssrc, last_sr, now)` fills a receiver report block: the fraction lost since the
   last call, the cumulative loss, the extended highest sequence number, the jitter, and the last
   sender report's time and the delay since it arrived (RFC 3550 A.3). Late and duplicate packets
-  count as received, as RFC 3550 section 6.4.1 asks.
+  count as received, as RFC 3550 section 6.4.1 asks, and a late packet is measured for the jitter.
 
 The delay is 60 ms at first. Once 16 packets have been measured it is four times the inter-arrival
 jitter estimate (RFC 3550 section 6.4.1, kept as in A.8), between 40 and 150 ms. The buffer holds
-at most 2 s between its oldest and newest packet and 8 MiB of payload, and gives up on the oldest
-packets beyond either limit, so a caller that stops popping does not make it grow. The payload
+packets for at most 2 s from the one that arrived first, and 8 MiB of payload, and gives up on the
+oldest packets in sequence beyond either limit, so a caller that stops popping does not make it
+grow. The payload
 buffers it keeps for reuse hold at most the byte limit together. It holds at most
 4096 sequence numbers (`SLOTS`) from the oldest it waits for. Every call takes the time as a
 `Duration` since a fixed point the caller picks; a time earlier than one passed before counts as
@@ -74,22 +75,25 @@ the latest.
 ## Depacketizers
 
 `Depacketizer::push(timestamp, marker, payload, emit)` takes the payloads in sequence order and
-calls `emit` with each frame it completes. `lost()` takes a gap from the jitter buffer.
+calls `emit` with each frame it completes. `lost()` takes a gap from the jitter buffer, and
+`restart()` takes a restart.
 
 | `Codec` | Reads | Frame |
 | --- | --- | --- |
 | `H264` | single NAL units, STAP-A and FU-A (RFC 6184 packetization modes 0 and 1) | an Annex B access unit with 4-byte start codes; `key` when it holds an IDR picture |
 | `Vp8` | the payload descriptor with its PictureID, TL0PICIDX, TID and KEYIDX fields (RFC 7741) | the frame's partitions joined; `key` for a key frame |
 | `Opus` | one Opus packet per payload (RFC 7587) | the payload, without a copy |
-| `Aac(AacConfig)` | `mpeg4-generic` AU-headers with the size and index fields (RFC 3640), several units per packet or one unit in fragments; `AacConfig::HBR` and `AacConfig::LBR` | one raw access unit; the second and later units of a packet get the packet's timestamp plus 1024 samples (`frame_samples`) each |
+| `Aac(AacConfig)` | `mpeg4-generic` AU-headers with the size and index fields (RFC 3640), several units per packet or one unit in fragments where `fragments` is set; `AacConfig::HBR`, and `AacConfig::LBR` without fragments | one raw access unit; the second and later units of a packet get the packet's timestamp plus 1024 samples (`frame_samples`) each |
 
 A video frame ends at the packet with the marker bit, or when a packet with another timestamp
 arrives. A video frame with any part lost or unreadable is dropped, and video then waits for the
 next key frame; `wants_key_frame` is `true` from the packet that breaks the frame until the key
 frame comes, for a picture loss indication. Video starts by waiting for a key frame. After `lost()`
 the frame being built keeps its timestamp, so the packets of it that still arrive are dropped with
-it and it counts once. While video waits, an H.264 key frame whose first slice does not start at
-macroblock 0 (`first_mb_in_slice`) lost its first slices and is dropped too. A frame over 8 MiB
+it and it counts once. After `restart()` the next payload starts a new frame whatever its
+timestamp. While video waits, an H.264 key frame none of whose slices starts at macroblock 0
+(`first_mb_in_slice`) lost its first slices and is dropped too; the slices may come in any order
+(RFC 6184 section 7.1). A frame over 8 MiB
 (`MAX_FRAME`, or the limit passed to `with_max_frame`) is dropped, Opus packets and AAC units
 included.
 
@@ -109,12 +113,14 @@ The depacketizers refuse an empty payload, a set forbidden bit, a reserved NAL u
 interleaved H.264 modes (STAP-B, MTAP and FU-B), a FU-A fragment with both its start and end bits
 set, an STAP-A unit of size 0 or one that runs past the packet, an STAP-A unit or FU-A fragment
 that carries a STAP, MTAP or FU (RFC 6184 sections 5.7 and 5.8), a FU-A fragment whose NAL unit
-header differs from the start fragment's, a VP8 descriptor or PictureID that runs past the payload,
+header differs from the start fragment's, an H.264 slice with no byte after its NAL unit header,
+whole or as a FU-A run, a VP8 descriptor or PictureID that runs past the payload,
 AU-headers that are not a whole number of headers, an AAC unit of size 0, units that do not fill
 their packet exactly, a unit longer than its packet that has the marker bit (so no fragment
-follows), interleaved AAC units, AAC fragments that do not continue the unit before them, a last
-AAC fragment without the marker bit (RFC 3640 section 3.1), and the rest of an AAC unit whose
-earlier fragment was lost. A refused payload drops the frame it belongs to and counts it in
+follows), a fragment in the AAC-lbr mode (RFC 3640 section 3.3.5), interleaved AAC units, AAC
+fragments that do not continue the unit before them, a last AAC fragment or a packet of complete
+units without the marker bit (RFC 3640 section 3.1), and the rest of an AAC unit whose earlier
+fragment was lost or refused. A refused payload drops the frame it belongs to and counts it in
 `dropped` once, and the next payload is read as usual.
 
 ## Cost
