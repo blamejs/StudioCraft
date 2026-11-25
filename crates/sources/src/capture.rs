@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
 use studiocraft_platform::PlatformError;
-use studiocraft_platform::display::{self, DisplayCapture as Display, DisplayInfo};
+use studiocraft_platform::display::{self, DisplayCapture as Display, DisplayInfo, SharedGrab};
 use studiocraft_platform::window::{self, WindowCapture as Window};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
 
@@ -62,14 +62,24 @@ pub(crate) trait Grab {
     where
         Self: Sized;
     fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed;
+    /// The newest picture in a texture shared with the compositor, for a capture that runs on
+    /// the GPU. [`SharedGrab::Memory`] (the default) means [`Grab::grab`] copies it into memory.
+    fn grab_shared(&mut self) -> SharedGrab {
+        SharedGrab::Memory
+    }
 }
 
 impl Grab for Display {
     fn open(target: &str) -> Result<Self, PluginError> {
-        Display::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))
+        let mut d = Display::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))?;
+        d.share_on_gpu();
+        Ok(d)
     }
     fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
         Display::grab(self, frame).into()
+    }
+    fn grab_shared(&mut self) -> SharedGrab {
+        Display::grab_shared(self)
     }
 }
 
@@ -123,6 +133,14 @@ impl<G: Grab> SourceInstance for Capture<G> {
             }
         }
         let Some(cap) = self.cap.as_mut() else { return Ok(()) };
+        match cap.grab_shared() {
+            SharedGrab::Frame(f) => {
+                io.video.publish(VideoContent::Shared(f));
+                return Ok(());
+            }
+            SharedGrab::Unchanged => return Ok(()),
+            SharedGrab::Memory => {}
+        }
         let mut frame = io.video.frame();
         match cap.grab(&mut frame) {
             Grabbed::Picture => {
@@ -320,6 +338,47 @@ mod tests {
         }
         assert_eq!(c.produce(&io), Err(PluginError::Failed("the screen capture failed".into())));
         assert!(c.cap.is_none() && c.stopped.is_none(), "a failure is retried after the reopen wait");
+    }
+
+    /// A capture on the GPU: a shared picture, an unchanged screen, then the compositor's refusal,
+    /// after which pictures are copied through memory.
+    struct OnGpu {
+        ring: std::sync::Arc<craft_gpu_interop::SharedRing>,
+        calls: u64,
+    }
+
+    impl Grab for OnGpu {
+        fn open(_target: &str) -> Result<Self, PluginError> {
+            Ok(OnGpu { ring: craft_gpu_interop::SharedRing::detached(8, 4), calls: 0 })
+        }
+        fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
+            frame.reshape(8, 4, studiocraft_media::video::PixelFormat::Rgba8);
+            Grabbed::Picture
+        }
+        fn grab_shared(&mut self) -> SharedGrab {
+            self.calls += 1;
+            if self.ring.fallback().is_some() {
+                return SharedGrab::Memory;
+            }
+            match self.calls {
+                1 => SharedGrab::Frame(craft_gpu_interop::SharedFrame::new(std::sync::Arc::clone(&self.ring), 0, 1).unwrap()),
+                _ => SharedGrab::Unchanged,
+            }
+        }
+    }
+
+    #[test]
+    fn a_gpu_capture_publishes_shared_frames_until_the_compositor_refuses_them() {
+        let io = SourceIo::new(MasterClock::new());
+        let mut c = Capture::<OnGpu>::new("display", &Settings::new());
+        c.produce(&io).unwrap();
+        let Some(VideoContent::Shared(f)) = io.video.take() else { panic!("a shared picture is published") };
+        assert_eq!(io.video.size(), Some((8, 4)));
+        c.produce(&io).unwrap();
+        assert!(io.video.take().is_none(), "an unchanged screen publishes nothing");
+        f.ring().refuse(craft_gpu_interop::Fallback::NotDx12);
+        c.produce(&io).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))), "the picture is copied through memory");
     }
 
     #[test]

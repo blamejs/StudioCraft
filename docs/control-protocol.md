@@ -17,6 +17,12 @@ carry the session token from the `STUDIOCRAFT_CONTROL_TOKEN` environment variabl
 started with (64 hexadecimal characters). The app does not start when `--control` is given without
 a valid token.
 
+In [Safe Mode](features.md#safe-mode), from `--safe-mode` or after a session that ended without
+closing, the app checks the token at start but does not listen on the port. It starts listening
+when the user leaves Safe Mode: Leave Safe Mode in the banner, or Start Normally when the window
+asks after an unclean shutdown. When the port can't be used then, the status
+bar shows the error and the app keeps running without the control channel.
+
 In a POSIX shell, make a token and start the app with it:
 
 ```sh
@@ -680,8 +686,13 @@ under that name now. `status` is `idle` while no stream runs, `not_in_stream` fo
 added after the stream started, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
-`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
-`cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `max_tries`,
+`next_try_ms`, `error` and `cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`attempt` is the number of the next try and `max_tries` the failed tries in a row the running
+stream allows, so the tries left, the next one included, are `max_tries - attempt + 1`.
+`next_try_ms` is the time in milliseconds until the next try starts. It is `null` while a try runs,
+and for a `waiting_for_network` destination whose server is given as an IP address, which tries
+when a route to the server returns.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |
@@ -745,13 +756,20 @@ or trying to is not removed until it is stopped.
 `stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
 that destination of the running stream; the others go on. They return `{"id", "on"}`.
 
+`stream.retry_now` takes `{"id"}` and starts the next try of that destination of the running stream
+at once, as Try Now in the Streaming window does, when it is `retrying` and waits for its next try or
+is `waiting_for_network`; a destination waiting for the network tries without a route. It returns
+`{"id", "started"}`, where `started` is `false` for a destination that was not waiting, which it
+leaves as it is. Unlike a stop and start, the try counts toward the failed tries in a row.
+
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
 that is not empty and is not a streaming service id, a parameter
-of the wrong type, a start or stop while no stream runs or while the running stream was started with
-another profile, and a start of a destination whose held key is not set. While a stream of another
+of the wrong type, a start, stop or `stream.retry_now` while no stream runs or while the running
+stream was started with another profile, a `stream.retry_now` of a destination that is not in the
+running stream, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.
@@ -797,7 +815,7 @@ A destination that has been checked at its current server and service in this se
 "verdict", "message", "template", "args", "evidence", "at_ms"}`. `automatic` is `true` for a check
 that ran by itself after a failure. `message` is the verdict in English, `template` the same text
 with `{name}` placeholders and `args` their values, and `at_ms` the time the check reported, in
-milliseconds since 1970. `evidence` lists every step, at most 22, each `{"check", "target", "outcome",
+milliseconds since 1970. `evidence` lists every step, at most 26, each `{"check", "target", "outcome",
 "detail"}`, where `target` is the host, address or variable the step looked at and `detail` what the
 system or the server reported, in English.
 
@@ -807,9 +825,10 @@ system or the server reported, in English.
 | `name_not_found` | Windows only: the DNS server answered that the server's name does not exist. |
 | `dns_no_answer` | The lookup gave no answer within 10 s. |
 | `lookup_failed` | The server's name could not be looked up for another reason. |
-| `rejected` | The server takes connections, and the last failure was a refusal of `connect` or `publish`. |
+| `rejected` | The server takes connections and does not fail the RTMP handshake, and the last failure was a refusal of `connect` or `publish`. |
 | `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
 | `service_reports_problem` | The service's status summary reports a problem. |
+| `not_stream_server` | The server's port takes the connection (and the secure handshake for `rtmps://`), and every address that connected finished the RTMP handshake without completing it. `args.detail` says what the port did instead. |
 | `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
 | `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
 | `refused` | An address of the server refused the TCP connection. |
@@ -829,14 +848,17 @@ The first verdict in the table that fits is the one given.
 | `lookup` | The lookup of the server's name; `detail` lists up to 8 of the addresses found and how many more there are. |
 | `connect` | A TCP connection to the server's port, for `rtmp://`. |
 | `secure_connect` | A TCP connection and secure handshake to the server's port, for `rtmps://`. |
+| `rtmp_handshake` | The RTMP handshake (C0 and C1 out, S0 and S1 in, C2 out, S2 in) over a connection to the server's port that opened; no command and no stream key follow it. |
 | `connect_443` | A TCP connection and secure handshake to port 443 of the server. |
 | `ingest_list` | The service's list of ingest servers; `detail` names the two other servers chosen. |
 | `other_ingest` | A lookup, TCP connection and secure handshake to another ingest server of the service. |
 | `status_page` | The service's status summary; `detail` holds the status it reports. |
 
 `outcome` is `ok`, `set` (a proxy variable is set), `problem` (the status summary reports a
-problem), `unknown` (the system could not say), `unfinished` (the step had not finished when the
-check reported), or the `cause` id of a failure from the table above.
+problem), `not_rtmp` (the port answered the RTMP handshake with other data), `unknown` (the system
+could not say), `unfinished` (the step had not finished when the check reported), or the `cause` id
+of a failure from the table above. An `rtmp_handshake` step whose server closed the connection is
+`closed_during_setup`, and one that sent nothing in time is `setup_timed_out`.
 
 ### `video.displays` and `video.canvas_from_display`
 
@@ -884,7 +906,7 @@ Video, from `video.canvas_from_display`, or by switching to a profile with anoth
 
 - An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
   inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
-  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  The crop and the flips are kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
   set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
   it.
 - Any other item keeps its center at the same place in proportion to the canvas. Its size is

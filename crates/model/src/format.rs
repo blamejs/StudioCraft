@@ -45,8 +45,8 @@ pub struct FileFormat {
 /// Scene collections.
 pub const COLLECTION: FileFormat = FileFormat {
     name: "studiocraft.scene-collection",
-    version: 5,
-    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5],
+    version: 6,
+    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5, collection_v5_to_v6],
 };
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
@@ -105,6 +105,26 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
             if let Some(Value::Array(items)) = scene.get_mut("items") {
                 for item in items.iter_mut().filter_map(Value::as_object_mut) {
                     item.entry("fit").or_insert(Value::Null);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collection version 5 to 6: each scene item's transform says whether the picture is mirrored
+/// left to right (`flip_horizontal`) and top to bottom (`flip_vertical`); neither for the items of
+/// an older file.
+fn collection_v5_to_v6(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(scenes)) = data.get_mut("scenes") {
+        for scene in scenes.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(Value::Array(items)) = scene.get_mut("items") {
+                for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                    if let Some(Value::Object(t)) = item.get_mut("transform") {
+                        t.entry("flip_horizontal").or_insert(Value::Bool(false));
+                        t.entry("flip_vertical").or_insert(Value::Bool(false));
+                    }
                 }
             }
         }
@@ -404,6 +424,7 @@ mod tests {
         (3, include_str!("../fixtures/collection-v3.json")),
         (4, include_str!("../fixtures/collection-v4.json")),
         (5, include_str!("../fixtures/collection-v5.json")),
+        (6, include_str!("../fixtures/collection-v6.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -596,6 +617,30 @@ mod tests {
         assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
         let unknown = v5.replace("\"fit\": \"fill\"", "\"fit\": \"cover\"");
         assert!(matches!(read_collection(&unknown, "Scene"), Err(FormatError::Data(_))), "an unknown mode refuses the file");
+    }
+
+    #[test]
+    fn collections_keep_each_item_flip() {
+        let flips = |text: &str| -> Vec<(bool, bool)> {
+            let c = read_collection(text, "Scene").unwrap();
+            c.scenes[0].items.iter().map(|i| (i.transform.flip_horizontal, i.transform.flip_vertical)).collect()
+        };
+        for (v, text) in &COLLECTION_FIXTURES[..5] {
+            assert_eq!(flips(text), [(false, false); 2], "version {v} has no flips");
+        }
+        let (_, v6) = COLLECTION_FIXTURES[5];
+        assert_eq!(flips(v6), [(false, false), (true, false)]);
+        let c = read_collection(v6, "Scene").unwrap();
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        // The migration writes both flags into an older file's transforms and leaves an item
+        // without one as it is.
+        let mut data = json!({"scenes": [{"items": [{"transform": {"rotation": 15}}, {"id": 2}]}]});
+        collection_v5_to_v6(&mut data).unwrap();
+        assert_eq!(data["scenes"][0]["items"][0]["transform"], json!({"rotation": 15, "flip_horizontal": false, "flip_vertical": false}));
+        assert_eq!(data["scenes"][0]["items"][1], json!({"id": 2}));
+        let wrong = v6.replace("\"flip_horizontal\": true", "\"flip_horizontal\": \"yes\"");
+        assert_ne!(wrong, v6);
+        assert!(matches!(read_collection(&wrong, "Scene"), Err(FormatError::Data(_))), "a flip that is not a boolean refuses the file");
     }
 
     #[test]

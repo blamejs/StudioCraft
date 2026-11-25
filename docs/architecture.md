@@ -4,8 +4,8 @@ This page describes how StudioCraft's code is organized: its crates and layers, 
 how data moves between them, and where new features plug in. It is for contributors.
 
 StudioCraft is a Cargo workspace. The desktop app is the root package (`src/`). The libraries are
-in `crates/`, the command-line tool is in `apps/studiocraft-cli`, and the workspace tooling is in
-`xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
+in `crates/`, the command-line tool is in `apps/studiocraft-cli`, the browser editor for scene
+collections is in `apps/studiocraft-web`, and the workspace tooling is in `xtask/`. The command-line tool also runs the Model Context Protocol (MCP) server.
 
 ## Layers
 
@@ -24,13 +24,16 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session or in a file tied to the `ffmpeg` program, its version and the driver, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
-| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
+| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the VA-API hardware AV1 encoder with the sequence and frame headers the crate writes, the Annex B helpers, and the `avcC`, `hvcC` and `av1C` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback, and Linux through PipeWire links from the application's playback streams to a capture stream; other systems report it as unsupported. It depends on no StudioCraft crate. |
+| L0 | `craft-gpu-interop` | Display pictures handed from the capture to the compositor on the GPU: on Windows, DXGI desktop duplication into a ring of Direct3D 11 textures shared through NT handles with two shared fences, opened on a wgpu Direct3D 12 device (`wgpu` feature), with the reason recorded on the ring when the compositor cannot open it. Its private `dxgi_ffi` and `d3d12_ffi` modules are the only code that calls Direct3D. It depends on no StudioCraft crate. |
 | L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
 | L0 | `craft-closed-captions` | Closed captions in a live H.264 or HEVC stream: phrases of text to CEA-608 roll-up byte pairs paced at the field 1 rate, ATSC A/53 `cc_data` in a `user_data_registered_itu_t_t35` SEI NAL unit put before an access unit's first picture, and the reader of the same SEI. It uses the 608 character sets of `craft-captions` and depends on no StudioCraft crate. |
+| L0 | `craft-face-track` | Face tracking from a camera picture: a TensorFlow Lite reader and interpreter with every buffer sized at load, the Face Landmarker bundle's face detector and 478-point face mesh with depth, head pose by a weighted rigid fit to the bundle's canonical face, 25 of the 52 common expression weights measured from the mesh and the tongue weight the mesh model reports, One Euro smoothing, and a tracker that runs one mesh per followed picture without allocating. Trackers share a thread pool of 1 to 8 threads. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L1 | `craft-transitions` | The Cut, Fade, Fade through color and Swipe transitions: each one's WGSL blend, the values its shader reads, its ease from `craft-ease`, the gains of the old and new audio, and the same blend on the CPU, with typed parameters that carry a version for apps that save them. It depends on no StudioCraft crate. |
+| L1 | `craft-avatar` | Avatars: the rigged model (humanoid bones, meshes with morph targets, expressions with their override rules, look-at maps and spring bones), the 52 face-tracking shapes and their mapping to expressions, neutral-pose calibration, the hold and fade when the face is lost, idle blinks, breathing and sway, and the spring step. The per-frame step does not allocate. It uses the eases of `craft-ease` and depends on no StudioCraft crate. |
 | L1 | `craft-packet` | Encoded packets shared by reference through a pool, fanned out to bounded per-subscriber rings with packet and byte caps. A full ring drops packets up to the next keyframe, its receiver skips stale packets to a keyframe, and each subscriber keeps its own counters. When the pool is full, the ring holding the most bytes is emptied, so a stalled destination loses only its own packets. It converts the `craft-video` H.264 encoder's packets and the `craft-hwenc-native` encoders' packets to its packet info. It depends on no StudioCraft crate. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
@@ -44,6 +47,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
 | app | `studiocraft` | The desktop binary, its control channel and the screenshot and self-test harness. |
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
+| app | `studiocraft-web` | The browser editor for scene collection files: an `Editor` that runs the engine's scene and source commands on an opened file, and the page in `index.html` that draws it, reads the picked file and offers the edited collection as a download. |
 | tool | `xtask` | `cargo xtask` checks. |
 
 These crates have no operating-system or GPU dependency, and `cargo xtask wasm` checks that they
@@ -57,6 +61,12 @@ build for `wasm32-unknown-unknown`:
 - `craft-ease`
 - `craft-transitions`
 - `craft-closed-captions`
+- `craft-avatar`
+
+`cargo xtask wasm` also checks the browser editor, `studiocraft-web`, and with it
+`studiocraft-engine`. The editor uses only the engine's commands and undo history. The engine's
+source threads, mixer and frame scheduler do not run in the browser. On `wasm32-unknown-unknown`
+the undo history reads no clock, so each change is its own undo step there.
 
 ## Threads and data flow
 
@@ -206,8 +216,31 @@ first into a reused buffer.
 capture. A panic inside the camera library is caught and reported as an error. A missing or busy
 camera, a format the camera does not offer, a failed stream, or no new frame for 5 s (the first
 frame included) clears the picture and is reported to the source. The source opens the camera
-again after 2 s while the rest of the app keeps running. A camera source whose camera is unplugged
-keeps opening it every 2 seconds and resumes when it returns.
+again after 2 s while the rest of the app keeps running. On macOS a camera source whose camera is
+unplugged keeps opening it every 2 seconds and resumes when it returns.
+
+**Plugged in and out.** On Windows and Linux, `platform::camera::watch` starts one thread, the
+first time a camera source or its Properties window asks for it, that waits for the system's
+notices: a Windows Runtime device watcher for
+video capture devices (its added, removed and updated events), and inotify on `/dev` for V4L2 nodes
+named `video…` that are created, removed or given new permissions. After each notice the thread
+lists the cameras again; notices that arrive together give one listing. When the list changed, it
+replaces the published list and adds one to a generation counter. A camera source reads that
+counter, an atomic, at every frame, and reads the list only when the counter changed. The list is
+held in an `ArcSwapOption`, so reading it does not wait for the thread. When the list
+no longer holds the camera its capture opened, the source drops the capture and clears the picture,
+even when another camera with the same name is still listed. The source then opens a listed camera
+that matches its setting at the next frame. When no listed camera matches, it reports "the camera is
+not connected" and does not try to open one until a matching camera is plugged in, which it opens at
+the next frame. A camera unplugged and plugged in again before the thread lists the cameras
+leaves the list unchanged, so the thread also counts the notices that can mean a camera was
+unplugged: a removed device on Windows, and on Linux a removed `video…` node or notices lost to a
+full queue. When that count changed since just before the source last opened its camera, a source whose
+capture failed opens the camera again at the next frame instead of after 2 s, once for each change.
+The Properties window's device stamp
+hashes the published list instead of listing the cameras. When the notices cannot be set up or
+stop, the watch publishes no list, and the sources and the Properties window list and reopen
+cameras on their timers as on macOS.
 
 **Sharing a camera.** One capture thread streams each camera, and every `CameraCapture` of that
 camera is a reader of it with a `FrameSlot` of its own. The thread converts each frame once into a
@@ -569,7 +602,7 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   | NVIDIA NVENC H.264 or HEVC (built in) | `craft-hwenc-native`, which loads the NVIDIA driver at run time |
   | Windows Media Foundation H.264 or HEVC (built in) | `craft-hwenc-native`, which loads `mfplat.dll` at run time |
   | Apple VideoToolbox H.264 or HEVC (built in) | `craft-hwenc-native` on macOS, which calls the VideoToolbox framework |
-  | VA-API H.264 or HEVC (built in) | `craft-hwenc-native` on 64-bit Linux, which loads `libva.so.2` and `libva-drm.so.2` at run time |
+  | VA-API H.264, HEVC or AV1 (built in) | `craft-hwenc-native` on 64-bit Linux, which loads `libva.so.2` and `libva-drm.so.2` at run time |
 
   The VA-API encoder runs on the recording's encoder thread, as the other built-in encoders do. It
   keeps four frames in flight, so the thread waits for the GPU only when all four surfaces are

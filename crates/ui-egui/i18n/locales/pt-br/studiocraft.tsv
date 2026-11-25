@@ -107,6 +107,8 @@
 	Filters…	Filtros…
 	Finishing Recording…	Finalizando a gravação…
 	Fit to Screen	Ajustar à tela
+	Flip Horizontal	Inverter horizontalmente
+	Flip Vertical	Inverter verticalmente
 	Font	Fonte tipográfica
 	Font family	Família tipográfica
 	Format	Formato
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrado)
 	VA-API H.264 (built in)	VA-API H.264 (integrado)
 	VA-API HEVC (built in)	VA-API HEVC (integrado)
+	VA-API AV1 (built in)	VA-API AV1 (integrado)
 	Height	Altura
 	Help	Ajuda
 	Hide	Ocultar
@@ -329,6 +332,7 @@
 	the audio stream failed	o fluxo de áudio falhou
 	the camera capture could not start	não foi possível iniciar a captura da câmera
 	the camera is already open in another format	a câmera já está aberta em outro formato
+	the camera is not connected	a câmera não está conectada
 	the camera is still closing	a câmera ainda está fechando
 	the camera offers no format StudioCraft reads	a câmera não oferece nenhum formato que o StudioCraft leia
 	the camera sends frames that cannot be read	a câmera envia quadros que não podem ser lidos

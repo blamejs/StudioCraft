@@ -110,6 +110,8 @@
 	Filters…	מסננים…
 	Finishing Recording…	ההקלטה מסתיימת…
 	Fit to Screen	התאמה למסך
+	Flip Horizontal	היפוך אופקי
+	Flip Vertical	היפוך אנכי
 	Font	גופן
 	Font family	משפחת גופנים
 	Format	פורמט
@@ -142,6 +144,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (מובנה)
 	VA-API H.264 (built in)	VA-API H.264 (מובנה)
 	VA-API HEVC (built in)	VA-API HEVC (מובנה)
+	VA-API AV1 (built in)	VA-API AV1 (מובנה)
 	Height	גובה
 	Help	עזרה
 	Hide	הסתרה
@@ -346,6 +349,7 @@
 	the audio stream failed	זרם השמע נכשל
 	the camera capture could not start	לא ניתן להתחיל את לכידת המצלמה
 	the camera is already open in another format	המצלמה כבר פתוחה בתבנית אחרת
+	the camera is not connected	המצלמה אינה מחוברת
 	the camera is still closing	המצלמה עדיין נסגרת
 	the camera offers no format StudioCraft reads	המצלמה אינה מציעה פורמט ש־StudioCraft יכול לקרוא
 	the camera sends frames that cannot be read	המצלמה שולחת פריימים שלא ניתן לקרוא

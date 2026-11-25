@@ -83,7 +83,8 @@ fn transform_schema() -> Value {
     json!({
         "type": "object",
         "description": "position {x, y} of the top-left corner in canvas pixels, scale {x, y} (1 is the source's own size), rotation in \
-                        degrees, crop {left, top, right, bottom} in source pixels. Fields left out take their defaults.",
+                        degrees, crop {left, top, right, bottom} in source pixels, flip_horizontal and flip_vertical (true mirrors the \
+                        picture inside the item's box). Fields left out take their defaults.",
     })
 }
 
@@ -218,7 +219,7 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "item_transform",
             "Transform a scene item",
-            "Set a scene item's position, scale, rotation and crop. `fit` records that the transform fits, fills or stretches \
+            "Set a scene item's position, scale, rotation, crop and flips. `fit` records that the transform fits, fills or stretches \
              the item to the canvas, so a new canvas size places it the same way; without it the item is kept in proportion.",
             json!({
                 "item": {"type": ["integer", "string"], "description": "The item's id, or the name of the source it shows."},

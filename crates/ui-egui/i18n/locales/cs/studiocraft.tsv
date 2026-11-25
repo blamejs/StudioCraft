@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Dokončování nahrávky…
 	Fit to Screen	Přizpůsobit obrazovce
+	Flip Horizontal	Převrátit vodorovně
+	Flip Vertical	Převrátit svisle
 	Font	Písmo
 	Font family	Rodina písma
 	Format	Formát
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
 	VA-API HEVC (built in)	VA-API HEVC (vestavěný)
+	VA-API AV1 (built in)	VA-API AV1 (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt
@@ -330,6 +333,7 @@
 	the audio stream failed	zvukový stream selhal
 	the camera capture could not start	zachytávání z kamery nelze spustit
 	the camera is already open in another format	kamera je už otevřená v jiném formátu
+	the camera is not connected	kamera není připojená
 	the camera is still closing	kamera se stále zavírá
 	the camera offers no format StudioCraft reads	kamera nenabízí žádný formát, který StudioCraft umí číst
 	the camera sends frames that cannot be read	kamera posílá snímky, které nelze přečíst

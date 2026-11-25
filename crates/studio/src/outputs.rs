@@ -1319,6 +1319,15 @@ impl Studio {
         Ok(())
     }
 
+    /// Start the next try of the destination `id` of the running stream at once, when it waits to
+    /// try again or waits for the network; whether it was waiting.
+    pub fn retry_stream_destination(&self, id: &str) -> Result<bool, StudioError> {
+        let Some(a) = self.outputs.active.get(&OutputKind::Streaming) else {
+            return Err(StudioError::Output("the stream is not running".into()));
+        };
+        Ok(a.instance.retry_destination(id)?)
+    }
+
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             self.stop_output(kind);
@@ -1847,6 +1856,7 @@ mod tests {
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
@@ -2211,6 +2221,8 @@ mod tests {
                 bytes: 0,
                 dropped: 0,
                 reconnects: self.reconnects.load(Ordering::SeqCst),
+                next_try: None,
+                max_tries: 10,
             }]
         }
         fn reconnects(&self) -> u64 {

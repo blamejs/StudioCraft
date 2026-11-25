@@ -107,6 +107,8 @@
 	Filters…	濾鏡…
 	Finishing Recording…	正在完成錄影…
 	Fit to Screen	縮放至符合畫面
+	Flip Horizontal	水平翻轉
+	Flip Vertical	垂直翻轉
 	Font	字型
 	Font family	字型系列
 	Format	格式
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（內建）
 	VA-API H.264 (built in)	VA-API H.264（內建）
 	VA-API HEVC (built in)	VA-API HEVC（內建）
+	VA-API AV1 (built in)	VA-API AV1（內建）
 	Height	高度
 	Help	說明
 	Hide	隱藏
@@ -330,6 +333,7 @@
 	the audio stream failed	音訊串流發生錯誤
 	the camera capture could not start	無法開始攝影機擷取
 	the camera is already open in another format	攝影機已以另一種格式開啟
+	the camera is not connected	攝影機未連接
 	the camera is still closing	攝影機仍在關閉中
 	the camera offers no format StudioCraft reads	此攝影機沒有 StudioCraft 支援的影像格式
 	the camera sends frames that cannot be read	攝影機傳送的影格無法讀取
