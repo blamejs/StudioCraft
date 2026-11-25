@@ -666,6 +666,8 @@ fn every_default_shortcut_fires_its_command() {
         (Key::Num1, Modifiers::COMMAND, scene(1)),
         (Key::Num5, Modifiers::COMMAND, scene(5)),
         (Key::Num9, Modifiers::COMMAND, scene(9)),
+        // Last: the palette it opens takes the keys.
+        (Key::K, Modifiers::COMMAND, CommandRef::new("app.command_palette")),
     ];
     for (key, modifiers, command) in rows {
         assert_eq!(fired_by(&mut a, &ctx, press(key, modifiers)), [(command.clone(), FireSource::Key)], "{key:?} with {modifiers:?}");
@@ -3927,4 +3929,220 @@ fn the_pause_arrow_opens_the_setup_popover_that_starts_one_pause() {
     frame_at(&mut a, &ctx, egui::vec2(760.0, 480.0));
     assert!(a.settings.as_ref().is_some_and(|w| !w.pause_focus_pending()), "the Pause screen section took the focus");
     assert!(ctx.memory(|m| m.focused()).is_some(), "a field has the keyboard focus");
+}
+
+/// The palette's entries: command key, label and menu path.
+fn palette_rows(app: &StudioApp) -> Vec<(String, String, Vec<String>)> {
+    app.palette_entries()
+        .iter()
+        .map(|e| (e.command().key(), e.label().as_str().to_string(), e.path().iter().map(|l| l.as_str().to_string()).collect()))
+        .collect()
+}
+
+#[test]
+fn the_command_palette_lists_each_command_that_can_run_once_with_its_menu_path() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    for name in ["Talk", "Game"] {
+        run(&mut a, &ctx, "scene.add", json!({"name": name})).unwrap();
+    }
+    let rows = palette_rows(&a);
+    let row = |key: &str| rows.iter().find(|(k, ..)| k == key).cloned();
+    let keys: Vec<&str> = rows.iter().map(|(k, ..)| k.as_str()).collect();
+    let mut once = keys.clone();
+    once.sort_unstable();
+    once.dedup();
+    assert_eq!(once.len(), keys.len(), "a command is listed once: {keys:?}");
+    // Menu rows keep their paths; the menu's Lock Preview is listed once although Hotkeys lists it too.
+    let (_, label, path) = row("view.stats").expect("View › Stats");
+    assert_eq!((label.as_str(), path.last().map(String::as_str)), ("Stats", Some("View")));
+    assert_eq!(keys.iter().filter(|k| **k == "view.lock_preview").count(), 1);
+    // The scenes by name, in list order, under the keys their Ctrl+1 to Ctrl+9 shortcuts fire.
+    let scenes: Vec<(String, String)> = rows.iter().filter(|(_, _, p)| p == &["Scenes"]).map(|(k, l, _)| (k.clone(), l.clone())).collect();
+    let at = |i: u32| CommandRef::with_params("scene.select_index", json!({"index": i})).key();
+    assert_eq!(scenes, [(at(1), "Scene".to_string()), (at(2), "Talk".to_string()), (at(3), "Game".to_string())]);
+    assert!(row(&at(4)).is_none(), "no entry for a position without a scene");
+    // Commands outside the menus: a shortcut-list entry, a window command and an engine command.
+    assert!(row("stream.toggle").is_some() && row("dock.reset").is_some() && row("golive.check").is_some());
+    // Left out: commands that need parameters, the keys the runtime handles itself, the edit
+    // commands the window has no use for, the palette itself, and commands that cannot run now.
+    for key in [
+        "source.add",
+        "scene.select",
+        "dock.move",
+        "window.next_pane",
+        "edit.copy",
+        "app.command_palette",
+        "selection.fit",
+        "edit.redo",
+        "marker.add",
+    ] {
+        assert!(row(key).is_none(), "{key} is not listed");
+    }
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Backdrop"})).unwrap();
+    assert!(palette_rows(&a).iter().any(|(k, ..)| k == "selection.fit"), "Fit to Screen is listed once a source is selected");
+    a.studio.seal_history();
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert!(palette_rows(&a).iter().any(|(k, ..)| k == "edit.redo"), "Redo is listed once there is something to redo");
+}
+
+#[test]
+fn a_scene_past_the_ninth_is_listed_by_its_id() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    for i in 2..=10 {
+        run(&mut a, &ctx, "scene.add", json!({"name": format!("S{i}")})).unwrap();
+    }
+    let tenth = a.studio().collection().scenes.get(9).map(|s| s.id).unwrap();
+    let rows = palette_rows(&a);
+    let key = CommandRef::with_params("scene.select", json!({"scene": tenth.0})).key();
+    assert!(rows.iter().any(|(k, l, _)| *k == key && l == "S10"), "{rows:?}");
+}
+
+#[test]
+fn ctrl_k_opens_the_command_palette_and_a_pick_runs_its_command_and_closes_it() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "scene.add", json!({"name": "Second"})).unwrap();
+    run(&mut a, &ctx, "scene.select", json!({"scene": "Scene"})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, press(Key::K, Modifiers::COMMAND));
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["command_palette"], json!(true));
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, vec![Event::Text("Second".into())]);
+    frame(&mut a, &ctx, press(Key::Enter, Modifiers::NONE));
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(program_name(&a).as_deref(), Some("Second"));
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["command_palette"], json!(false));
+    assert!(a.palette.entries().is_empty(), "a closed palette keeps no entries");
+}
+
+#[test]
+fn the_command_palette_finds_a_command_by_its_id() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "app.command_palette", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, vec![Event::Text("view.stats".into())]);
+    frame(&mut a, &ctx, press(Key::Enter, Modifiers::NONE));
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.store().prefs().stats, "the pick ran `view.stats`");
+}
+
+#[test]
+fn view_command_palette_opens_it_from_the_menu_and_the_control_channel() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let bar = a.laid_menu();
+    let view = bar.menus.iter().find(|m| m.role == craft_menu::MenuRole::View).expect("a View menu");
+    assert!(
+        matches!(view.children.first(), Some(craft_menu::Node::Item(it)) if it.command.id == "app.command_palette" && it.label == "Command Palette…"),
+        "View › Command Palette… comes first"
+    );
+    let reply = run(&mut a, &ctx, "app.command_palette", json!({})).unwrap();
+    assert_eq!(reply["open"], json!(true));
+    assert_eq!(reply["commands"], json!(a.palette.entries().len()));
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, press(Key::Escape, Modifiers::NONE));
+    frame(&mut a, &ctx, vec![]);
+    assert!(!a.palette.is_open(), "Escape on an empty query closes the palette");
+}
+
+#[test]
+fn the_command_palette_does_not_open_over_settings() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    assert!(!a.item_state("app.command_palette").enabled);
+    let err = run(&mut a, &ctx, "app.command_palette", json!({})).unwrap_err();
+    assert!(err.contains("cannot run now"), "{err}");
+    assert!(!a.palette.is_open(), "the palette stays closed while Settings is open");
+}
+
+#[test]
+fn the_command_palette_leaves_out_menu_rows_without_the_parameters_their_command_needs() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // With no saved layout, Docks › Remove Layout holds a disabled None row with no layout name.
+    let keys: Vec<String> = palette_rows(&a).into_iter().map(|(k, ..)| k).collect();
+    assert!(!keys.iter().any(|k| k.starts_with("dock.layout_remove")), "{keys:?}");
+    run(&mut a, &ctx, "dock.layout_save", json!({"name": "Talk"})).unwrap();
+    let remove = CommandRef::with_params("dock.layout_remove", json!({"name": "Talk"})).key();
+    assert!(palette_rows(&a).iter().any(|(k, l, _)| *k == remove && l == "Talk"), "a saved layout is listed under Remove Layout");
+}
+
+#[test]
+fn an_open_command_palette_follows_what_can_run_and_the_scenes() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Backdrop"})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "app.command_palette", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let listed = |a: &StudioApp, key: &str| a.palette.entries().iter().any(|e| e.command().key() == key);
+    assert!(listed(&a, "selection.fit"), "Fit to Screen is listed while a source is selected");
+    // The control channel removes the selected source while the palette is open.
+    run(&mut a, &ctx, "sources.remove", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.palette.is_open());
+    assert!(!listed(&a, "selection.fit"), "Fit to Screen leaves the open palette once nothing is selected");
+    run(&mut a, &ctx, "scene.add", json!({"name": "Late"})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let second = CommandRef::with_params("scene.select_index", json!({"index": 2})).key();
+    assert!(a.palette.entries().iter().any(|e| e.command().key() == second && e.label().as_str() == "Late"), "a scene added while open is listed");
+    // A profile the menus list after the palette opened.
+    a.profiles.push("Second profile".to_string());
+    frame(&mut a, &ctx, vec![]);
+    let switch = CommandRef::with_params("profile.switch", json!({"name": "Second profile"})).key();
+    assert!(listed(&a, &switch), "a profile added while open is listed");
+    // The control channel changes the interface language while the palette is open.
+    run(&mut a, &ctx, "app.language", json!({"lang": "de"})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let stats = a.palette.entries().iter().find(|e| e.command().key() == "view.stats").map(|e| e.label().as_str().to_string());
+    run(&mut a, &ctx, "app.language", json!({"lang": "en"})).unwrap();
+    assert_eq!(stats.as_deref(), Some("Statistik"), "the open palette follows the interface language");
+}
+
+#[test]
+fn transitions_can_run_only_in_studio_mode() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let cut = CommandRef::with_params("studio.transition", json!({"kind": "cut"})).key();
+    let listed = |a: &StudioApp, key: &str| palette_rows(a).iter().any(|(k, ..)| k == key);
+    assert!(!a.item_state("studio.transition").enabled, "no transition outside studio mode");
+    assert!(!listed(&a, "studio.transition") && !listed(&a, &cut));
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    assert!(a.item_state("studio.transition").enabled);
+    assert!(listed(&a, "studio.transition") && listed(&a, &cut), "Transition and Cut to Program in studio mode");
+}
+
+#[test]
+fn the_staged_window_commands_can_run_only_with_a_staged_window() {
+    use studiocraft_model::staged;
+    let mut a = app();
+    let ctx = crate::test_context();
+    let listed = |a: &StudioApp, key: &str| palette_rows(a).iter().any(|(k, ..)| k == key);
+    let slot = |n: usize| CommandRef::with_params("present.window", json!({"index": n})).key();
+    for id in ["present.next", "present.previous"] {
+        assert!(!a.item_state(id).enabled && !listed(&a, id), "{id} without a Staged windows source");
+    }
+    // Staged windows sources are built only on Windows and macOS, so the collection is given one
+    // the way a saved file would hold it, first with every slot empty.
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Stage"})).unwrap();
+    let mut c = a.studio().collection().clone();
+    let stage = c.sources.iter_mut().find(|s| s.name == "Stage").unwrap();
+    stage.kind = staged::KIND.to_string();
+    a.studio.load_collection(c.clone());
+    for id in ["present.next", "present.previous"] {
+        assert!(!a.item_state(id).enabled && !listed(&a, id), "{id} with nothing staged");
+    }
+    assert!(!listed(&a, &slot(2)));
+    let stage = c.sources.iter_mut().find(|s| s.name == "Stage").unwrap();
+    stage.settings.set(staged::SLOT_KEYS[1], "a.exe\u{1f}A");
+    a.studio.load_collection(c);
+    for id in ["present.next", "present.previous"] {
+        assert!(a.item_state(id).enabled && listed(&a, id), "{id} with a staged window");
+    }
+    assert!(listed(&a, &slot(2)) && !listed(&a, &slot(1)), "Present Staged Window 2 only");
 }

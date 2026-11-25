@@ -90,6 +90,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.rotate_cw", "Rotate 90° Clockwise"),
     ("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
     ("app.about", "About StudioCraft"),
+    ("app.command_palette", "Command Palette…"),
     ("app.licenses", "Licenses"),
     ("app.language", "Language"),
     ("app.check_updates", "Check for Updates…"),
@@ -272,6 +273,7 @@ pub fn catalog() -> Vec<CommandDef> {
         bindable(c("view.fullscreen"), "Full-Screen Interface", &["F11"]).toggle(),
         bindable(c("view.lock_preview"), "Lock Preview", &[]).toggle(),
         bindable(c("app.settings"), "Settings", &[]),
+        bindable(c("app.command_palette"), "Command Palette…", &["Cmd+K"]),
         bindable(c("app.exit"), "Exit", &[]),
     ];
     for i in 1..=SCENE_HOTKEYS {
@@ -489,6 +491,8 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
     let view = Menu::new(
         title("View"),
         vec![
+            item("app.command_palette", "Command Palette…"),
+            Node::Separator,
             check("view.fullscreen", "Full-Screen Interface"),
             Node::Separator,
             check("studio.toggle", "Studio Mode"),

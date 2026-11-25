@@ -8,6 +8,7 @@ use craft_ui::dialog::{HeldOk, StandardPrompt};
 use craft_ui::patterns::form_dialogs::HostedParamDialog;
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
+use studiocraft_model::staged;
 use studiocraft_studio::{CaptionState, OutputKind};
 
 use crate::i18n::Msg;
@@ -63,6 +64,16 @@ fn menu_nodes(nodes: &[Node], prefix: &str) -> Vec<Value> {
 }
 
 impl StudioApp {
+    /// Whether a Staged windows source of the collection holds a window or display in slot `slot`
+    /// (1 is the first), or in any slot when `slot` is `None`.
+    pub(crate) fn staged_slot(&self, slot: Option<usize>) -> bool {
+        let mut sources = self.studio.collection().sources.iter().filter(|s| s.kind == staged::KIND);
+        sources.any(|s| match slot {
+            Some(n) => staged::staged(&s.settings, n).is_some(),
+            None => (1..=staged::SLOTS).any(|n| staged::staged(&s.settings, n).is_some()),
+        })
+    }
+
     /// Whether a menu item for `id` is enabled and checked now.
     pub(crate) fn item_state(&self, id: &str) -> ItemState {
         let p = self.store.prefs();
@@ -89,14 +100,18 @@ impl StudioApp {
             "scenes.view" => on(p.scene_grid),
             "view.fullscreen" => on(self.fullscreen),
             "studio.toggle" => on(engine.studio_mode()),
+            "studio.transition" => enabled(engine.studio_mode()),
+            "app.command_palette" => enabled(!self.modal_open()),
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "replay.save" => enabled(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "record.marker" => enabled(self.studio.output(OutputKind::Recording).is_some_and(|s| s.active)),
+            "marker.add" => enabled(self.studio.output(OutputKind::Recording).is_some_and(|s| s.active) || self.studio.audio_tracks_running()),
             "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
             "pause.toggle" => on(self.studio.paused().is_some()),
             "pause.start" => enabled(self.studio.paused().is_none()),
             "pause.stop" => enabled(self.studio.paused().is_some()),
             "pause.extend" => enabled(self.studio.paused().is_some()),
+            "present.next" | "present.previous" | "present.window" => enabled(self.staged_slot(None)),
             "audio_tracks.open_last" => enabled(self.studio.audio_tracks_last_session().is_some()),
             "audio_tracks.marker" => enabled(self.studio.audio_tracks_running()),
             "dock.scenes" => on(p.docks.scenes),
@@ -123,6 +138,13 @@ impl StudioApp {
     /// The menu bar laid out for `target`, with shortcuts and the current enabled and checked
     /// states.
     pub(crate) fn laid_menu_for(&self, target: Target) -> MenuBar {
+        let options = LayoutOptions::new(APP_NAME).label(&crate::i18n::menu_text);
+        craft_menu::layout(&self.stated_menu(), target, &options).bar
+    }
+
+    /// The menu bar before it is laid out for a platform, with shortcuts and the current enabled
+    /// and checked states.
+    pub(crate) fn stated_menu(&self) -> Tracked<MenuBar> {
         let layouts = self.store.prefs().dock_layout_names();
         let s = commands::MenuState {
             collections: &self.collections,
@@ -138,8 +160,7 @@ impl StudioApp {
         let mut bar = Tracked::new(menus);
         craft_menu::apply_keymap(&mut bar, &self.keymap);
         craft_menu::apply_state(&mut bar, |c| self.item_state(&c.id));
-        let options = LayoutOptions::new(APP_NAME).label(&crate::i18n::menu_text);
-        craft_menu::layout(&bar, target, &options).bar
+        bar
     }
 
     /// View › Language (in the app menu on macOS): Automatic, then every built-in language by
@@ -428,6 +449,7 @@ impl StudioApp {
                 "properties": self.properties.iter().map(|p| p.source).collect::<Vec<_>>(),
                 "filters": self.filters.iter().map(|f| f.source).collect::<Vec<_>>(),
                 "about": self.about,
+                "command_palette": self.palette.is_open(),
                 "stats": self.store.prefs().stats,
                 "encoders": self.encoders.is_some(),
                 "prompt": self.naming.as_ref().map(|n| self.name_prompt_json(n)),

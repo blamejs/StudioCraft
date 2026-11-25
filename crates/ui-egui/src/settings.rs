@@ -256,7 +256,7 @@ fn probe(path: &str) -> (Vec<String>, Result<String, String>) {
 /// A shortcut list entry's label in the interface language: a command without parameters by its
 /// command id, `Show Scene {n}` and `Present Staged Window {n}` by their templates, and any other
 /// by its English label.
-fn hotkey_label(command: &CommandRef, label: &str) -> String {
+pub(crate) fn hotkey_label(command: &CommandRef, label: &str) -> String {
     if let Some(n) = command.params.get("index").and_then(serde_json::Value::as_u64) {
         match command.id.as_str() {
             "scene.select_index" => return craft_i18n::fmt(tl!("Show Scene {n}"), &[("n", &n.to_string())]),

@@ -938,6 +938,37 @@ shows the license texts.
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
 
+### Command palette
+
+View › Command Palette… opens a search over the window's commands. Ctrl+K on Windows and Linux,
+and ⌘K on macOS, open it too, and Settings › Hotkeys can change that shortcut. A query finds a
+command by its label, its English label, its menu path or its command id (`view.stats`), and each
+row shows the menu path and the command's shortcut. The palette lists the menus' commands, each
+scene by its name (the first nine with their Ctrl+1 to Ctrl+9 shortcuts), the commands Settings ›
+Hotkeys lists, and the other commands that run without parameters. A command that cannot run in
+the current state, such as Fit to Screen with no source selected, is not listed. While the palette
+is open, its list changes with the state: a command leaves it when it can no longer run, and a
+scene, profile or scene collection added or renamed through the control channel shows under its
+new name. A change of the interface language changes the palette's labels too.
+
+The palette and the control channel's command list show these commands as able to run only in
+these states:
+
+- Present Next Staged Window and Present Previous Staged Window: a Staged windows source of the
+  scene collection holds a window or display. The palette lists Present Staged Window N only when
+  one holds a window or display in slot N.
+- Transition to Program and Cut to Program: studio mode is on.
+- Add Marker (`marker.add`): a recording or the audio tracks are running.
+
+A command that can still fail when it runs, such as Live Captions before a speech model is
+downloaded, is listed and reports its error as it does from its menu.
+
+Up and Down move between the rows, Enter runs the command, and Escape clears the query or, on an
+empty query, closes the palette. A command runs as it does from its menu. With an empty query the
+palette lists the commands it ran last, newest first. The palette does not open while Settings, a
+name prompt or the exit confirmation is open, and `app.command_palette` then returns the error
+"`app.command_palette` cannot run now".
+
 ## Hotkeys
 
 Settings › Hotkeys lists every command that can take a shortcut and changes its shortcuts. Type
