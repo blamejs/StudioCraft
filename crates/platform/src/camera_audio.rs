@@ -9,6 +9,10 @@
 //! node is found under `/dev/v4l/by-id`, and a PipeWire input's node name carries the same USB
 //! serial. On macOS only the names are compared.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::thread::Thread;
+use std::time::{Duration, Instant};
+
 use crate::audio::{self, DeviceInfo, DeviceKind};
 use crate::camera::{self, CameraInfo, best_match};
 
@@ -130,7 +134,6 @@ fn node_serial(node: &str) -> Option<&str> {
 #[cfg(windows)]
 mod imp {
     use std::sync::Arc;
-    use std::sync::mpsc;
     use std::time::Duration;
 
     use crossbeam_queue::ArrayQueue;
@@ -139,7 +142,7 @@ mod imp {
     use windows::core::{HSTRING, IInspectable, Interface};
     use windows_collections::IIterable;
 
-    use super::MAX_DEVICES;
+    use super::{Listing, MAX_DEVICES};
     use crate::audio::DeviceInfo;
     use crate::camera::CameraInfo;
 
@@ -164,17 +167,18 @@ mod imp {
     }
 
     /// The devices of `class` with their container ids, read by a device watcher until it has
-    /// listed them all. The watcher's callback sends each device through a bounded lock-free queue,
-    /// and this thread takes them out once the listing is complete. Empty when they cannot be listed.
+    /// listed them all. The watcher's callback sends each device through a bounded lock-free queue
+    /// and records the end of the listing in an atomic, and this thread takes the devices out once
+    /// the listing is complete. Empty when they cannot be listed.
     fn listed(class: DeviceClass) -> Vec<Listed> {
         let Ok(_com) = comedy::com::ComApartmentScope::init_mta() else { return Vec::new() };
         let Ok(filter) = DeviceInformation::GetAqsFilterFromDeviceClass(class) else { return Vec::new() };
         let wanted = IIterable::<HSTRING>::from(vec![HSTRING::from(CONTAINER_ID)]);
         let Ok(watcher) = DeviceInformation::CreateWatcherAqsFilterAndAdditionalProperties(&filter, &wanted) else { return Vec::new() };
         let found = Arc::new(ArrayQueue::<Listed>::new(MAX_DEVICES));
-        // True once every device was listed, false when the watcher stopped before that.
-        let (done, finished) = mpsc::sync_channel::<bool>(1);
-        let ended = done.clone();
+        let listing = Arc::new(Listing::new());
+        let done = Arc::clone(&listing);
+        let ended = Arc::clone(&listing);
         let into = Arc::clone(&found);
         // The watcher lists the devices only to an app that handles the added, removed and
         // updated events.
@@ -195,20 +199,20 @@ mod imp {
             .and_then(|_| watcher.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(|_, _| Ok(()))))
             .and_then(|_| {
                 watcher.EnumerationCompleted(&TypedEventHandler::<DeviceWatcher, IInspectable>::new(move |_, _| {
-                    let _ = done.try_send(true);
+                    done.end(true);
                     Ok(())
                 }))
             })
             .and_then(|_| {
                 watcher.Stopped(&TypedEventHandler::<DeviceWatcher, IInspectable>::new(move |_, _| {
-                    let _ = ended.try_send(false);
+                    ended.end(false);
                     Ok(())
                 }))
             });
         if handlers.is_err() || watcher.Start().is_err() {
             return Vec::new();
         }
-        let complete = finished.recv_timeout(LISTING) == Ok(true);
+        let complete = listing.complete_within(LISTING);
         let _ = watcher.Stop();
         if !complete {
             return Vec::new();
@@ -232,6 +236,55 @@ mod imp {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn drained<T>(queue: &crossbeam_queue::ArrayQueue<T>) -> Vec<T> {
     std::iter::from_fn(|| queue.pop()).take(queue.capacity()).collect()
+}
+
+/// A listing that has not ended yet.
+const PENDING: u8 = 0;
+/// A listing that listed every device.
+const COMPLETE: u8 = 1;
+/// A listing that stopped before it listed every device.
+const STOPPED: u8 = 2;
+
+/// How a device listing ended. The system's callback thread records the end in an atomic and
+/// wakes the thread that waits for it.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct Listing {
+    state: AtomicU8,
+    waiter: Thread,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl Listing {
+    /// A listing that the calling thread waits for.
+    fn new() -> Self {
+        Self { state: AtomicU8::new(PENDING), waiter: std::thread::current() }
+    }
+
+    /// Records that the listing ended, complete or stopped, and wakes the waiting thread. Only
+    /// the first end counts, so a stop that follows the completion leaves it complete.
+    fn end(&self, complete: bool) {
+        let to = if complete { COMPLETE } else { STOPPED };
+        if self.state.compare_exchange(PENDING, to, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            self.waiter.unpark();
+        }
+    }
+
+    /// Waits up to `timeout` for the listing to end. True when it listed every device.
+    fn complete_within(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            match self.state.load(Ordering::Acquire) {
+                COMPLETE => return true,
+                STOPPED => return false,
+                _ => {}
+            }
+            let left = deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(Instant::now()));
+            if left.is_zero() {
+                return false;
+            }
+            std::thread::park_timeout(left);
+        }
+    }
 }
 
 /// The container id of the one device named `name` in `listed` (names with container ids). A
@@ -386,6 +439,35 @@ mod tests {
         assert_eq!(drained(&queue), (0..MAX_DEVICES).collect::<Vec<_>>());
         assert!(queue.is_empty());
         assert_eq!(drained(&queue), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_listing_completed_on_another_thread_wakes_the_waiting_thread() {
+        let listing = std::sync::Arc::new(Listing::new());
+        let ender = std::sync::Arc::clone(&listing);
+        // The device watcher's callbacks run on a thread of the system's.
+        let ending = std::thread::spawn(move || ender.end(true));
+        assert!(listing.complete_within(Duration::MAX));
+        ending.join().unwrap();
+    }
+
+    #[test]
+    fn only_the_first_end_of_a_listing_counts() {
+        let stopped = Listing::new();
+        stopped.end(false);
+        stopped.end(true);
+        assert!(!stopped.complete_within(Duration::MAX));
+
+        // The watcher stops after it completes; the listing stays complete.
+        let completed = Listing::new();
+        completed.end(true);
+        completed.end(false);
+        assert!(completed.complete_within(Duration::MAX));
+    }
+
+    #[test]
+    fn a_listing_that_has_not_ended_is_not_complete() {
+        assert!(!Listing::new().complete_within(Duration::ZERO));
     }
 
     #[test]
