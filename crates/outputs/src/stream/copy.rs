@@ -21,8 +21,8 @@
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ use craft_packet::{Kind, Monitor, Receiver, RecvError, Stats};
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_plugin::StreamCopyState;
 
-use super::{RECV_WAIT, lock};
+use super::RECV_WAIT;
 use crate::native::{Counted, Track, writing_app};
 
 /// A file the copy can be written to.
@@ -64,24 +64,43 @@ pub(crate) fn create(path: &Path) -> Open {
     })
 }
 
-/// What the copy's thread and the stream share.
+/// The copy's state, as [`Shared::state`] holds it.
+const WRITING: u8 = 0;
+const FINISHED: u8 = 1;
+/// The stream gave up on the copy: the thread ends without finishing the file.
+const ABANDONED: u8 = 2;
+
+/// The message for a copy that a stop left unfinished after waiting `secs` seconds.
+fn not_finished_in(secs: u64) -> String {
+    format!("the copy was not finished in {secs} seconds; the file may not play")
+}
+
+/// What the copy's thread and the stream share, without a lock: the state in atomics, and the
+/// failure's text in a [`OnceLock`], whose `get` does not wait.
 #[derive(Default)]
 struct Shared {
     /// Bytes written, counting those still in the file's buffer.
     stats: Arc<EncoderStats>,
-    finished: AtomicBool,
-    /// Leave the file as it is: the thread ends without finishing it.
-    abandon: AtomicBool,
-    failure: Mutex<Option<String>>,
+    /// [`WRITING`], then [`FINISHED`] or [`ABANDONED`], whichever comes first.
+    state: AtomicU8,
+    /// How long the stop that abandoned the copy waited, in seconds.
+    waited_secs: AtomicU64,
+    failure: OnceLock<String>,
 }
 
 impl Shared {
     /// Record `message` unless an earlier failure is recorded.
     fn fail(&self, message: String) {
-        let mut f = lock(&self.failure);
-        if f.is_none() {
-            *f = Some(message);
-        }
+        let _ = self.failure.set(message);
+    }
+
+    fn abandoned(&self) -> bool {
+        self.state.load(Ordering::Acquire) == ABANDONED
+    }
+
+    /// Move from [`WRITING`] to `to`. False when the copy already finished or was abandoned.
+    fn settle(&self, to: u8) -> bool {
+        self.state.compare_exchange(WRITING, to, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 }
 
@@ -128,8 +147,11 @@ impl StreamCopy {
             path: self.path.clone(),
             bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
             lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
-            finished: self.shared.finished.load(Ordering::SeqCst),
-            failure: lock(&self.shared.failure).clone(),
+            finished: self.shared.state.load(Ordering::Acquire) == FINISHED,
+            failure: self.shared.failure.get().cloned().or_else(|| {
+                // A stop abandoned the copy and is about to record why.
+                self.shared.abandoned().then(|| not_finished_in(self.shared.waited_secs.load(Ordering::Acquire)))
+            }),
         }
     }
 
@@ -145,11 +167,10 @@ impl StreamCopy {
             let _ = t.join();
             return;
         }
-        // Under the failure's lock, so the copy is either finished or reported as not finished.
-        let mut failure = lock(&self.shared.failure);
-        self.shared.abandon.store(true, Ordering::SeqCst);
-        if !self.shared.finished.load(Ordering::SeqCst) && failure.is_none() {
-            *failure = Some(format!("the copy was not finished in {} seconds; the file may not play", wait.as_secs()));
+        // The copy is either finished or abandoned, whichever its state reaches first.
+        self.shared.waited_secs.store(wait.as_secs(), Ordering::Release);
+        if self.shared.settle(ABANDONED) {
+            self.shared.fail(not_finished_in(wait.as_secs()));
         }
     }
 }
@@ -157,7 +178,7 @@ impl StreamCopy {
 impl Drop for StreamCopy {
     fn drop(&mut self) {
         // A thread still running ends at its next packet, or when its write returns.
-        self.shared.abandon.store(true, Ordering::SeqCst);
+        self.shared.settle(ABANDONED);
     }
 }
 
@@ -169,7 +190,7 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Ok(f) => f,
         Err(e) => return shared.fail(could_not(&e)),
     };
-    if shared.abandon.load(Ordering::SeqCst) {
+    if shared.abandoned() {
         // The stop gave up on the copy while the file was opening: nothing is written to it.
         return;
     }
@@ -180,7 +201,7 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
     };
     let mut zero = None;
     loop {
-        if shared.abandon.load(Ordering::SeqCst) {
+        if shared.abandoned() {
             // Dropping the writer writes out what it has buffered, without finishing the file.
             return;
         }
@@ -208,10 +229,7 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
     match w.flush() {
         Ok(()) => {
             // A stop that gave up on the copy has reported it as not finished, and it stays so.
-            let _decided = lock(&shared.failure);
-            if !shared.abandon.load(Ordering::SeqCst) {
-                shared.finished.store(true, Ordering::SeqCst);
-            }
+            shared.settle(FINISHED);
         }
         Err(e) => shared.fail(not_finished(&e)),
     }
