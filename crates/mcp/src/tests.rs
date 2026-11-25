@@ -232,6 +232,11 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+    ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_horizontal": true}})));
+    let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
+    let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
+    assert!(items.iter().any(|i| i["transform"]["flip_horizontal"] == json!(true) && i["transform"]["flip_vertical"] == json!(false)), "{doc}");
+    error_text(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_vertical": 1}})));
     ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {}, "fit": "fill"})));
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     assert!(doc["collection"]["scenes"][0]["items"].as_array().unwrap().iter().any(|i| i["fit"] == json!("fill")), "{doc}");
@@ -501,6 +506,24 @@ fn the_pause_tools_pause_and_resume_the_program() {
     assert!(error_text(&call(&mut s, "pause_start", json!({"countdown_s": 43_201}))).contains("43200"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"at_zero": "later"}))).contains("at_zero"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"media": "song.mp3"}))).contains("picture or video"));
+    // The look of the pause screen and the scene's audio can be given too, and each is checked.
+    for (key, bad, word) in [
+        ("text", json!("Back soon"), "{time}"),
+        ("zero_text", json!("x".repeat(201)), "text at zero"),
+        ("anchor", json!("middle"), "anchor"),
+        ("size_pct", json!(16), "size_pct"),
+        ("fit", json!("contain"), "fit"),
+        ("background", json!("red"), "background"),
+        ("mute_scene", json!("yes"), "boolean"),
+    ] {
+        let err = error_text(&call(&mut s, "pause_start", json!({key: bad})));
+        assert!(err.contains(word), "{key}: {err}");
+    }
+    let given = json!({
+        "text": "Live in {time}", "zero_text": "Now", "anchor": "top_right", "size_pct": 10, "fit": "stretch",
+        "background": "#000000", "mute_scene": false
+    });
+    assert_eq!(ok_json(&call(&mut s, "pause_start", given))["paused"], json!(true));
     assert_eq!(ok_json(&call(&mut s, "pause_stop", json!({}))), json!({"paused": false}));
     assert!(error_text(&call(&mut s, "pause_stop", json!({}))).contains("not paused"));
 }
@@ -1591,6 +1614,39 @@ fn speech_models_are_held_to_the_roots() {
     let mut s = Server::new(Box::new(h)).unwrap();
     let status = ok_json(&call(&mut s, "command_run", json!({"id": "captions.status", "params": {}})));
     assert!(status["models"].as_array().unwrap().iter().all(|m| m["downloaded"] == false), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn face_tracking_models_are_held_to_the_roots() {
+    let dir = root_folders("face-model-roots");
+    std::fs::write(dir.join("in").join("mine.task"), b"abc").unwrap();
+    std::fs::write(dir.join("outside").join("mine.task"), b"abc").unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots.clone()) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("outside"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "avatar.model_download", "params": {}})));
+    assert!(text.contains("outside the write roots"), "{text}");
+    assert!(!dir.join("outside").join("face-landmarker").exists(), "nothing was downloaded");
+    let install =
+        |s: &mut Server, file: &std::path::Path| call(s, "command_run", json!({"id": "avatar.model_install", "params": {"path": text_of(file)}}));
+    let text = error_text(&install(&mut s, &dir.join("outside").join("mine.task")));
+    assert!(text.contains("outside the read roots"), "{text}");
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("outside the write roots"), "{text}");
+    // The status does not look at model files outside the read roots.
+    let status = ok_json(&call(&mut s, "command_run", json!({"id": "avatar.models", "params": {}})));
+    let rows = status["models"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.iter().all(|m| m["installed"].is_null()), "{status}");
+    // With the models folder inside the write roots, the file inside the read roots reaches the
+    // studio, which checks its size.
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("out").join("models"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&install(&mut s, &dir.join("in").join("mine.task")));
+    assert!(text.contains("is 3 bytes"), "{text}");
+    assert!(!dir.join("out").join("models").join("face-landmarker").exists(), "nothing was installed");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

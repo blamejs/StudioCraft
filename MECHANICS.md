@@ -44,6 +44,9 @@ field to `false` in `mechanics.json`.
 | Image mask luma weights (color channel) | 0.2126, 0.7152, 0.0722 (BT.709) | `sources::filters::ImageMask` | estimated |
 | Fastest scroll speed | 2000 px/s each way | `sources::filters::SCROLL_MAX_SPEED` | estimated |
 | Scroll default limited width and height | 100 px | `sources::filters::SCROLL_DEFAULT_LIMIT` | estimated |
+| Largest Apply LUT 3D table | 90 colors a side | `sources::filters::LUT_MAX_SIZE` | estimated |
+| Largest Apply LUT 1D table, and the 3D table it becomes | 65536 entries; at most 64 colors a side | `sources::filters::LUT_MAX_1D_SIZE`, `LUT_1D_LATTICE` | estimated |
+| Largest Apply LUT `.cube` file | 64 MiB | `sources::filters::LUT_MAX_FILE` | estimated |
 | Sharpen Sharpness | 0.08 (0 to 1) | `sources::filters::SHARPEN_DEFAULT` | estimated |
 | Sharpen gain at Sharpness 1 | 4 × the difference from the 8 neighbors' average | `sources::filters::SHARPEN_GAIN` | estimated |
 
@@ -157,6 +160,8 @@ field to `false` in `mechanics.json`.
 | Value | Setting | Code | Source |
 | --- | --- | --- | --- |
 | Snap distance | 8 screen points (Alt turns it off) | `ui-egui::preview::SNAP_POINTS` | estimated |
+| Rotate handle step | 15 degrees (Alt turns it off) | `ui-egui::preview::ROTATE_STEP` | estimated |
+| Rotate handle distance from the top edge | 22 screen points | `ui-egui::preview::ROTATE_REACH` | estimated |
 | Undo steps kept | 200 | `engine::history::LIMIT` | estimated |
 | Changes merged into one undo step | Same key within 750 ms | `engine::history::COALESCE` | estimated |
 | Scene shortcuts | Ctrl+1 to Ctrl+9 | `ui-egui::commands::SCENE_HOTKEYS` | estimated |

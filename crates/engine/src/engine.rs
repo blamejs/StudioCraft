@@ -7,14 +7,15 @@ use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_TRANSITION_MS;
 use studiocraft_model::staged;
 use studiocraft_model::{
-    FilterConfig, FilterId, ItemId, PauseAtZero, PauseSettings, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId,
+    FilterConfig, FilterId, FitMode, ItemId, PauseAnchor, PauseAtZero, PauseSettings, Scene, SceneCollection, SceneId, SceneItem, SourceConfig,
+    SourceId,
 };
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
 
 use crate::command::{
     CanvasSize, Command, DEFAULT_THUMBNAIL_FPS, ItemRef, MAX_SOURCE_SIDE, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SCENES, MIN_THUMBNAIL_FPS, Move,
-    RuntimeAction, SceneRef, SourceRef, Undo,
+    PauseValues, RuntimeAction, SceneRef, SourceRef, Undo,
 };
 use crate::history::History;
 use crate::links;
@@ -350,6 +351,9 @@ impl Engine {
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::VirtualCameraStart {} => Ok(Outcome::runtime(RuntimeAction::StartVirtualCamera)),
+            Command::VirtualCameraStop {} => Ok(Outcome::runtime(RuntimeAction::StopVirtualCamera)),
+            Command::VirtualCameraToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleVirtualCamera)),
             Command::AudioLoudness {} => Ok(Outcome::runtime(RuntimeAction::AudioLoudness)),
             Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
             Command::AudioTracksRepair { folder } => {
@@ -374,6 +378,23 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::CaptionsDownload { model }))
             }
             Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
+            Command::AvatarModels {} => Ok(Outcome::runtime(RuntimeAction::AvatarModels)),
+            Command::AvatarModelDownload { model } => {
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the face tracking model is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AvatarModelDownload { model }))
+            }
+            Command::AvatarModelDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::AvatarModelDownloadCancel)),
+            Command::AvatarModelInstall { path, model } => {
+                if path.trim().is_empty() {
+                    return Err(EngineError::Invalid("the model file's path is empty".into()));
+                }
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the face tracking model is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AvatarModelInstall { path, model }))
+            }
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::AudioTracksMarker { name } => {
                 check_marker_name(name.as_deref())?;
@@ -398,14 +419,28 @@ impl Engine {
                 let f = s.filters.iter().find(|f| f.id.0 == filter).ok_or(EngineError::NoFilter(filter))?;
                 Ok(Outcome::runtime(RuntimeAction::FilterMeter { source: id, filter: f.id }))
             }
-            Command::PauseStart { media, countdown_s, at_zero } => {
+            Command::PauseStart { media, countdown_s, text, zero_text, at_zero, anchor, size_pct, fit, background, mute_scene } => {
                 if let Some(m) = &media {
                     PauseSettings::check_media(m).map_err(EngineError::Invalid)?;
                 }
-                if let Some(s) = countdown_s
-                    && !PauseSettings::COUNTDOWN_S.contains(&s)
+                let range = |name: &str, v: Option<u32>, r: std::ops::RangeInclusive<u32>| match v {
+                    Some(v) if !r.contains(&v) => Err(EngineError::Invalid(format!("{name} is {v}; it must be from {} to {}", r.start(), r.end()))),
+                    _ => Ok(v),
+                };
+                let countdown_s = range("countdown_s", countdown_s, PauseSettings::COUNTDOWN_S)?;
+                let size_pct = range("size_pct", size_pct, PauseSettings::SIZE_PCT)?;
+                if let Some(t) = &text {
+                    PauseSettings::check_text(t).map_err(EngineError::Invalid)?;
+                }
+                if let Some(t) = &zero_text
+                    && t.chars().count() > PauseSettings::MAX_TEXT
                 {
-                    return Err(EngineError::Invalid(format!("countdown_s is {s}; it must be from 0 to {}", PauseSettings::COUNTDOWN_S.end())));
+                    return Err(EngineError::Invalid(format!("the text at zero is longer than {} characters", PauseSettings::MAX_TEXT)));
+                }
+                if let Some(b) = &background
+                    && studiocraft_model::settings::parse_color(b).is_none()
+                {
+                    return Err(EngineError::Invalid(format!("background is `{b}`; it must be a color like #rrggbbaa")));
                 }
                 let at_zero = match at_zero.as_deref() {
                     None => None,
@@ -413,7 +448,22 @@ impl Engine {
                         PauseAtZero::from_id(id).ok_or_else(|| EngineError::Invalid(format!("at_zero is `{id}`; it must be `keep` or `resume`")))?,
                     ),
                 };
-                Ok(Outcome::runtime(RuntimeAction::PauseStart { media, countdown_s, at_zero }))
+                let anchor = match anchor.as_deref() {
+                    None => None,
+                    Some(id) => Some(PauseAnchor::from_id(id).ok_or_else(|| {
+                        let names: Vec<&str> = PauseAnchor::ALL.iter().map(|a| a.id()).collect();
+                        EngineError::Invalid(format!("anchor is `{id}`; it must be one of {}", names.join(", ")))
+                    })?),
+                };
+                let fit = match fit.as_deref() {
+                    None => None,
+                    Some("fit") => Some(FitMode::Fit),
+                    Some("fill") => Some(FitMode::Fill),
+                    Some("stretch") => Some(FitMode::Stretch),
+                    Some(id) => return Err(EngineError::Invalid(format!("fit is `{id}`; it must be `fit`, `fill` or `stretch`"))),
+                };
+                let values = PauseValues { media, countdown_s, text, zero_text, at_zero, anchor, size_pct, fit, background, mute_scene };
+                Ok(Outcome::runtime(RuntimeAction::PauseStart(values)))
             }
             Command::PauseStop {} => Ok(Outcome::runtime(RuntimeAction::PauseStop)),
             Command::PauseToggle {} => Ok(Outcome::runtime(RuntimeAction::PauseToggle)),
@@ -791,6 +841,15 @@ impl Engine {
                 if s.audio.record_track.is_some() || s.audio.records_track() != on {
                     s.audio.record_track = Some(on);
                 }
+                Ok((Value::Null, None))
+            }
+            Command::SourceMixTracks { source, tracks } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                s.audio.mix_tracks = tracks;
                 Ok((Value::Null, None))
             }
             Command::SourceMute { source, muted } => {

@@ -31,6 +31,9 @@ craft-atomic.workspace = true
 image.workspace = true
 # Live captions: speech recognition of the program audio, and the downloads of its models.
 craft-speech = { workspace = true, features = ["whisper", "download"] }
+# The face tracking model catalog and its install; the download goes through craft-speech's
+# checked downloader.
+craft-face-track.workspace = true
 # Caption files written beside a recording.
 craft-captions.workspace = true
 

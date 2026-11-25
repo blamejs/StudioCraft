@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, MixTracks, PauseAnchor, PauseAtZero, PauseSettings, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +100,9 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    StartVirtualCamera,
+    StopVirtualCamera,
+    ToggleVirtualCamera,
     /// The program's loudness readings and the profile's loudness target.
     AudioLoudness,
     /// The state of the audio tracks.
@@ -123,6 +126,19 @@ pub enum RuntimeAction {
         model: Option<String>,
     },
     CaptionsDownloadCancel,
+    /// The face tracking models and whether each is installed.
+    AvatarModels,
+    /// Download the face tracking model `model`.
+    AvatarModelDownload {
+        model: Option<String>,
+    },
+    /// Stop the face tracking model download or install that runs.
+    AvatarModelDownloadCancel,
+    /// Install the face tracking model `model` from the file at `path`.
+    AvatarModelInstall {
+        path: String,
+        model: Option<String>,
+    },
     /// Open the session of the last take of audio tracks in the audio editor.
     AudioTracksOpenLast,
     /// Mark the running take of audio tracks now, named `name` or numbered when it is `None`.
@@ -151,11 +167,7 @@ pub enum RuntimeAction {
     },
     /// Show the pause screen on the program, with the profile's settings and, for this pause only,
     /// each given value in place of its setting. While paused, apply the given values.
-    PauseStart {
-        media: Option<String>,
-        countdown_s: Option<u32>,
-        at_zero: Option<PauseAtZero>,
-    },
+    PauseStart(PauseValues),
     /// Show the program scene again.
     PauseStop,
     /// Pause with the profile's settings when not paused, else resume.
@@ -173,6 +185,56 @@ pub enum RuntimeAction {
     },
     OpenSettings,
     Exit,
+}
+
+/// The pause screen settings `pause.start` gives for one pause, each checked. A `None` keeps the
+/// setting the pause has: the profile's when it starts, or the running pause's own.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PauseValues {
+    pub media: Option<String>,
+    pub countdown_s: Option<u32>,
+    pub text: Option<String>,
+    pub zero_text: Option<String>,
+    pub at_zero: Option<PauseAtZero>,
+    pub anchor: Option<PauseAnchor>,
+    pub size_pct: Option<u32>,
+    pub fit: Option<FitMode>,
+    pub background: Option<String>,
+    pub mute_scene: Option<bool>,
+}
+
+impl PauseValues {
+    /// `s` with each given value in place of its setting. The countdown is left alone, since a
+    /// new countdown also restarts its time.
+    pub fn apply_to(&self, s: &mut PauseSettings) {
+        if let Some(m) = &self.media {
+            s.media.clone_from(m);
+        }
+        if let Some(t) = &self.text {
+            s.text.clone_from(t);
+        }
+        if let Some(t) = &self.zero_text {
+            s.zero_text.clone_from(t);
+        }
+        if let Some(z) = self.at_zero {
+            s.at_zero = z;
+        }
+        if let Some(a) = self.anchor {
+            s.anchor = a;
+        }
+        if let Some(p) = self.size_pct {
+            s.size_pct = p;
+        }
+        if let Some(f) = self.fit {
+            s.fit = f;
+        }
+        if let Some(b) = &self.background {
+            s.background.clone_from(b);
+        }
+        if let Some(m) = self.mute_scene {
+            s.mute_scene = m;
+        }
+    }
 }
 
 /// Every action.
@@ -254,6 +316,9 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
+    /// The mix tracks the source's audio goes to, as track numbers 1 to 6.
+    #[serde(rename = "source.mix_tracks")]
+    SourceMixTracks { source: SourceRef, tracks: MixTracks },
     /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
     /// source, or of every one whose slot is not empty when `source` is absent.
     #[serde(rename = "present.window")]
@@ -410,6 +475,13 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// Send the program to the virtual camera device, which other apps open as a camera.
+    #[serde(rename = "vcam.start")]
+    VirtualCameraStart {},
+    #[serde(rename = "vcam.stop")]
+    VirtualCameraStop {},
+    #[serde(rename = "vcam.toggle")]
+    VirtualCameraToggle {},
     /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
     /// profile's loudness target.
     #[serde(rename = "audio.loudness")]
@@ -445,6 +517,24 @@ pub enum Command {
     },
     #[serde(rename = "captions.download_cancel")]
     CaptionsDownloadCancel {},
+    /// The face tracking models, whether each is installed, and the download or install that runs.
+    #[serde(rename = "avatar.models")]
+    AvatarModels {},
+    /// Download a face tracking model into the models folder.
+    #[serde(rename = "avatar.model_download")]
+    AvatarModelDownload {
+        #[serde(default)]
+        model: Option<String>,
+    },
+    #[serde(rename = "avatar.model_download_cancel")]
+    AvatarModelDownloadCancel {},
+    /// Copy a face tracking model file the user has into the models folder, after checking it.
+    #[serde(rename = "avatar.model_install")]
+    AvatarModelInstall {
+        path: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
     /// Open the session of the last take in the audio editor, or its folder when the editor
     /// cannot be started.
     #[serde(rename = "audio_tracks.open_last")]
@@ -478,8 +568,12 @@ pub enum Command {
     RetestHardwareEncoders {},
     /// Show the pause screen on the program, and on every recording, stream and replay buffer.
     /// Each value given replaces its profile setting for this pause only: `media` a picture or
-    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `at_zero`
-    /// `keep` or `resume`. While paused, the given values apply without a new transition.
+    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `text` the
+    /// countdown text with one `{time}`, `zero_text` the text at zero, `at_zero` `keep` or
+    /// `resume`, `anchor` where the text sits, `size_pct` the text's height in percent of the
+    /// canvas, `fit` how the media is sized, `background` the color under it, and `mute_scene`
+    /// whether the program mix fades out. While paused, the given values apply without a new
+    /// transition.
     #[serde(rename = "pause.start")]
     PauseStart {
         #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
@@ -487,7 +581,21 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
         countdown_s: Option<u32>,
         #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        zero_text: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
         at_zero: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+        #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
+        size_pct: Option<u32>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        background: Option<String>,
+        #[serde(default, deserialize_with = "given_bool", skip_serializing_if = "Option::is_none")]
+        mute_scene: Option<bool>,
     },
     /// Show the program scene again, with the collection's transition.
     #[serde(rename = "pause.stop")]
@@ -552,6 +660,11 @@ fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>
 /// A parameter that may be left out but, when given, is a whole number: `null` is refused.
 fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
     u32::deserialize(d).map(Some)
+}
+
+/// A parameter that may be left out but, when given, is `true` or `false`: `null` is refused.
+fn given_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(d).map(Some)
 }
 
 /// A parameter that may be left out but, when given, is a number: `null` is refused.
@@ -624,6 +737,7 @@ impl Command {
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
+            Command::SourceMixTracks { .. } => "source.mix_tracks",
             Command::PresentWindow { .. } => "present.window",
             Command::PresentNext { .. } => "present.next",
             Command::PresentPrevious { .. } => "present.previous",
@@ -659,6 +773,9 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::VirtualCameraStart {} => "vcam.start",
+            Command::VirtualCameraStop {} => "vcam.stop",
+            Command::VirtualCameraToggle {} => "vcam.toggle",
             Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
@@ -668,6 +785,10 @@ impl Command {
             Command::CaptionsStatus {} => "captions.status",
             Command::CaptionsDownload { .. } => "captions.download",
             Command::CaptionsDownloadCancel {} => "captions.download_cancel",
+            Command::AvatarModels {} => "avatar.models",
+            Command::AvatarModelDownload { .. } => "avatar.model_download",
+            Command::AvatarModelDownloadCancel {} => "avatar.model_download_cancel",
+            Command::AvatarModelInstall { .. } => "avatar.model_install",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
             Command::MarkerAdd { .. } => "marker.add",
@@ -749,6 +870,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
+    spec("source.mix_tracks", "Mix Tracks", "source: id or name, tracks: list of track numbers 1 to 6, [] for none", Undo::Undoable),
     spec(
         "present.window",
         "Present Staged Window",
@@ -760,7 +882,12 @@ const SPECS: &[CommandSpec] = &[
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
+    spec(
+        "item.transform",
+        "Transform Source",
+        "item, scene?, transform: {position, scale, rotation, crop, flip_horizontal, flip_vertical}, fit?: fit|fill|stretch",
+        Undo::Undoable,
+    ),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
     spec(
@@ -794,6 +921,9 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("vcam.start", "Start Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.stop", "Stop Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.toggle", "Start or Stop Virtual Camera", "", Undo::NotUndoable),
     spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
@@ -803,6 +933,10 @@ const SPECS: &[CommandSpec] = &[
     spec("captions.status", "Live Captions Status", "", Undo::NotUndoable),
     spec("captions.download", "Download Speech Model", "model?: speech model id", Undo::NotUndoable),
     spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
+    spec("avatar.models", "Face Tracking Models", "", Undo::NotUndoable),
+    spec("avatar.model_download", "Download Face Tracking Model", "model?: face tracking model id", Undo::NotUndoable),
+    spec("avatar.model_download_cancel", "Cancel Face Tracking Model Download", "", Undo::NotUndoable),
+    spec("avatar.model_install", "Install Face Tracking Model from File", "path: the model file, model?: face tracking model id", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
@@ -817,7 +951,9 @@ const SPECS: &[CommandSpec] = &[
     spec(
         "pause.start",
         "Pause Program",
-        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, at_zero?: keep|resume",
+        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, text?: countdown text with one {time}, zero_text?: \
+         text at zero, at_zero?: keep|resume, anchor?: top_left|top_center|top_right|middle_left|center|middle_right|bottom_left|\
+         bottom_center|bottom_right, size_pct?: 2..15, fit?: fit|fill|stretch, background?: #rrggbbaa, mute_scene?: true|false",
         Undo::NotUndoable,
     ),
     spec("pause.stop", "Resume Program", "", Undo::NotUndoable),
@@ -876,10 +1012,37 @@ mod tests {
             Command::AudioLoudness {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
+            Command::AvatarModels {},
+            Command::AvatarModelDownload { model: None },
+            Command::AvatarModelDownload { model: Some("face-landmarker".into()) },
+            Command::AvatarModelDownloadCancel {},
+            Command::AvatarModelInstall { path: "face_landmarker.task".into(), model: None },
             Command::AppAudioLanes {},
             Command::AppAudioRoute { app: "player.exe".into(), routed: true },
-            Command::PauseStart { media: None, countdown_s: None, at_zero: None },
-            Command::PauseStart { media: Some("break.png".into()), countdown_s: Some(600), at_zero: Some("resume".into()) },
+            Command::PauseStart {
+                media: None,
+                countdown_s: None,
+                text: None,
+                zero_text: None,
+                at_zero: None,
+                anchor: None,
+                size_pct: None,
+                fit: None,
+                background: None,
+                mute_scene: None,
+            },
+            Command::PauseStart {
+                media: Some("break.png".into()),
+                countdown_s: Some(600),
+                text: Some("Back in {time}".into()),
+                zero_text: Some(String::new()),
+                at_zero: Some("resume".into()),
+                anchor: Some("top_left".into()),
+                size_pct: Some(8),
+                fit: Some("fill".into()),
+                background: Some("#000000ff".into()),
+                mute_scene: Some(false),
+            },
             Command::PauseStop {},
             Command::PauseToggle {},
             Command::PauseExtend { seconds: 60 },

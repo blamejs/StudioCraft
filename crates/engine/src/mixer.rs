@@ -16,6 +16,12 @@
 //! monitor only is left out of the program mix that the outputs receive; its levels are still
 //! measured.
 //!
+//! Each input also goes to the mix tracks it is assigned to ([`MIX_TRACKS`] of them), with the
+//! same share it adds to the program mix, hold included; an input left out of the program is on no
+//! track. A track is mixed only while an output takes it ([`MixerCmd::AddTrackOutput`]), and each
+//! such track goes clipped to the queues of the outputs that take it. The track mixes are
+//! allocated with the mixer, so taking or dropping a track does not allocate on the mixer thread.
+//!
 //! The interface talks to the thread through a lock-free command queue, so moving a fader never
 //! waits on the mixer.
 //!
@@ -45,7 +51,7 @@ use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into, mix_i
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::tap::TapSlot;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
-use studiocraft_model::{MonitorMode, SourceId};
+use studiocraft_model::{MIX_TRACKS, MixTracks, MonitorMode, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance};
 
 /// Blocks an input may have queued before the oldest are dropped, which bounds its latency to
@@ -108,6 +114,8 @@ pub struct MixInput {
     pub sync_offset_ms: u32,
     /// Whether the input goes into the monitoring mix, and whether it stays in the program mix.
     pub monitor: MonitorMode,
+    /// The mix tracks the input goes to, when it is heard in the program.
+    pub mix_tracks: MixTracks,
 }
 
 /// The taps of one take of audio tracks: the program's, and those of the inputs recorded to
@@ -154,6 +162,11 @@ pub enum MixerCmd {
         index: usize,
         instance: Box<dyn FilterInstance>,
     },
+    /// The mix tracks a source goes to changed.
+    MixTracks {
+        source: SourceId,
+        tracks: MixTracks,
+    },
     /// Where the monitoring mix goes, or `None` to stop making it.
     MonitorOutput(Option<Arc<Fifo<PooledBlock>>>),
     /// How long inputs take to fade in or out when the program scene changes, in milliseconds.
@@ -164,6 +177,13 @@ pub enum MixerCmd {
     Hold(bool),
     AddOutput {
         id: u64,
+        queue: Arc<Fifo<PooledBlock>>,
+    },
+    /// Send mix track `track` (1 to [`MIX_TRACKS`]) to the output `id`. One output can take
+    /// several tracks, each on its own queue; [`MixerCmd::RemoveOutput`] removes them all.
+    AddTrackOutput {
+        id: u64,
+        track: usize,
         queue: Arc<Fifo<PooledBlock>>,
     },
     RemoveOutput {
@@ -501,14 +521,26 @@ const FADING_FILTERS: usize = CONTROL_QUEUE;
 /// then and go back on the next block.
 const RETIRED_FILTERS: usize = RETIRED_LISTS + FADING_FILTERS;
 
-/// Outputs the mixer holds room for without allocating.
-const OUTPUT_ROOM: usize = 8;
+/// Output queues the mixer holds room for without allocating: the program mix of a few outputs,
+/// and every mix track of two.
+const OUTPUT_ROOM: usize = 8 + 2 * MIX_TRACKS;
+
+/// A queue an output reads, with what goes to it: the program mix, or a mix track.
+struct OutputQueue {
+    id: u64,
+    /// `None` for the program mix, else the track's index (track 1 is 0).
+    track: Option<usize>,
+    queue: Arc<Fifo<PooledBlock>>,
+}
 
 /// The mixer's state, separate from the thread so it can be tested block by block.
 pub struct MixState {
     inputs: Vec<Input>,
     retired: Arc<Retired>,
-    outputs: Vec<(u64, Arc<Fifo<PooledBlock>>)>,
+    outputs: Vec<OutputQueue>,
+    /// One mix for each mix track, and a bit for each track an output takes (bit 0 is track 1).
+    track_mixes: [Vec<f32>; MIX_TRACKS],
+    tracks_taken: u8,
     master: Arc<Levels>,
     meter: LoudnessMeter,
     loudness: Arc<Loudness>,
@@ -546,6 +578,8 @@ impl MixState {
             retired_taps: Arc::new(Fifo::new(RETIRED_LISTS)),
             taps_applied: Arc::new(AtomicU64::new(0)),
             outputs: Vec::with_capacity(OUTPUT_ROOM),
+            track_mixes: std::array::from_fn(|_| vec![0.0; BLOCK_SAMPLES]),
+            tracks_taken: 0,
             master,
             meter: LoudnessMeter::new(f64::from(SAMPLE_RATE), CHANNELS),
             loudness: Arc::new(Loudness::default()),
@@ -568,6 +602,11 @@ impl MixState {
     fn set_fade_ms(&mut self, ms: u32) {
         let blocks = (f64::from(ms) / 1000.0) * block_rate().as_f64();
         self.fade_step = if blocks < 1.0 { 1.0 } else { (1.0 / blocks) as f32 };
+    }
+
+    /// Note which tracks an output takes.
+    fn count_tracks(&mut self) {
+        self.tracks_taken = self.outputs.iter().filter_map(|o| o.track).fold(0, |bits, t| bits | (1 << t));
     }
 
     pub fn apply(&mut self, cmd: MixerCmd) {
@@ -646,11 +685,28 @@ impl MixState {
             MixerCmd::MonitorOutput(queue) => self.monitor_out = queue,
             MixerCmd::FadeMs(ms) => self.set_fade_ms(ms),
             MixerCmd::Hold(on) => self.held = on,
-            MixerCmd::AddOutput { id, queue } => {
-                self.outputs.retain(|(o, _)| *o != id);
-                self.outputs.push((id, queue));
+            MixerCmd::MixTracks { source, tracks } => {
+                for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
+                    i.cfg.mix_tracks = tracks;
+                }
             }
-            MixerCmd::RemoveOutput { id } => self.outputs.retain(|(o, _)| *o != id),
+            MixerCmd::AddOutput { id, queue } => {
+                self.outputs.retain(|o| !(o.id == id && o.track.is_none()));
+                self.outputs.push(OutputQueue { id, track: None, queue });
+            }
+            MixerCmd::AddTrackOutput { id, track, queue } => {
+                // A track that does not exist is not mixed.
+                if (1..=MIX_TRACKS).contains(&track) {
+                    let index = track - 1;
+                    self.outputs.retain(|o| !(o.id == id && o.track == Some(index)));
+                    self.outputs.push(OutputQueue { id, track: Some(index), queue });
+                }
+                self.count_tracks();
+            }
+            MixerCmd::RemoveOutput { id } => {
+                self.outputs.retain(|o| o.id != id);
+                self.count_tracks();
+            }
             MixerCmd::Taps { set, generation } => {
                 // The inputs let go of their slots first; the old set still holds them, and it
                 // goes back to the sending thread, so no slot is freed here.
@@ -676,6 +732,12 @@ impl MixState {
         self.hold =
             if self.hold < hold_target { (self.hold + self.fade_step).min(hold_target) } else { (self.hold - self.fade_step).max(hold_target) };
         let hold = self.hold;
+        let taken = self.tracks_taken;
+        for (t, m) in self.track_mixes.iter_mut().enumerate() {
+            if taken & (1 << t) != 0 {
+                m.iter_mut().for_each(|s| *s = 0.0);
+            }
+        }
         for input in &mut self.inputs {
             while input.cfg.audio.queued() > MAX_QUEUED_BLOCKS {
                 drop(input.cfg.audio.pop());
@@ -774,6 +836,18 @@ impl MixState {
                 b.pts = pts;
                 t.push(b);
             }
+            // Each track the input is on gets the share it adds to the program.
+            let mut on = taken & input.cfg.mix_tracks.bits();
+            if heard && hold > 0.0 && input.cfg.monitor.in_program() && on != 0 {
+                let share = if hold >= 1.0 { gain } else { gain * hold };
+                while on != 0 {
+                    let t = on.trailing_zeros() as usize;
+                    on &= on - 1;
+                    if let Some(m) = self.track_mixes.get_mut(t) {
+                        add_into(m, samples, share);
+                    }
+                }
+            }
             input.cfg.levels.store(levels);
         }
         if let Some(q) = &self.monitor_out {
@@ -794,9 +868,29 @@ impl MixState {
         }
         self.meter.process_interleaved(&self.mix);
         self.loudness.store(&self.meter);
-        for (_, q) in &self.outputs {
-            send_block(&self.pool, &self.outputs, q, &self.mix, pts);
+        for (t, m) in self.track_mixes.iter_mut().enumerate() {
+            if taken & (1 << t) != 0 {
+                clip(m);
+            }
         }
+        for o in &self.outputs {
+            let mix = match o.track {
+                None => &self.mix[..],
+                Some(t) => match self.track_mixes.get(t) {
+                    Some(m) => &m[..],
+                    None => continue,
+                },
+            };
+            send_block(&self.pool, &self.outputs, &o.queue, mix, pts);
+        }
+    }
+}
+
+/// Add `input * gain` to `out`, sample by sample, as far as the shorter of the two goes.
+fn add_into(out: &mut [f32], input: &[f32], gain: f32) {
+    let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+    for (o, s) in out.iter_mut().zip(input) {
+        *o += s * gain;
     }
 }
 
@@ -828,10 +922,10 @@ fn retire_fading(fading: &mut Vec<(usize, Box<dyn FilterInstance>)>, retired: &R
 ///
 /// A queue that stops being read would make the pool allocate a block every tick; its oldest
 /// unread block is dropped and reused instead. When `q` holds none, the oldest block of the
-/// output holding the most is reused.
-fn send_block(pool: &Arc<AudioPool>, outputs: &[(u64, Arc<Fifo<PooledBlock>>)], q: &Fifo<PooledBlock>, mix: &[f32], pts: studiocraft_media::Tick) {
+/// output queue holding the most is reused.
+fn send_block(pool: &Arc<AudioPool>, outputs: &[OutputQueue], q: &Fifo<PooledBlock>, mix: &[f32], pts: studiocraft_media::Tick) {
     let reclaimed =
-        if pool.exhausted() { q.reclaim().or_else(|| outputs.iter().max_by_key(|(_, o)| o.len()).and_then(|(_, o)| o.reclaim())) } else { None };
+        if pool.exhausted() { q.reclaim().or_else(|| outputs.iter().max_by_key(|o| o.queue.len()).and_then(|o| o.queue.reclaim())) } else { None };
     let mut out = reclaimed.unwrap_or_else(|| pool.take());
     out.samples.clear();
     out.samples.extend_from_slice(mix);
@@ -883,6 +977,7 @@ mod tests {
                 filters: vec![],
                 sync_offset_ms: 0,
                 monitor: MonitorMode::Off,
+                mix_tracks: MixTracks::ALL,
             },
             levels,
         )
@@ -990,6 +1085,124 @@ mod tests {
             held = reading.pop();
         }
         assert_eq!(m.pool.made(), kept, "blocks made beyond the ones the pool keeps");
+    }
+
+    /// A queue for `track` of output `id`.
+    fn take_track(m: &mut MixState, id: u64, track: usize) -> Arc<Fifo<PooledBlock>> {
+        let queue = Arc::new(Fifo::new(64));
+        m.apply(MixerCmd::AddTrackOutput { id, track, queue: Arc::clone(&queue) });
+        queue
+    }
+
+    fn close(got: f32, want: f32) -> bool {
+        (got - want).abs() < 1e-6
+    }
+
+    #[test]
+    fn each_mix_track_holds_the_inputs_assigned_to_it() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let sources: Vec<Arc<AudioOut>> = (0..4).map(|_| Arc::new(AudioOut::default())).collect();
+        let (mut a, _) = input(1, &sources[0], 1.0, true);
+        a.mix_tracks = MixTracks::from_bits(0b011);
+        let (mut b, _) = input(2, &sources[1], 1.0, true);
+        b.mix_tracks = MixTracks::from_bits(0b010);
+        let (mut c, _) = input(3, &sources[2], 1.0, true);
+        c.mix_tracks = MixTracks::NONE;
+        // Left out of the program, a monitor-only source is on no track either.
+        let (mut d, _) = input(4, &sources[3], 1.0, true);
+        d.monitor = MonitorMode::MonitorOnly;
+        m.apply(MixerCmd::Inputs(vec![a, b, c, d]));
+        let program = Arc::new(Fifo::new(64));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&program) });
+        let tracks: Vec<_> = (1..=3).map(|t| take_track(&mut m, 1, t)).collect();
+        let play = |m: &mut MixState, at: i64| {
+            for (s, v) in sources.iter().zip([0.1, 0.2, 0.3, 0.4]) {
+                feed(s, v);
+            }
+            m.tick(Tick(at));
+        };
+        play(&mut m, 7);
+        let p = program.pop().unwrap();
+        assert!(close(p.samples[0], 0.6), "the program has every input it hears: {}", p.samples[0]);
+        let got: Vec<(f32, Tick)> = tracks.iter().map(|q| q.pop().map(|b| (b.samples[1], b.pts)).unwrap()).collect();
+        assert!(close(got[0].0, 0.1) && close(got[1].0, 0.3) && got[2].0 == 0.0, "{got:?}");
+        assert!(got.iter().all(|(_, pts)| *pts == Tick(7)), "every track is stamped with the block's time");
+
+        // A change of tracks and a mute take effect on the next block, without a new input list.
+        m.apply(MixerCmd::MixTracks { source: SourceId(3), tracks: MixTracks::from_bits(0b100) });
+        m.apply(MixerCmd::Gain { source: SourceId(2), gain: 1.0, muted: true });
+        play(&mut m, 8);
+        let got: Vec<f32> = tracks.iter().map(|q| q.pop().unwrap().samples[0]).collect();
+        assert!(close(got[0], 0.1) && close(got[1], 0.1) && close(got[2], 0.3), "{got:?}");
+        assert!(close(program.pop().unwrap().samples[0], 0.4));
+
+        // Removing the output removes every queue it had.
+        m.apply(MixerCmd::RemoveOutput { id: 1 });
+        play(&mut m, 9);
+        assert!(program.pop().is_none() && tracks.iter().all(|q| q.pop().is_none()));
+        assert_eq!(m.tracks_taken, 0, "no track is mixed once no output takes one");
+    }
+
+    #[test]
+    fn a_track_is_clipped_and_fades_with_the_held_program() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.apply(MixerCmd::FadeMs(100));
+        let (a, b) = (Arc::new(AudioOut::default()), Arc::new(AudioOut::default()));
+        let (ia, _) = input(1, &a, 1.0, true);
+        let (ib, _) = input(2, &b, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia, ib]));
+        let program = Arc::new(Fifo::new(64));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&program) });
+        let track = take_track(&mut m, 1, 6);
+        feed(&a, 0.7);
+        feed(&b, 0.7);
+        m.tick(Tick(0));
+        assert_eq!(track.pop().unwrap().samples[0], 1.0, "a track is clipped like the program");
+        program.pop();
+        m.apply(MixerCmd::Hold(true));
+        for i in 1..10 {
+            feed(&a, 0.2);
+            feed(&b, 0.1);
+            m.tick(Tick(i));
+            let (p, t) = (program.pop().unwrap().samples[0], track.pop().unwrap().samples[0]);
+            assert!(close(p, t), "block {i}: the track follows the held program ({p} and {t})");
+        }
+        assert!(track.pop().is_none());
+    }
+
+    #[test]
+    fn a_track_that_does_not_exist_is_not_mixed() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (ia, _) = input(1, &a, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let none: Vec<_> = [0, MIX_TRACKS + 1, usize::MAX].into_iter().map(|t| take_track(&mut m, 1, t)).collect();
+        feed(&a, 0.5);
+        m.tick(Tick(0));
+        assert!(none.iter().all(|q| q.pop().is_none()));
+        assert_eq!(m.tracks_taken, 0);
+    }
+
+    #[test]
+    fn stalled_track_queues_do_not_make_the_mixer_allocate() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (ia, _) = input(1, &a, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let queues: Vec<_> = (1..=MIX_TRACKS)
+            .map(|t| {
+                let q = Arc::new(Fifo::new(256));
+                m.apply(MixerCmd::AddTrackOutput { id: 1, track: t, queue: Arc::clone(&q) });
+                q
+            })
+            .collect();
+        let kept = m.pool.capacity();
+        for i in 0..1000 {
+            feed(&a, 0.1);
+            m.tick(Tick(i));
+        }
+        assert_eq!(m.pool.made(), kept, "blocks made with no track read");
+        assert!(queues.iter().all(|q| !q.is_empty()), "every track still gets its newest blocks");
     }
 
     #[test]

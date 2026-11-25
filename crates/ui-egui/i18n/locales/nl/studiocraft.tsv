@@ -105,6 +105,8 @@
 	Filters…	Filters…
 	Finishing Recording…	Opname afronden…
 	Fit to Screen	Aanpassen aan scherm
+	Flip Horizontal	Horizontaal spiegelen
+	Flip Vertical	Verticaal spiegelen
 	Font	Lettertype
 	Font family	Lettertypefamilie
 	Format	Indeling
@@ -136,6 +138,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (ingebouwd)
 	VA-API H.264 (built in)	VA-API H.264 (ingebouwd)
 	VA-API HEVC (built in)	VA-API HEVC (ingebouwd)
+	VA-API AV1 (built in)	VA-API AV1 (ingebouwd)
 	Height	Hoogte
 	Hide	Verbergen
 	High	Hoog
@@ -321,6 +324,7 @@
 	the audio stream failed	de audiostroom is mislukt
 	the camera capture could not start	de camera-opname kon niet starten
 	the camera is already open in another format	de camera is al geopend in een ander formaat
+	the camera is not connected	de camera is niet aangesloten
 	the camera is still closing	de camera wordt nog gesloten
 	the camera offers no format StudioCraft reads	de camera biedt geen formaat dat StudioCraft kan lezen
 	the camera sends frames that cannot be read	de camera stuurt beelden die niet kunnen worden gelezen
@@ -357,7 +361,7 @@
 	Vertical speed (px/s)	Verticale snelheid (px/s)
 	Video bitrate	Videobitrate
 	Video encoder	Video-encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Video-instellingen kunnen niet worden gewijzigd tijdens een opname, een stream of terwijl de replaybuffer loopt.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Video-instellingen kunnen niet worden gewijzigd tijdens een opname, een stream of terwijl de replaybuffer of de virtuele camera loopt.
 	View	Beeld
 	Waiting for the program picture…	Wachten op het programmabeeld…
 	waiting for a choice in the system picker	wachten op een keuze in de systeemkiezer

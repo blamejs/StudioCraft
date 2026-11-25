@@ -11,7 +11,11 @@ studiocraft-media.workspace = true
 thiserror.workspace = true
 # Frames from capture threads to the source thread.
 crossbeam-queue.workspace = true
+# The camera list the camera watch publishes, read without a lock.
+arc-swap.workspace = true
 zune-jpeg.workspace = true
+# Display capture into textures shared with the compositor (Windows desktop duplication).
+craft-gpu-interop.workspace = true
 
 # Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
 # on Windows). Linux captures through PipeWire. Other systems build without them and report capture
@@ -23,6 +27,8 @@ cpal.workspace = true
 [target.'cfg(windows)'.dependencies]
 nokhwa = { workspace = true, features = ["input-msmf"] }
 comedy.workspace = true
+# The device watcher that reports cameras plugged in or out.
+windows = { version = "0.62", features = ["Devices_Enumeration", "Foundation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nokhwa = { workspace = true, features = ["input-avfoundation"] }
@@ -41,6 +47,8 @@ futures-util.workspace = true
 pollster.workspace = true
 nokhwa = { workspace = true, features = ["input-v4l"] }
 v4l.workspace = true
+# inotify on /dev, which reports V4L2 nodes plugged in or out.
+rustix = { workspace = true, features = ["fs"] }
 wayland-client.workspace = true
 x11rb.workspace = true
 

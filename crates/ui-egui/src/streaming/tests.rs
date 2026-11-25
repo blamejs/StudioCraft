@@ -32,7 +32,7 @@ fn drawn(f: impl FnMut(&mut Ui)) -> Vec<String> {
 }
 
 fn state(id: &str, status: DestinationStatus) -> DestinationState {
-    DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0 }
+    DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0, next_try: None, max_tries: 10 }
 }
 
 #[test]
@@ -344,8 +344,7 @@ fn a_change_that_cant_be_saved_is_put_back_and_can_be_made_again() {
 
 #[test]
 fn a_new_destination_does_not_take_an_id_the_running_stream_uses() {
-    let state =
-        |id: &str| DestinationState { id: id.into(), target: String::new(), status: DestinationStatus::Stopped, bytes: 0, dropped: 0, reconnects: 0 };
+    let state = |id: &str| state(id, DestinationStatus::Stopped);
     let empty = StreamSettings { destinations: Vec::new(), ..StreamSettings::default() };
     assert_eq!(new_id(&empty, &[]), "main");
     assert_eq!(new_id(&empty, &[state("main")]), "destination-2", "`main` was removed while the stream runs");
@@ -541,7 +540,7 @@ fn each_destination_shows_its_own_status() {
         state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[] };
+    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[], ingests: &[] };
     let mut panel = StreamingPanel::default();
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -551,7 +550,7 @@ fn each_destination_shows_its_own_status() {
         "c",
         "Failed: the server refused the stream; check the stream key",
         "Live",
-        "Trying again (try 3): the connection was lost",
+        "Trying again (try 3 of 10): the connection was lost",
         "Not in this stream; it is sent to from the next start",
         "rtmp://a.example/live/•••",
         "No key is held for this session yet",
@@ -565,7 +564,7 @@ fn each_destination_shows_its_own_status() {
     assert_eq!(texts.iter().filter(|t| *t == "Stop").count(), 2, "{texts:?}");
     assert!(acts.is_empty(), "drawing does nothing");
     // Without a stream each destination says whether starting the stream sends to it.
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests: &[] };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
@@ -596,7 +595,7 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
         ])
     );
     // The row names the cause, and its hover holds the error and each address.
-    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2): the server did not answer in time");
+    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2 of 10): the server did not answer in time");
     let detail = status_detail(true, Some(&retrying)).unwrap();
     assert_eq!(
         detail,
@@ -629,9 +628,61 @@ fn a_destination_waiting_for_the_network_says_so() {
     assert_eq!(v["error"], json!(failure.detail));
     assert_eq!(
         status_text(&d, true, Some(&waiting)),
-        ("Waiting for the network (try 3): the server's name could not be looked up".into(), Tone::Warn)
+        ("Waiting for the network (try 3 of 10): the server's name could not be looked up".into(), Tone::Warn)
     );
     assert_eq!(status_detail(true, Some(&waiting)).as_deref(), Some("the server's name did not resolve: no network"));
+}
+
+#[test]
+fn a_retrying_destination_shows_its_next_try_and_offers_try_now() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure::new(Cause::Lost, "the server closed the connection");
+    let retrying = DestinationState {
+        next_try: Some(Duration::from_millis(12_300)),
+        ..state("a", DestinationStatus::Retrying { attempt: 4, failure: failure.clone() })
+    };
+    let v = listed(&d, true, Some(&retrying), false);
+    assert_eq!((v["attempt"].clone(), v["max_tries"].clone(), v["next_try_ms"].clone()), (json!(4), json!(10), json!(12_300)));
+    // The seconds are rounded up, and the window draws again when they change.
+    assert_eq!(next_try_text(true, Some(&retrying)).as_deref(), Some("Next try in 13 s"));
+    assert_eq!(countdown_repaint(Duration::from_millis(12_300)), Duration::from_millis(300));
+    assert_eq!(countdown_repaint(Duration::from_secs(12)), Duration::from_secs(1));
+    assert_eq!(whole_seconds(Duration::from_secs(12)), 12);
+    // A wait for the network with no time set tries when a route returns.
+    let waiting = state("a", DestinationStatus::WaitingForNetwork { attempt: 2, failure: failure.clone() });
+    let v = listed(&d, true, Some(&waiting), false);
+    assert_eq!((v["max_tries"].clone(), v["next_try_ms"].clone()), (json!(10), Value::Null));
+    assert_eq!(next_try_text(true, Some(&waiting)).as_deref(), Some("Next try when a network route to the server returns"));
+    // A try that runs, a live destination and a stopped stream have no next try.
+    let trying = state("a", DestinationStatus::Retrying { attempt: 4, failure });
+    assert_eq!(next_try_text(true, Some(&trying)), None);
+    let live = state("a", DestinationStatus::Live);
+    assert_eq!(next_try_text(true, Some(&live)), None);
+    assert!(listed(&d, true, Some(&live), false).get("next_try_ms").is_none());
+    assert_eq!(next_try_text(false, Some(&retrying)), None);
+    // The row shows the countdown and Try Now, which runs `stream.retry_now`.
+    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    for (live, offered) in [(&retrying, true), (&waiting, true), (&trying, false)] {
+        let view = View { stream: &stream, running: true, live: std::slice::from_ref(live), held: &held, checks: &[], ingests: &[] };
+        let mut panel = StreamingPanel::default();
+        let mut acts = Vec::new();
+        let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+        assert_eq!(texts.iter().any(|t| t == "Try Now"), offered, "{texts:?}");
+        assert!(acts.is_empty(), "drawing does nothing");
+    }
+}
+
+#[test]
+fn try_now_needs_a_running_stream_and_an_id() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    let e = run(&mut a, &ctx, "stream.retry_now", json!({"id": "main"})).unwrap_err();
+    assert!(e.contains("the stream is not running"), "{e}");
+    assert!(run(&mut a, &ctx, "stream.retry_now", json!({})).unwrap_err().contains("needs `id`"));
+    assert!(run(&mut a, &ctx, "stream.retry_now", json!({"id": 3})).is_err(), "an id that is not a string");
+    assert_eq!(crate::commands::ui_params("stream.retry_now"), "id: string");
 }
 
 #[test]
@@ -655,7 +706,7 @@ fn open_details_save_what_was_typed() {
     // The details of a destination are drawn with its fields, and the server field hides its text.
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |n: &str| n == "night";
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -669,7 +720,7 @@ fn open_details_save_what_was_typed() {
     // A key at the end of the address is hidden in the list and in the field.
     let d = Destination { id: "c".into(), server: "rtmp://c.example/live/secret-c".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(!texts.iter().any(|t| t.contains("secret-c")), "{texts:?}");
@@ -794,7 +845,7 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -819,15 +870,23 @@ fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
         status: None,
         reason: None,
         detail: String::new(),
+        handshake: None,
         evidence: vec![
-            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new() },
+            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new(), handshake: None },
             Evidence {
                 check: Check::Connect,
                 target: "192.0.2.1:1935".into(),
                 outcome: Outcome::Failed(Cause::TimedOut),
                 detail: "timed out".into(),
+                handshake: None,
             },
-            Evidence { check: Check::Connect443, target: "192.0.2.1:443".into(), outcome: Outcome::Unfinished, detail: String::new() },
+            Evidence {
+                check: Check::Connect443,
+                target: "192.0.2.1:443".into(),
+                outcome: Outcome::Unfinished,
+                detail: String::new(),
+                handshake: None,
+            },
         ],
         at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
         automatic,
@@ -863,7 +922,7 @@ fn a_check_is_listed_and_shown_under_its_destination() {
     let stream = StreamSettings { destinations: vec![dest.clone()], ..StreamSettings::default() };
     let held = |_: &str| false;
     let checks = vec![("main".to_string(), CheckState::Done(Box::new(d.clone())))];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks, ingests: &[] };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
     for want in [d.english().as_str(), "Checked by itself after the destination failed", "What the check found", "Check Connection"] {
@@ -871,7 +930,7 @@ fn a_check_is_listed_and_shown_under_its_destination() {
     }
     // While a check runs, the window says so.
     let checks = vec![("main".to_string(), CheckState::Running { automatic: false })];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks, ingests: &[] };
     let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
     assert!(texts.iter().any(|t| t == "Checking the connection…"), "{texts:?}");
     assert!(texts.iter().all(|t| *t != d.english()), "{texts:?}");
@@ -884,8 +943,33 @@ fn a_certificate_verdict_names_the_reason_in_the_interface_language() {
     assert_eq!(verdict_msg(&d).english(), d.english(), "the window's reason is the same English text");
     assert!(d.english().contains("(the server's certificate has expired)"), "{}", d.english());
     let texts: std::collections::HashSet<&str> =
-        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::Unknown, Outcome::Unfinished].into_iter().map(outcome_text).collect();
-    assert_eq!(texts.len(), 5, "every outcome has its own text");
+        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::NotRtmp, Outcome::Unknown, Outcome::Unfinished]
+            .into_iter()
+            .map(outcome_text)
+            .collect();
+    assert_eq!(texts.len(), 6, "every outcome has its own text");
+    // What the port answered to the handshake is shown from its own template, which the window
+    // translates, and not from the English text the control channel gets.
+    let handshake = Evidence {
+        check: Check::Handshake,
+        target: "192.0.2.1:1935".into(),
+        outcome: Outcome::NotRtmp,
+        detail: "English text".into(),
+        handshake: Some(Handshake::NotRtmp(0x48)),
+    };
+    assert_eq!(
+        evidence_text(&handshake),
+        "Stream server handshake with 192.0.2.1:1935: answers, but not as a stream server (the server's first byte is 0x48, where an RTMP server \
+         sends its version, 0x03)"
+    );
+    let d =
+        Diagnosis { detail: "English text".into(), handshake: Some(Handshake::Closed { received: 7 }), ..diagnosis(Verdict::NotStreamServer, false) };
+    assert_eq!(
+        verdict_msg(&d).english(),
+        "ingest.example takes a connection on port 1935, but does not answer as a stream server: the server closed the connection after 7 of \
+         the 3073 bytes of its handshake. The server address or port may be wrong, the stream server behind it may not be working, or something \
+         on this network may be answering in its place"
+    );
 }
 
 #[test]
@@ -894,7 +978,7 @@ fn every_check_message_has_an_english_row() {
     let rows: std::collections::HashSet<(&str, &str)> =
         en.lines().filter_map(|l| l.split('\t').collect::<Vec<_>>().get(..2).map(|c| (c[0], c[1]))).collect();
     let templates = studiocraft_studio::diagnose::templates();
-    assert_eq!(templates.len(), 17);
+    assert_eq!(templates.len(), 23);
     let missing: Vec<String> = templates.iter().filter(|t| !rows.contains(&("@msg", **t))).map(|t| format!("@msg\t{t}\t{t}")).collect();
     assert!(missing.is_empty(), "check messages with no @msg row:\n{}", missing.join("\n"));
 }
@@ -935,4 +1019,81 @@ fn check_connection_runs_a_check_and_the_service_setting_is_changed() {
     }
     assert_eq!(crate::commands::ui_params("stream.diagnose"), "id: string");
     assert!(crate::commands::ui_params("stream.check_service_set").starts_with("enabled: boolean"));
+}
+
+fn server(name: &str, server: &str) -> IngestServer {
+    IngestServer { name: name.into(), server: server.into() }
+}
+
+#[test]
+fn the_details_offer_the_servers_of_the_services_list() {
+    let twitch = preset("twitch");
+    let documented = twitch.server.unwrap_or_default();
+    let list: std::sync::Arc<[IngestServer]> = vec![server("West", "rtmps://west.example/app"), server("East", "rtmp://east.example/app")].into();
+    // The service's documented server comes first when the list does not hold it, and once only
+    // when it does.
+    let choices: Vec<_> = ingest_choices(twitch, &list).collect();
+    assert_eq!(choices, [(tl!("Default"), documented), ("West", "rtmps://west.example/app"), ("East", "rtmp://east.example/app")]);
+    let with_default: Vec<IngestServer> = vec![server("West", "rtmps://west.example/app"), server("Here", documented)];
+    let choices: Vec<_> = ingest_choices(twitch, &with_default).collect();
+    assert_eq!(choices, [("West", "rtmps://west.example/app"), ("Here", documented)]);
+    let draw = |server: &str, ingests: &[(&'static str, ListState)]| {
+        let d = Destination { id: "main".into(), service: "twitch".into(), server: server.into(), ..Destination::default() };
+        let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+        let held = |_: &str| false;
+        let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests };
+        let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
+        let mut acts = Vec::new();
+        let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+        assert!(acts.is_empty(), "drawing does nothing");
+        assert_eq!(panel.editing.map(|e| e.server).as_deref(), Some(server), "drawing keeps the server");
+        texts
+    };
+    let has = |texts: &[String], want: &str| texts.iter().any(|t| t == want);
+    // Before the list is asked for, and after it could not be read, List Servers asks for it.
+    let texts = draw(documented, &[]);
+    assert!(has(&texts, "Ingest server") && has(&texts, "List Servers"), "{texts:?}");
+    let texts = draw(documented, &[("twitch", ListState::Loading)]);
+    assert!(has(&texts, "Reading the list of servers…") && !has(&texts, "List Servers"), "{texts:?}");
+    let failed = [("twitch", ListState::Failed("the server answered HTTP 503".into()))];
+    let texts = draw(documented, &failed);
+    assert!(has(&texts, "List Servers") && has(&texts, "The list could not be read: the server answered HTTP 503"), "{texts:?}");
+    // Once it is read, the choice names the server in use, and a typed server is kept as it is.
+    let ready = [("twitch", ListState::Ready(list.clone()))];
+    assert!(has(&draw("rtmp://east.example/app", &ready), "East"));
+    assert!(has(&draw(documented, &ready), tl!("Default")));
+    assert!(has(&draw("rtmp://typed.example/live", &ready), "Typed server"));
+    assert!(has(&draw("", &ready), "Choose a server"));
+    // A service that publishes no list has no choice of server.
+    let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
+    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[], ingests: &ready };
+    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
+    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut Vec::new()));
+    assert!(!has(&texts, "Ingest server") && !has(&texts, "List Servers"), "{texts:?}");
+}
+
+#[test]
+fn listing_ingest_servers_takes_only_a_service_that_publishes_a_list() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    assert!(run(&mut a, &ctx, "stream.ingest_servers", json!({})).unwrap_err().contains("needs `service`"));
+    for bad in [json!({"service": "youtube"}), json!({"service": ""}), json!({"service": "unknown"}), json!({"service": "TWITCH"})] {
+        let e = run(&mut a, &ctx, "stream.ingest_servers", bad.clone()).unwrap_err();
+        assert!(e.contains("publishes a list of its ingest servers (twitch)"), "{bad}: {e}");
+    }
+    assert!(run(&mut a, &ctx, "stream.ingest_servers", json!({"service": 1})).unwrap_err().contains("is a string"));
+    let e = run(&mut a, &ctx, "stream.ingest_servers", json!({"service": "twitch", "retry": "yes"})).unwrap_err();
+    assert!(e.contains("`retry` is true or false"), "{e}");
+    assert!(crate::commands::ui_params("stream.ingest_servers").starts_with("service: string"));
+    assert!(crate::commands::ui_params("stream.ingest_servers").contains("retry?: boolean"));
+    let twitch = preset("twitch");
+    assert_eq!(listed_ingests(twitch, &ListState::Loading), json!({"service": "twitch", "state": "loading"}));
+    let list: std::sync::Arc<[IngestServer]> = vec![server("West", "rtmps://west.example/app")].into();
+    assert_eq!(
+        listed_ingests(twitch, &ListState::Ready(list)),
+        json!({"service": "twitch", "state": "ready", "servers": [{"name": "West", "server": "rtmps://west.example/app"}]})
+    );
+    assert_eq!(listed_ingests(twitch, &ListState::Failed("timed out".into())), json!({"service": "twitch", "state": "failed", "error": "timed out"}));
 }

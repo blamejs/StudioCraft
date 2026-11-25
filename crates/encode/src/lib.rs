@@ -10,8 +10,8 @@
 //!   lists, registered as `mf_native_h264` and `mf_native_hevc`.
 //! - [`vt::VideoToolbox`] runs the hardware H.264 and HEVC encoders of macOS VideoToolbox,
 //!   registered as `vt_native_h264` and `vt_native_hevc`.
-//! - [`vaapi::VaApi`] runs the VA-API hardware H.264 and HEVC encoders on 64-bit Linux,
-//!   registered as `vaapi_native_h264` and `vaapi_native_hevc`.
+//! - [`vaapi::VaApi`] runs the VA-API hardware H.264, HEVC and AV1 encoders on 64-bit Linux,
+//!   registered as `vaapi_native_h264`, `vaapi_native_hevc` and `vaapi_native_av1`.
 //! - [`hardware::for_candidate`] gives the built-in encoder that runs a `craft_hwenc` candidate.
 //!
 //! The H.264 and AAC encoders are written on the clean-room encoders of `craft-video` and

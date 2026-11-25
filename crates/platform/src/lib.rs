@@ -7,6 +7,7 @@
 //!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
+//! - [`virtual_camera`]: send the program to a device other apps open as a camera (Linux).
 //! - [`net`]: whether this computer has a network route, without sending anything.
 //!
 //! Capture is implemented on Windows, macOS and Linux. On Linux, displays and windows are chosen in
@@ -20,6 +21,7 @@ pub mod camera;
 mod camera_frames;
 #[cfg(target_os = "linux")]
 mod camera_gray;
+mod camera_watch;
 pub mod display;
 #[cfg(target_os = "linux")]
 mod display_list;
@@ -31,6 +33,7 @@ mod portal;
 mod pw_loop;
 mod screen_frames;
 pub mod shell;
+pub mod virtual_camera;
 pub mod window;
 
 /// Why an operating-system service failed.
@@ -53,6 +56,9 @@ pub enum PlatformError {
     /// open it again until its settings change.
     #[error("{0}")]
     Stopped(String),
+    /// The device is still busy with earlier requests. The same request can succeed later.
+    #[error("the audio device is busy")]
+    Busy,
 }
 
 #[cfg(any(windows, target_os = "macos"))]
