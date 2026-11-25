@@ -2062,6 +2062,48 @@ impl std::io::Seek for FlushGated {
     }
 }
 
+/// A stream's packets for a copy without encoders: the fanout, the copy's subscription and an H.264
+/// and AAC track.
+fn copy_feed() -> (Fanout, Receiver, Vec<TrackSpec>) {
+    let mut video = TrackSpec::new(craft_media::matroska::TrackKind::Video, "V_MPEG4/ISO/AVC");
+    video.video_size = Some((64, 36));
+    let mut audio = TrackSpec::new(craft_media::matroska::TrackKind::Audio, "A_AAC");
+    audio.audio = Some((48_000.0, 2, None));
+    let rates = StreamRates { video_packets_per_second: 10, audio_packets_per_second: 50, bits_per_second: 500_000, ticks_per_second: 1_000_000_000 };
+    let fanout = Fanout::new();
+    let rx = fanout.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
+    (fanout, rx, vec![video, audio])
+}
+
+#[test]
+fn a_copy_whose_file_opens_after_a_stop_gave_up_writes_nothing() {
+    let path = temp_file("stream-copy-slow-open");
+    let (reached_tx, reached) = mpsc::channel::<()>();
+    let (release, gate) = mpsc::channel::<()>();
+    let (dropped_tx, dropped) = mpsc::channel::<()>();
+    let file = std::fs::File::create(&path).unwrap();
+    let open: copy::Open = Box::new(move || {
+        let _ = reached_tx.send(());
+        let _ = gate.recv();
+        let f = FlushGated { file, reached: None, gate: None, _dropped: dropped_tx };
+        Ok(Box::new(f) as Box<dyn copy::CopyFile>)
+    });
+    let (fanout, rx, tracks) = copy_feed();
+    let mut c = copy::StreamCopy::start(path.clone(), open, tracks, rx);
+    // The file opens only after the stream has ended and the stop has given up on the copy.
+    reached.recv().unwrap();
+    drop(fanout);
+    c.finish(Duration::ZERO);
+    drop(release);
+    // The copy's thread drops the file as it ends.
+    assert_eq!(dropped.recv(), Err(mpsc::RecvError));
+    let state = c.state();
+    let len = std::fs::metadata(&path).map(|m| m.len());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    assert_eq!((state.bytes, len.ok()), (0, Some(0)), "{state:?}");
+    assert!(!state.finished, "{state:?}");
+}
+
 #[test]
 fn a_copy_that_a_stop_left_unfinished_stays_unfinished() {
     let path = temp_file("stream-copy-late");
@@ -2073,14 +2115,8 @@ fn a_copy_that_a_stop_left_unfinished_stays_unfinished() {
         let f = FlushGated { file, reached: Some(reached_tx), gate: Some(gate), _dropped: dropped_tx };
         Ok(Box::new(f) as Box<dyn copy::CopyFile>)
     });
-    let mut video = TrackSpec::new(craft_media::matroska::TrackKind::Video, "V_MPEG4/ISO/AVC");
-    video.video_size = Some((64, 36));
-    let mut audio = TrackSpec::new(craft_media::matroska::TrackKind::Audio, "A_AAC");
-    audio.audio = Some((48_000.0, 2, None));
-    let rates = StreamRates { video_packets_per_second: 10, audio_packets_per_second: 50, bits_per_second: 500_000, ticks_per_second: 1_000_000_000 };
-    let fanout = Fanout::new();
-    let rx = fanout.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
-    let mut c = copy::StreamCopy::start(path.clone(), open, vec![video, audio], rx);
+    let (fanout, rx, tracks) = copy_feed();
+    let mut c = copy::StreamCopy::start(path.clone(), open, tracks, rx);
     // The stream ends, and the copy's last flush waits while the stop gives up on it. A copy that
     // fails before its flush drops the file, which ends these waits too.
     drop(fanout);

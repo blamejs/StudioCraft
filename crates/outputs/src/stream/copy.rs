@@ -169,6 +169,10 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Ok(f) => f,
         Err(e) => return shared.fail(could_not(&e)),
     };
+    if shared.abandon.load(Ordering::SeqCst) {
+        // The stop gave up on the copy while the file was opening: nothing is written to it.
+        return;
+    }
     let opts = MuxOptions { writing_app: writing_app(), ..MuxOptions::default() };
     let mut mux = match MkvWriter::new(Counted::new(file, Arc::clone(&shared.stats)), tracks, opts) {
         Ok(m) => m,
