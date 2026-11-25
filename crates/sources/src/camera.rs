@@ -288,7 +288,7 @@ impl Plugin for CameraSource {
     }
     /// The formats listed are those of the camera `settings` choose.
     fn schema_for(&self, settings: &Settings) -> SettingsSchema {
-        let list = camera::cameras();
+        let list = watched_cameras(camera::watch().as_deref(), camera::cameras);
         let want = CameraInfo::parse_key(settings.str("device").unwrap_or_default());
         let formats = best_match(&list, &want).and_then(|i| list.get(i)).map(camera::formats).unwrap_or_default();
         schema(&list, &formats)
@@ -305,6 +305,15 @@ fn watched_stamp(watch: Option<&Watch>, list: impl FnOnce() -> Vec<CameraInfo>) 
     match watch.and_then(Watch::cameras) {
         Some(watched) => stamp(&watched),
         None => stamp(&list()),
+    }
+}
+
+/// The cameras `watch` lists, or the ones `list` gives where the watch does not know them: the
+/// list [`watched_stamp`] stamps, so the Properties window shows the list its stamp is for.
+fn watched_cameras(watch: Option<&Watch>, list: impl FnOnce() -> Vec<CameraInfo>) -> Vec<CameraInfo> {
+    match watch.and_then(Watch::cameras) {
+        Some(watched) => watched.as_ref().clone(),
+        None => list(),
     }
 }
 
@@ -859,6 +868,16 @@ mod tests {
         system.plug(Vec::new());
         assert_eq!(watched_stamp(Some(&system.watch), asked), stamp(&[]), "unplugged");
         assert_eq!(watched_stamp(None, || vec![desk()]), stamp(&[desk()]), "without a watch the system is asked");
+    }
+
+    #[test]
+    fn the_properties_list_is_the_list_its_stamp_is_for() {
+        let system = System::new(vec![desk()]);
+        let failed = || -> Vec<CameraInfo> { Vec::new() };
+        let shown = watched_cameras(Some(&system.watch), failed);
+        assert_eq!(shown, vec![desk()], "a failed listing does not empty a list the watch knows");
+        assert_eq!(stamp(&shown), watched_stamp(Some(&system.watch), failed));
+        assert_eq!(watched_cameras(None, || vec![desk()]), vec![desk()], "without a watch the system is asked");
     }
 
     #[test]
