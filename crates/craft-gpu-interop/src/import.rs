@@ -279,7 +279,7 @@ impl Importer {
         if !poll(opened) {
             ring.refuse(Fallback::ImportFailed);
         }
-        let done = ring.completed(self.handoff.pending().map_or(0, |f| completed(opened, f)));
+        let done = ring.completed(self.handoff.reached(|f| completed(opened, f)));
         if let Some(reason) = ring.fallback() {
             self.handoff.clear();
             self.opened = None;

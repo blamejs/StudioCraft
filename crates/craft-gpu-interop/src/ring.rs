@@ -459,6 +459,14 @@ impl Handoff {
         self.pending.as_ref()
     }
 
+    /// The highest value that `completed` gives for the waiting frames, or 0 when none waits. A
+    /// ring that reports readiness per buffer gives each frame its own value, so the older frame is
+    /// checked even when the newest one's buffer is still being written.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn reached(&self, completed: impl Fn(&SharedFrame) -> u64) -> u64 {
+        [self.pending.as_ref(), self.older.as_ref()].into_iter().flatten().map(completed).max().unwrap_or(0)
+    }
+
     /// Forget the waiting frames.
     pub fn clear(&mut self) {
         self.pending = None;

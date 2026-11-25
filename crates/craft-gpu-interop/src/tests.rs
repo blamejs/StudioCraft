@@ -431,6 +431,25 @@ mod dmabuf {
     }
 
     #[test]
+    fn a_finished_dmabuf_frame_is_drawn_while_the_newer_buffer_is_still_being_written() {
+        let (done_reader, mut done_writer) = std::io::pipe().unwrap();
+        let (busy_reader, _busy_writer) = std::io::pipe().unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(done_reader.as_raw_fd(), 0, 16).unwrap()));
+        assert!(ring.set_plane(1, DmabufPlane::duplicate(busy_reader.as_raw_fd(), 0, 16).unwrap()));
+        done_writer.write_all(&[1]).unwrap();
+        let mut handoff = Handoff::default();
+        handoff.offer(frame(&ring, 0, 1));
+        handoff.offer(frame(&ring, 1, 2));
+        // Frame 2's buffer still has a write outstanding; frame 1's buffer is readable.
+        let done = handoff.reached(crate::dmabuf::completed);
+        assert_eq!(done, 1);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(0));
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(2), "the newer frame keeps waiting");
+        assert_eq!(Handoff::default().reached(crate::dmabuf::completed), 0, "nothing waits");
+    }
+
+    #[test]
     fn a_dmabuf_ring_has_a_slot_per_buffer_and_each_slot_gets_one_plane() {
         let (reader, _writer) = std::io::pipe().unwrap();
         let plane = || DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap();
