@@ -34,6 +34,7 @@ pipewire = ["dep:pipewire"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
+arc-swap = { workspace = true }
 
 # Windows: DXGI desktop duplication and Windows.Graphics.Capture window capture on a Direct3D 11
 # device, and the Direct3D 12 and Vulkan sides of the import. The versions are the ones wgpu-hal 30

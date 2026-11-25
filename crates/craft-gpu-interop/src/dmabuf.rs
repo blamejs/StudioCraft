@@ -9,7 +9,9 @@
 //! descriptor, which the kernel makes readable once the producer's writes are done (implicit
 //! synchronization), and never waits.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use arc_swap::ArcSwapOption;
 
 use crate::fallback::Fallback;
 use crate::ring::AdapterId;
@@ -98,18 +100,19 @@ impl DmabufCaps {
     }
 }
 
-static PUBLISHED: Mutex<Option<Arc<DmabufCaps>>> = Mutex::new(None);
+/// The capabilities last published. A publish swaps the pointer and a read loads it, without a lock.
+static PUBLISHED: ArcSwapOption<DmabufCaps> = ArcSwapOption::const_empty();
 
 /// Record what the compositor's device can import, or that it imports nothing (`None`). The capture
 /// side reads it with [`dmabuf_caps`] when it negotiates a stream's format.
 pub fn publish_dmabuf_caps(caps: Option<DmabufCaps>) {
     let caps = caps.map(DmabufCaps::tidy).filter(DmabufCaps::any).map(Arc::new);
-    *PUBLISHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = caps;
+    PUBLISHED.store(caps);
 }
 
 /// What the compositor's device can import, once it has published it.
 pub fn dmabuf_caps() -> Option<Arc<DmabufCaps>> {
-    PUBLISHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    PUBLISHED.load_full()
 }
 
 /// The layout all buffers of one stream format share.
