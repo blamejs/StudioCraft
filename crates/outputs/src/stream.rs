@@ -1680,6 +1680,13 @@ fn check_stream_encoder(job: &OutputJob) -> Result<u32, PluginError> {
 /// The packets a stream's subscriber copies from as it starts: the tracks and its receiver.
 type CopyFeed = (Vec<TrackSpec>, Result<Receiver, String>);
 
+/// Whether `own` names the stream's encoder: its encoder, settings and bitrate are those of `job`.
+fn is_main_encoder(job: &OutputJob, own: &OwnEncoder) -> bool {
+    own.encoder == job.video_encoder.id()
+        && own.settings == job.video_encoder_settings
+        && matches!(job.rate, RateControl::Bitrate { kbps, .. } if kbps == own.kbps)
+}
+
 /// Open the encoders of `job` and the fan-out that shares what they make with the destinations,
 /// as the encoder `own` names (`None` for the stream's encoder). With `copy`, a subscriber for
 /// the copy is made before the encoders start, so it gets the first keyframe.
@@ -1798,8 +1805,9 @@ impl Streaming {
         // The copy holds what the stream's encoder makes.
         let (native, main, copy_feed) = open_encoder(job, None, &refused, copy.is_some())?;
         let control = main.control.clone();
-        // Only a stream with a destination that runs an encoder of its own splits its input.
-        let split = if targets.iter().any(|t| t.encoder.is_some()) {
+        // Only a stream with a destination that runs an encoder other than the stream's splits its
+        // input.
+        let split = if targets.iter().any(|t| t.encoder.as_ref().is_some_and(|own| !is_main_encoder(job, own))) {
             Some(Split::start(&Input { video: native.video(), audio: native.audio() })?)
         } else {
             None
@@ -1866,10 +1874,7 @@ impl Streaming {
     fn feed_for(&self, own: Option<&OwnEncoder>) -> Result<Arc<EncoderFeed>, PluginError> {
         let Some(own) = own else { return Ok(Arc::clone(&self.hub.main)) };
         let job = &self.job;
-        if own.encoder == job.video_encoder.id()
-            && own.settings == job.video_encoder_settings
-            && matches!(job.rate, RateControl::Bitrate { kbps, .. } if kbps == own.kbps)
-        {
+        if is_main_encoder(job, own) {
             return Ok(Arc::clone(&self.hub.main));
         }
         // Held while one starts, so two starts of the same encoder start it once.

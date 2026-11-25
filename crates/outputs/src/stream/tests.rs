@@ -2143,6 +2143,7 @@ fn a_destination_that_names_the_streams_encoder_shares_it() {
     starts_with_headers_and_a_keyframe(&media(&seen, 3));
     assert!(Arc::ptr_eq(&feed_of(&out, "a"), &out.hub.main));
     assert!(lock(&out.own).is_empty(), "no second encoder runs");
+    assert!(out.split.is_none(), "the stream does not split its input");
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
