@@ -1462,9 +1462,11 @@ impl Studio {
         if let Some(d) = self.profile.stream.destinations.iter().find(|d| own && d.id == id) {
             let Some(key) = crate::golive::destination_key(&self.profile, &self.outputs.held_keys, d) else {
                 // One that is sending keeps its server and key, so it needs none of the profile's.
-                // A key that is not held is otherwise an error, also for one asked to stop.
+                // A key that is not held is otherwise an error, also for one asked to stop. A start
+                // of one that is sending changes nothing, so none is asked for: one that ends
+                // meanwhile is not started again with the key it had.
                 if a.instance.destination_sending(id) {
-                    return Ok(a.instance.start_destination(id, None)?);
+                    return Ok(());
                 }
                 let name = match &d.key {
                     KeyRef::Held(name) => name.as_str(),
