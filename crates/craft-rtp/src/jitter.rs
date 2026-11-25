@@ -47,7 +47,8 @@ pub struct Config {
     pub max_delay: Duration,
     /// The most time between the oldest and the newest packet held.
     pub max_span: Duration,
-    /// The most payload bytes held.
+    /// The most payload bytes held, counted as the memory allocated for the payloads of the
+    /// packets held.
     pub max_bytes: usize,
 }
 
@@ -195,6 +196,9 @@ pub struct JitterBuffer {
     highest: i64,
     held: usize,
     bytes: usize,
+    /// The capacity of the buffers of the packets held, at least `bytes`. It is kept within
+    /// [`Config::max_bytes`].
+    held_bytes: usize,
     gap: Option<u64>,
     bad_seq: Option<u16>,
     now: Duration,
@@ -235,6 +239,7 @@ impl JitterBuffer {
             highest: 0,
             held: 0,
             bytes: 0,
+            held_bytes: 0,
             gap: None,
             bad_seq: None,
             now: Duration::ZERO,
@@ -340,6 +345,7 @@ impl JitterBuffer {
             return Some(Event::Gap { missing: 1 });
         }
         self.bytes -= h.data.len();
+        self.held_bytes -= h.data.capacity();
         self.stats.released += 1;
         let old = std::mem::replace(&mut self.out, h.data);
         self.recycle(old);
@@ -514,6 +520,7 @@ impl JitterBuffer {
         }
         self.held = 0;
         self.bytes = 0;
+        self.held_bytes = 0;
         self.stats.dropped += dropped;
         self.stats.restarts += 1;
         self.gap = Some(self.gap.unwrap_or(0) + dropped);
@@ -524,17 +531,19 @@ impl JitterBuffer {
     /// Holds the packet at `ext`. A payload over [`Config::max_bytes`] is not copied: the packet
     /// keeps its place in sequence without it, and is released as a gap.
     fn store(&mut self, ext: i64, packet: &Packet<'_>, now: Duration) -> Push {
-        let oversized = packet.payload.len() > self.config.max_bytes;
+        let len = packet.payload.len();
+        let oversized = len > self.config.max_bytes;
         let data = if oversized {
             Vec::new()
         } else {
-            let mut data = self.spare.pop().unwrap_or_default();
-            self.spare_bytes -= data.capacity();
+            let mut data = self.take_spare(len);
             data.clear();
+            data.reserve_exact(len);
             data.extend_from_slice(packet.payload);
             data
         };
         self.bytes += data.len();
+        self.held_bytes += data.capacity();
         self.held += 1;
         self.received_since_base += 1;
         let held = Held {
@@ -578,7 +587,7 @@ impl JitterBuffer {
                 _ => self.next_held().map(|(_, a)| a),
             };
             let span = oldest.map_or(Duration::ZERO, |a| now.saturating_sub(a));
-            if self.bytes <= self.config.max_bytes && span <= self.config.max_span {
+            if self.held_bytes <= self.config.max_bytes && span <= self.config.max_span {
                 break;
             }
             self.drop_head();
@@ -591,6 +600,7 @@ impl JitterBuffer {
             Some(Slot::Full(h)) => {
                 self.held -= 1;
                 self.bytes -= h.data.len();
+                self.held_bytes -= h.data.capacity();
                 self.stats.dropped += 1;
                 self.recycle(h.data);
             }
@@ -599,6 +609,22 @@ impl JitterBuffer {
         self.gap = Some(self.gap.unwrap_or(0) + 1);
         self.head += 1;
         self.highest = self.highest.max(self.head - 1);
+    }
+
+    /// A spare buffer for a payload of `len` bytes, or a new empty one. A spare buffer is reused
+    /// when it is no larger than `len`, or no larger than twice `len` and the packets held would
+    /// stay within [`Config::max_bytes`] with it.
+    fn take_spare(&mut self, len: usize) -> Vec<u8> {
+        let room = self.config.max_bytes.saturating_sub(self.held_bytes);
+        let fits = |capacity: usize| capacity <= len || (capacity <= len.saturating_mul(2) && capacity <= room);
+        match self.spare.iter().rposition(|b| fits(b.capacity())) {
+            Some(i) => {
+                let data = self.spare.swap_remove(i);
+                self.spare_bytes -= data.capacity();
+                data
+            }
+            None => Vec::new(),
+        }
     }
 
     fn recycle(&mut self, mut data: Vec<u8>) {
@@ -615,5 +641,17 @@ impl JitterBuffer {
     pub(crate) fn spare_capacity(&self) -> usize {
         debug_assert_eq!(self.spare_bytes, self.spare.iter().map(Vec::capacity).sum::<usize>());
         self.spare_bytes
+    }
+
+    /// The bytes allocated for the payload buffers of the packets held.
+    #[cfg(test)]
+    pub(crate) fn held_capacity(&self) -> usize {
+        self.slots
+            .iter()
+            .map(|s| match s {
+                Slot::Full(h) => h.data.capacity(),
+                Slot::Empty { .. } => 0,
+            })
+            .sum()
     }
 }

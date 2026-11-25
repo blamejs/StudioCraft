@@ -261,6 +261,24 @@ fn spare_buffers_together_hold_no_more_than_the_byte_limit() {
 }
 
 #[test]
+fn small_reordered_packets_do_not_keep_large_buffers_past_the_byte_limit() {
+    let zero = Duration::ZERO;
+    let config = Config { max_bytes: 1000, start_delay: zero, min_delay: zero, max_delay: zero, ..Config::new(90_000) };
+    let mut jb = JitterBuffer::new(config).unwrap();
+    let full = [0u8; 900];
+    // Each 900-byte packet in sequence is released at once, and its buffer is reused for a
+    // one-byte packet ahead of it that stays held.
+    for s in 1..=20u16 {
+        let t = ms(u64::from(s));
+        assert_eq!(jb.push(&Packet::new(96, s, 0, 7, false, &full), t), Push::Stored);
+        let Some(Event::Packet(r)) = jb.pop(t) else { panic!("packet {s} was not released") };
+        assert_eq!(r.sequence, s);
+        jb.push(&Packet::new(96, s + 50, 0, 7, false, &[1]), t);
+        assert!(jb.held_capacity() <= 1000, "{} bytes allocated for {} held", jb.held_capacity(), jb.bytes());
+    }
+}
+
+#[test]
 fn held_duplicates_count_as_received_in_the_report() {
     let mut jb = buffer();
     for s in [1, 1, 3] {
