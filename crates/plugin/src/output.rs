@@ -75,8 +75,10 @@ pub trait OutputInstance: Send {
     fn replay(&self) -> Result<Box<dyn ReplayClip>, PluginError> {
         Err(PluginError::Unavailable("only the replay buffer keeps what it encodes".into()))
     }
-    /// Each destination of a stream, in the order the stream was started with; empty for other
-    /// outputs.
+    /// Each destination of a stream, in the order the stream holds them: those it was started
+    /// with, then those added while it runs. One added when the list is full takes the place of
+    /// the one it replaces, so it can come before destinations the stream was started with. Empty
+    /// for other outputs.
     fn destinations(&self) -> Vec<DestinationState> {
         Vec::new()
     }

@@ -678,6 +678,14 @@ impl Dest {
         self.alive.load(Ordering::SeqCst)
     }
 
+    /// Whether its thread runs and was not asked to stop, read with `thread` locked. The thread
+    /// clears `alive` with `thread` locked when it decides to end, so a thread that has not decided
+    /// by then goes on sending, and the start that follows finds one that has decided ended.
+    fn sending(&self) -> bool {
+        let _slot = lock(&self.thread);
+        self.running() && !self.stopping()
+    }
+
     /// Asks the thread to stop, and wakes it from a wait before a try again.
     fn ask_stop(&self) {
         let slot = lock(&self.thread);
@@ -705,13 +713,6 @@ impl Dest {
         self.set(DestinationStatus::Stopped);
         self.alive.store(false, Ordering::SeqCst);
         true
-    }
-
-    /// The thread gives up.
-    fn fail(&self, failure: Failure) {
-        let _slot = lock(&self.thread);
-        self.set(DestinationStatus::Failed(failure));
-        self.alive.store(false, Ordering::SeqCst);
     }
 
     fn state(&self, hub: &Hub) -> DestinationState {
@@ -755,8 +756,9 @@ struct Hub {
     ring: RingConfig,
     timing: Timing,
     seams: Seams,
-    /// The destinations it was started with, in order, then those added while it runs. At most
-    /// [`MAX_SUBSCRIBERS`].
+    /// The destinations it was started with, in order, then those added while it runs. One added
+    /// to a full list takes the place of the one it replaces, so it can come before destinations
+    /// the stream was started with. At most [`MAX_SUBSCRIBERS`].
     dests: Mutex<Vec<Arc<Dest>>>,
     /// What the destinations that gave their place to added ones had sent and made again.
     left: Mutex<Left>,
@@ -766,13 +768,15 @@ struct Hub {
     auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
 }
 
-/// The counts of destinations no longer in a stream's list, so neither the stream's sums nor the
-/// counts of one added again under its id go down.
+/// The counts of destinations no longer in a stream's list, so the stream's sums never go down.
+/// One added again under its id goes on from its counts when it is among the last
+/// [`MAX_SUBSCRIBERS`] that left; one that left before them starts from zero, and the stream's
+/// sums still hold its counts. The ids come from control requests, so the record stays bounded.
 #[derive(Default)]
 struct Left {
     /// The last [`MAX_SUBSCRIBERS`] that left, oldest first, each by id.
     each: VecDeque<(String, Totals)>,
-    /// Those that left before them, summed.
+    /// Those that left before them, summed without their ids.
     older: Totals,
 }
 
@@ -1054,16 +1058,18 @@ fn gave_up(timing: &Timing, f: Failure, tries: u32) -> Failure {
     Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
 }
 
-/// Starts the automatic connection check of `d` after `f`, unless one ran since it last went live
-/// or was started, or `f` is an address or key that is not valid.
-fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
+/// Starts the automatic connection check of `d` after `f`, a failure of a try with `setup`, unless
+/// one ran since it last went live or was started, `d` was started again since that try, or `f` is
+/// an address or key that is not valid.
+fn check_after(hub: &Hub, d: &Dest, f: &Failure, setup: &Setup) {
     let Some((checks, auto)) = &hub.auto else { return };
     // `checked` and this check's own flag change under the same lock as in `uncheck`, so a
     // restart or a recovery meanwhile either happens before both are set or clears this check's
-    // flag. A check from before that still waits for a place is dropped.
+    // flag. A check from before that still waits for a place is dropped. `spawn` sets `restarted`
+    // before it calls `uncheck`, so a restart this check does not see clears its flag.
     let wanted = {
         let mut held = lock(&d.wanted);
-        if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.checked.swap(true, Ordering::SeqCst) {
+        if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.restarted.load(Ordering::SeqCst) || d.checked.swap(true, Ordering::SeqCst) {
             return;
         }
         let wanted = Arc::new(Mutex::new(true));
@@ -1072,7 +1078,7 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         wanted
     };
     let id = &d.target.id;
-    let setup = d.setup();
+    // The server and service of the try that failed, not of a setup given since.
     let subject = diagnose::Subject {
         profile: auto.profile.clone(),
         id: id.clone(),
@@ -1094,10 +1100,19 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
     }
 }
 
-/// The thread gives up with `f`, and the connection is checked.
-fn fail(hub: &Hub, d: &Dest, f: Failure) {
-    check_after(hub, d, &f);
-    d.fail(f);
+/// The thread gives up with `f`, a failure of a try with `setup`, and the connection is checked;
+/// says whether it gave up. It does not when it was started again since that try: `spawn` sets
+/// `restarted` with `thread` locked, as this reads it, so the start either comes first and the
+/// thread goes on with the setup it was given, or comes after and starts a new thread.
+fn fail(hub: &Hub, d: &Dest, f: Failure, setup: &Setup) -> bool {
+    let _slot = lock(&d.thread);
+    if d.restarted.load(Ordering::SeqCst) {
+        return false;
+    }
+    check_after(hub, d, &f, setup);
+    d.set(DestinationStatus::Failed(f));
+    d.alive.store(false, Ordering::SeqCst);
+    true
 }
 
 /// Waits until `deadline`, or less when the destination is stopped or started again, Try Now ends
@@ -1278,12 +1293,13 @@ enum Missed {
     Rtmp(craft_rtmp::Error),
     /// The lookup gave no answer in time, or an earlier one has not finished.
     Lookup(Failure),
-    /// The destination was stopped, or the stream ended, while the lookup ran.
+    /// The destination was stopped, or the stream ended, while the lookup ran; or it was given a
+    /// new setup, which the next try uses.
     Stopped,
 }
 
-fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
-    let setup = d.setup();
+/// Connects with `setup`, the setup the try read.
+fn connect(hub: &Hub, d: &Arc<Dest>, setup: &Setup) -> Result<Publisher, Missed> {
     let mut c = d.with(&setup.server, &setup.key).config().map_err(Missed::Rtmp)?;
     c.connect_timeout = hub.timing.connect;
     c.setup_timeout = hub.timing.setup;
@@ -1300,17 +1316,18 @@ fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
             d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
         }
     }
-    // A stop that came as the lookup answered does not wait for a TCP connect.
-    if d.stopping() || hub.control.is_ended() {
+    // A stop, or a new setup, that came as the lookup answered does not wait for a TCP connect.
+    if d.stopping() || hub.control.is_ended() || d.renew.load(Ordering::SeqCst) {
         return Err(Missed::Stopped);
     }
     Publisher::connect_to(&c, &addrs).map_err(Missed::Rtmp)
 }
 
 /// Looks `host` up on a thread of its own and waits for the answer until the lookup time runs
-/// out, the destination is stopped or the stream ends. The thread ends when the resolver returns,
-/// whether or not the try still waits; an answer nobody waits for is dropped. An IP address is
-/// used as it is, with no lookup, so the lookup limits do not apply to it.
+/// out, the destination is stopped or given a new setup, or the stream ends. The thread ends when
+/// the resolver returns, whether or not the try still waits; an answer nobody waits for is
+/// dropped. An IP address is used as it is, with no lookup, so the lookup limits do not apply to
+/// it.
 fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, Missed> {
     use std::sync::mpsc::{TryRecvError, sync_channel};
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
@@ -1355,7 +1372,8 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
     };
     loop {
         let received = rx.try_recv();
-        if d.stopping() || hub.control.is_ended() {
+        // `spawn` wakes the thread after it gives a new setup, so the try ends at once.
+        if d.stopping() || hub.control.is_ended() || d.renew.load(Ordering::SeqCst) {
             return Err(Missed::Stopped);
         }
         match received {
@@ -1390,7 +1408,8 @@ fn reserve(count: &AtomicU32, max: u32) -> bool {
 fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
     let _watch = Watch(d);
     let mut failures = 0u32;
-    let mut last_error: Option<Failure> = None;
+    // The last try's failure, with the setup that try used.
+    let mut last_error: Option<(Failure, Arc<Setup>)> = None;
     // Whether the tries follow a connection the server took and that was then lost, the refused
     // `publish` answers since, and whether the last try was one.
     let mut after_loss = false;
@@ -1398,9 +1417,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
     let mut refused = false;
     let mut random = seed(&d.target.id);
     loop {
-        if let Some(failure) = last_error.take() {
+        if let Some((failure, setup)) = last_error.take() {
             if failures >= CHECK_AFTER_FAILURES {
-                check_after(hub, d, &failure);
+                check_after(hub, d, &failure, &setup);
             }
             let delay = hub.timing.delay(failures.max(1));
             let delay = if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay };
@@ -1433,7 +1452,12 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                         wait(hub, d, at);
                     }
                     NetWait::Restarted | NetWait::Stopped => {}
-                    NetWait::GaveUp(f) => return fail(hub, d, f),
+                    // Started again as it gave up: the next try uses the setup it was given.
+                    NetWait::GaveUp(f) => {
+                        if fail(hub, d, f, &setup) {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -1448,7 +1472,8 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         // Cleared before the connect reads the setup, so a new setup given from here on closes
         // this connection.
         d.renew.store(false, Ordering::SeqCst);
-        let connected = connect(hub, d);
+        let setup = d.setup();
+        let connected = connect(hub, d, &setup);
         // Started again while it waited or connected: this try's answer is that of a first try, and
         // the tries after it are counted from none, and a later failure may be checked again.
         if d.restarted.swap(false, Ordering::SeqCst) {
@@ -1463,8 +1488,12 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // Given a new setup while it connected: the old one's error is not this one's, and the
             // next turn connects with the new one at once.
             Err(_) if d.renew.load(Ordering::SeqCst) => continue,
+            // Unless it was started again since, which the next turn tries at once.
             Err(Missed::Rtmp(e)) if is_final(&e) && !(is_publish_refusal(&e) && after_loss && refusals < REFUSED_RETRIES) => {
-                return fail(hub, d, failure(&e, false));
+                if fail(hub, d, failure(&e, false), &setup) {
+                    return;
+                }
+                continue;
             }
             Err(Missed::Rtmp(e)) => {
                 if is_publish_refusal(&e) {
@@ -1479,10 +1508,11 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             Ok(p) => p,
             Err(f) => {
                 failures = failures.saturating_add(1);
-                if hub.timing.gives_up(failures) {
-                    return fail(hub, d, gave_up(&hub.timing, f, failures));
+                if !hub.timing.gives_up(failures) {
+                    last_error = Some((f, setup));
+                } else if fail(hub, d, gave_up(&hub.timing, f, failures), &setup) {
+                    return;
                 }
-                last_error = Some(f);
                 continue;
             }
         };
@@ -1507,7 +1537,11 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             _ if d.renew.load(Ordering::SeqCst) => {}
             // Unless it was started again meanwhile, the next turn ends the thread.
             End::Done => {}
-            End::Failed(e) => return fail(hub, d, e),
+            End::Failed(e) => {
+                if fail(hub, d, e, &setup) {
+                    return;
+                }
+            }
             End::Lost(e) => {
                 // A stop and start that came while it sent or as the connection closed stays set,
                 // so the next try is at once and is that of a first try.
@@ -1515,10 +1549,11 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                 d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 failures = failures_after_loss(&hub.timing, failures, started.elapsed(), d.restarted.load(Ordering::SeqCst));
-                if hub.timing.gives_up(failures) {
-                    return fail(hub, d, gave_up(&hub.timing, e, failures));
+                if !hub.timing.gives_up(failures) {
+                    last_error = Some((e, setup));
+                } else if fail(hub, d, gave_up(&hub.timing, e, failures), &setup) {
+                    return;
                 }
-                last_error = Some(e);
             }
         }
     }
@@ -1565,6 +1600,8 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
             return End::Done;
         }
         let sent = match rx.recv_timeout(RECV_WAIT) {
+            // Stopped or given a new setup during the wait: the packet is not sent with the old one.
+            Ok(_) if d.stopping() || d.renew.load(Ordering::SeqCst) => return End::Done,
             Ok(packet) => send_packet(p, &packet, *zero.get_or_insert(packet.dts())),
             Err(RecvError::Closed) => return End::Done,
             // Nothing to send: read what the server sent, which also notices a closed connection.
@@ -1694,6 +1731,9 @@ pub struct Streaming {
     refused: Arc<AtomicU64>,
     /// The copy written to a file, when the stream was started with one.
     copy: Option<StreamCopy>,
+    /// Whether the copy took one of the [`MAX_SUBSCRIBERS`] subscriptions: not one that was
+    /// refused or could not subscribe.
+    copy_subscribed: bool,
     stopped: bool,
 }
 
@@ -1823,12 +1863,12 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let copy = match (copy, copy_feed, copy_refused) {
-            (Some((path, _)), _, Some(e)) => Some(StreamCopy::failed(path, e)),
-            (Some((path, open)), Some((tracks, Ok(rx))), None) => Some(StreamCopy::start(path, open, tracks, rx)),
-            (Some((path, _)), Some((_, Err(e))), None) => Some(StreamCopy::failed(path, e)),
-            (Some((path, _)), None, None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
-            (None, _, _) => None,
+        let (copy, copy_subscribed) = match (copy, copy_feed, copy_refused) {
+            (Some((path, _)), _, Some(e)) => (Some(StreamCopy::failed(path, e)), false),
+            (Some((path, open)), Some((tracks, Ok(rx))), None) => (Some(StreamCopy::start(path, open, tracks, rx)), true),
+            (Some((path, _)), Some((_, Err(e))), None) => (Some(StreamCopy::failed(path, e)), false),
+            (Some((path, _)), None, None) => (Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())), false),
+            (None, _, _) => (None, false),
         };
         let counts = Arc::new(Counts::default());
         let service = |id: &str| auto.as_ref().and_then(|(_, a)| a.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s));
@@ -1851,7 +1891,7 @@ impl Streaming {
             net: NetWatch::default(),
             auto,
         });
-        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, stopped: false };
+        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, copy_subscribed, stopped: false };
         for d in dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None, None) {
                 let _ = s.stop();
@@ -1861,10 +1901,10 @@ impl Streaming {
         Ok(s)
     }
 
-    /// Whether one more destination can send: each destination that sends or tries to, and the
-    /// copy, takes one of the [`MAX_SUBSCRIBERS`] subscriptions.
+    /// Whether one more destination can send: each destination that sends or tries to, and a copy
+    /// that subscribed, takes one of the [`MAX_SUBSCRIBERS`] subscriptions.
     fn room(&self) -> Result<(), PluginError> {
-        let copy = usize::from(self.copy.is_some());
+        let copy = usize::from(self.copy_subscribed);
         let taken = lock(&self.hub.dests).iter().filter(|o| o.running()).count() + copy;
         if taken >= MAX_SUBSCRIBERS {
             let most = MAX_SUBSCRIBERS - copy;
@@ -2062,10 +2102,9 @@ impl OutputInstance for Streaming {
             return Err(PluginError::Failed("the destination has no id".into()));
         }
         let found = self.hub.find(id).ok();
-        if let Some(d) = found.as_ref().filter(|d| d.running() && !d.stopping()) {
-            // It keeps the server and key it sends with, so `setup` is not used. A stop asked for
-            // since is canceled, and it goes on with them too.
-            return spawn(&self.hub, d, None, None).map(|_| false);
+        if found.as_ref().is_some_and(|d| d.sending()) {
+            // It keeps the server and key it sends with, so `setup` is not used.
+            return Ok(false);
         }
         let target = Target { id: id.to_string(), server: setup.server.clone(), key: setup.key.clone(), enabled: true };
         target.config().map_err(|e| PluginError::Failed(format!("destination `{id}`: {e}")))?;
