@@ -543,8 +543,8 @@ impl Model {
                 if !p.positions.iter().chain(&p.normals).all(finite3) || !p.uvs.iter().all(|t| t[0].is_finite() && t[1].is_finite()) {
                     return Err(at("a vertex value is not finite"));
                 }
-                if p.weights.iter().any(|w| w.iter().any(|x| !x.is_finite() || *x < 0.0)) {
-                    return Err(at("a skin weight is negative or not finite"));
+                if p.weights.iter().any(|w| w.iter().any(|x| !(0.0..=1.0).contains(x))) {
+                    return Err(at("a skin weight is outside 0 to 1 or not finite"));
                 }
                 if !p.joints.is_empty() {
                     let Some(Some(count)) = mesh_joints.get(mi) else {

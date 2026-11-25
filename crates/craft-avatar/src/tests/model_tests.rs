@@ -117,6 +117,11 @@ fn mesh_problems_are_refused() {
     m.meshes[0].primitives[0].joints = vec![[0, 1, 9, 9]; 3];
     m.meshes[0].primitives[0].weights = vec![[0.5, 0.5, 0.0, 0.0]; 3];
     check(&m).unwrap();
+    // A weight of 1 is allowed; one above 1 is refused.
+    m.meshes[0].primitives[0].weights = vec![[1.0, 0.0, 0.0, 0.0]; 3];
+    check(&m).unwrap();
+    m.meshes[0].primitives[0].weights[1][0] = 2.0;
+    assert!(matches!(check(&m), Err(AvatarError::Invalid(s)) if s.contains("skin weight")));
 }
 
 #[test]
