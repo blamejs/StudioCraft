@@ -83,6 +83,22 @@ impl DisplayCapture {
         Ok(DisplayCapture { inner: imp::Capture::open(id, false)?, gpu: None })
     }
 
+    /// Capture the display with `id`, as [`DisplayCapture::open`] does, into textures shared with
+    /// the compositor where the system allows it ([`DisplayCapture::share_on_gpu`]). On Linux the
+    /// stream is asked for DMA-BUFs before the picker opens.
+    pub fn open_shared(id: &str) -> Result<DisplayCapture, PlatformError> {
+        #[cfg(target_os = "linux")]
+        let inner = {
+            let _ = id;
+            imp::Capture::open_shared()?
+        };
+        #[cfg(not(target_os = "linux"))]
+        let inner = imp::Capture::open(id, true)?;
+        let mut capture = DisplayCapture { inner, gpu: None };
+        capture.share_on_gpu();
+        Ok(capture)
+    }
+
     /// Capture into textures shared with the compositor where the system allows it: on Windows
     /// with desktop duplication and shared fences, and on Linux with DMA-BUF buffers from the
     /// screen-cast stream once the compositor has published what its Vulkan device imports.
@@ -246,6 +262,11 @@ mod imp {
     impl Capture {
         pub fn open(_id: &str, _fallback: bool) -> Result<Capture, PlatformError> {
             Ok(Capture(PortalCapture::open(Kind::Display)?))
+        }
+
+        /// A capture whose stream is asked for DMA-BUFs before the portal thread starts.
+        pub fn open_shared() -> Result<Capture, PlatformError> {
+            Ok(Capture(PortalCapture::open_with(Kind::Display, true)?))
         }
 
         pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {

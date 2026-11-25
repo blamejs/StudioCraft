@@ -47,6 +47,22 @@ pub enum Kind {
 /// The largest picture side the stream accepts, the same as a frame's.
 const MAX_SIDE: u32 = 8192;
 
+/// Whether a capture of `kind` can take its pictures on the GPU, given `caps`, what the
+/// compositor's device imports (`None` before it is published): only a display capture can.
+fn shares_on_gpu(kind: Kind, caps: Option<&DmabufCaps>) -> bool {
+    kind == Kind::Display && caps.is_some()
+}
+
+/// The frame slot of a new capture of `kind`, which asks for the pictures on the GPU from the start
+/// when `on_gpu` is set and [`shares_on_gpu`] allows it.
+fn slot_for(kind: Kind, on_gpu: bool, caps: Option<&DmabufCaps>) -> Arc<FrameSlot> {
+    let slot = Arc::new(FrameSlot::default());
+    if on_gpu && shares_on_gpu(kind, caps) {
+        slot.request_gpu();
+    }
+    slot
+}
+
 fn could_not_start() -> PlatformError {
     PlatformError::Failed("the screen capture could not start".into())
 }
@@ -67,8 +83,15 @@ impl PortalCapture {
     /// Start asking the portal for a display or window. Returns at once; the picture arrives once
     /// a choice has been made in the system picker.
     pub fn open(kind: Kind) -> Result<PortalCapture, PlatformError> {
+        PortalCapture::open_with(kind, false)
+    }
+
+    /// As [`PortalCapture::open`], and with `on_gpu` set, asks for the pictures on the GPU as
+    /// [`PortalCapture::share_on_gpu`] does, before the portal thread starts: the stream then sees
+    /// the request however soon it negotiates.
+    pub fn open_with(kind: Kind, on_gpu: bool) -> Result<PortalCapture, PlatformError> {
         let (cancel_tx, cancel_rx) = oneshot::channel();
-        let slot = Arc::new(FrameSlot::default());
+        let slot = slot_for(kind, on_gpu, craft_gpu_interop::dmabuf_caps().as_deref());
         let shared = Arc::clone(&slot);
         // The thread is not joined; it ends on its own once the capture is dropped.
         std::thread::Builder::new()
@@ -87,7 +110,7 @@ impl PortalCapture {
     /// negotiates its format, so it is called before a choice is made in the picker. Returns
     /// whether it was asked for; a window capture always copies through memory.
     pub fn share_on_gpu(&mut self) -> bool {
-        if self.kind != Kind::Display || craft_gpu_interop::dmabuf_caps().is_none() {
+        if !shares_on_gpu(self.kind, craft_gpu_interop::dmabuf_caps().as_deref()) {
             return false;
         }
         self.slot.request_gpu();
@@ -786,5 +809,16 @@ mod tests {
         };
         assert_eq!(types(true), 1 << DataType::DmaBuf.as_raw());
         assert_eq!(types(false), (1 << DataType::MemFd.as_raw()) | (1 << DataType::MemPtr.as_raw()));
+    }
+
+    /// A capture opened for the GPU asks for it before its portal thread starts, so a stream that
+    /// negotiates at once still offers DMA-BUFs.
+    #[test]
+    fn a_display_opened_for_the_gpu_asks_for_it_before_the_stream_starts() {
+        let caps = DmabufCaps { device: craft_gpu_interop::AdapterId(7), formats: vec![(DmabufFormat::Bgrx, vec![0])] };
+        assert!(slot_for(Kind::Display, true, Some(&caps)).gpu_requested());
+        assert!(!slot_for(Kind::Display, false, Some(&caps)).gpu_requested(), "a plain open");
+        assert!(!slot_for(Kind::Display, true, None).gpu_requested(), "nothing published to import into");
+        assert!(!slot_for(Kind::Window, true, Some(&caps)).gpu_requested(), "a window copies through memory");
     }
 }
