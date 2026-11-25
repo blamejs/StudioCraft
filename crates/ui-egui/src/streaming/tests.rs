@@ -32,7 +32,7 @@ fn drawn(f: impl FnMut(&mut Ui)) -> Vec<String> {
 }
 
 fn state(id: &str, status: DestinationStatus) -> DestinationState {
-    DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0 }
+    DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0, next_try: None, max_tries: 10 }
 }
 
 #[test]
@@ -392,8 +392,7 @@ fn a_change_that_cant_be_saved_is_put_back_and_can_be_made_again() {
 
 #[test]
 fn a_new_destination_does_not_take_an_id_the_running_stream_uses() {
-    let state =
-        |id: &str| DestinationState { id: id.into(), target: String::new(), status: DestinationStatus::Stopped, bytes: 0, dropped: 0, reconnects: 0 };
+    let state = |id: &str| state(id, DestinationStatus::Stopped);
     let empty = StreamSettings { destinations: Vec::new(), ..StreamSettings::default() };
     assert_eq!(new_id(&empty, &[]), "main");
     assert_eq!(new_id(&empty, &[state("main")]), "destination-2", "`main` was removed while the stream runs");
@@ -403,8 +402,7 @@ fn a_new_destination_does_not_take_an_id_the_running_stream_uses() {
 
 #[test]
 fn a_new_destination_finds_a_free_id_while_the_running_stream_keeps_many_removed_ones() {
-    let state =
-        |id: &str| DestinationState { id: id.into(), target: String::new(), status: DestinationStatus::Stopped, bytes: 0, dropped: 0, reconnects: 0 };
+    let state = |id: &str| state(id, DestinationStatus::Stopped);
     // The stream keeps up to 64 destinations, removed ones included.
     let live: Vec<_> = (2..=65).map(|n| state(&format!("destination-{n}"))).collect();
     let dest = |id: &str| Destination { id: id.into(), ..Destination::default() };
@@ -612,7 +610,7 @@ fn each_destination_shows_its_own_status() {
         "c",
         "Failed: the server refused the stream; check the stream key",
         "Live",
-        "Trying again (try 3): the connection was lost",
+        "Trying again (try 3 of 10): the connection was lost",
         "Not in this stream yet; Start sends to it now",
         "A destination that is sending keeps its server and key until it is stopped and started again.",
         "rtmp://a.example/live/•••",
@@ -665,7 +663,7 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
         ])
     );
     // The row names the cause, and its hover holds the error and each address.
-    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2): the server did not answer in time");
+    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2 of 10): the server did not answer in time");
     let detail = status_detail(true, Some(&retrying)).unwrap();
     assert_eq!(
         detail,
@@ -698,9 +696,61 @@ fn a_destination_waiting_for_the_network_says_so() {
     assert_eq!(v["error"], json!(failure.detail));
     assert_eq!(
         status_text(&d, true, Some(&waiting)),
-        ("Waiting for the network (try 3): the server's name could not be looked up".into(), Tone::Warn)
+        ("Waiting for the network (try 3 of 10): the server's name could not be looked up".into(), Tone::Warn)
     );
     assert_eq!(status_detail(true, Some(&waiting)).as_deref(), Some("the server's name did not resolve: no network"));
+}
+
+#[test]
+fn a_retrying_destination_shows_its_next_try_and_offers_try_now() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure::new(Cause::Lost, "the server closed the connection");
+    let retrying = DestinationState {
+        next_try: Some(Duration::from_millis(12_300)),
+        ..state("a", DestinationStatus::Retrying { attempt: 4, failure: failure.clone() })
+    };
+    let v = listed(&d, true, Some(&retrying), false);
+    assert_eq!((v["attempt"].clone(), v["max_tries"].clone(), v["next_try_ms"].clone()), (json!(4), json!(10), json!(12_300)));
+    // The seconds are rounded up, and the window draws again when they change.
+    assert_eq!(next_try_text(true, Some(&retrying)).as_deref(), Some("Next try in 13 s"));
+    assert_eq!(countdown_repaint(Duration::from_millis(12_300)), Duration::from_millis(300));
+    assert_eq!(countdown_repaint(Duration::from_secs(12)), Duration::from_secs(1));
+    assert_eq!(whole_seconds(Duration::from_secs(12)), 12);
+    // A wait for the network with no time set tries when a route returns.
+    let waiting = state("a", DestinationStatus::WaitingForNetwork { attempt: 2, failure: failure.clone() });
+    let v = listed(&d, true, Some(&waiting), false);
+    assert_eq!((v["max_tries"].clone(), v["next_try_ms"].clone()), (json!(10), Value::Null));
+    assert_eq!(next_try_text(true, Some(&waiting)).as_deref(), Some("Next try when a network route to the server returns"));
+    // A try that runs, a live destination and a stopped stream have no next try.
+    let trying = state("a", DestinationStatus::Retrying { attempt: 4, failure });
+    assert_eq!(next_try_text(true, Some(&trying)), None);
+    let live = state("a", DestinationStatus::Live);
+    assert_eq!(next_try_text(true, Some(&live)), None);
+    assert!(listed(&d, true, Some(&live), false).get("next_try_ms").is_none());
+    assert_eq!(next_try_text(false, Some(&retrying)), None);
+    // The row shows the countdown and Try Now, which runs `stream.retry_now`.
+    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    for (live, offered) in [(&retrying, true), (&waiting, true), (&trying, false)] {
+        let view = View { stream: &stream, running: true, own: true, live: std::slice::from_ref(live), held: &held, checks: &[], ingests: &[] };
+        let mut panel = StreamingPanel::default();
+        let mut acts = Vec::new();
+        let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+        assert_eq!(texts.iter().any(|t| t == "Try Now"), offered, "{texts:?}");
+        assert!(acts.is_empty(), "drawing does nothing");
+    }
+}
+
+#[test]
+fn try_now_needs_a_running_stream_and_an_id() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    let e = run(&mut a, &ctx, "stream.retry_now", json!({"id": "main"})).unwrap_err();
+    assert!(e.contains("the stream is not running"), "{e}");
+    assert!(run(&mut a, &ctx, "stream.retry_now", json!({})).unwrap_err().contains("needs `id`"));
+    assert!(run(&mut a, &ctx, "stream.retry_now", json!({"id": 3})).is_err(), "an id that is not a string");
+    assert_eq!(crate::commands::ui_params("stream.retry_now"), "id: string");
 }
 
 #[test]

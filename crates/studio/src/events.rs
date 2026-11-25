@@ -239,7 +239,16 @@ mod tests {
     use super::*;
 
     fn dest(id: &str, reconnects: u32) -> DestinationState {
-        DestinationState { id: id.into(), target: String::new(), status: DestinationStatus::Live, bytes: 0, dropped: 0, reconnects }
+        DestinationState {
+            id: id.into(),
+            target: String::new(),
+            status: DestinationStatus::Live,
+            bytes: 0,
+            dropped: 0,
+            reconnects,
+            next_try: None,
+            max_tries: 10,
+        }
     }
 
     #[test]

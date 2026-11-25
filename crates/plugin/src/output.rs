@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use studiocraft_media::Tick;
 use studiocraft_media::audio::PooledBlock;
@@ -134,6 +135,13 @@ pub trait OutputInstance: Send {
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
+    /// Start the next try of the destination `id` of a running stream at once, when it waits to
+    /// try again or waits for the network. The try counts toward its failed tries in a row as a
+    /// try at the usual time does. Returns whether it was waiting; one that is connecting, live,
+    /// trying, stopped or failed is left as it is.
+    fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
+        Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
+    }
     /// The file a stream writes a copy of what it sends to, when it was started with one; `None`
     /// for other outputs.
     fn stream_copy(&self) -> Option<StreamCopyState> {
@@ -172,11 +180,16 @@ impl std::fmt::Debug for DestinationSetup {
 pub struct StreamCopyState {
     /// The file.
     pub path: PathBuf,
-    /// Bytes written to the file so far.
+    /// Bytes the copy has written so far, as a recording counts them: up to 1 MiB of them can
+    /// still be in the copy's buffer and not yet in the file.
     pub bytes: u64,
     /// Packets the file did not get because the disk fell behind: the copy then waits for the next
     /// keyframe.
     pub lost_packets: u64,
+    /// Nanoseconds of the stream before the file's start. The file's times count from the first
+    /// packet the copy got, so this is above 0 when the disk fell behind before the copy got the
+    /// stream's first packets.
+    pub start_ns: u64,
     /// Whether the file was finished after the stream ended.
     pub finished: bool,
     /// Why the copy stopped, when it did; the stream goes on without it.
@@ -348,6 +361,13 @@ pub struct DestinationState {
     pub dropped: u64,
     /// Connections lost and made again.
     pub reconnects: u32,
+    /// While it waits to try again: how long until its next try starts. `None` otherwise, while
+    /// the try runs, and while it waits for the network with no time set, when the try starts
+    /// once a route to the server returns.
+    pub next_try: Option<Duration>,
+    /// The failed tries in a row the stream allows before a destination gives up; 0 for outputs
+    /// that are not streams.
+    pub max_tries: u32,
 }
 
 /// The video and sound a replay buffer held when it was asked for them. Writing the clip does not
