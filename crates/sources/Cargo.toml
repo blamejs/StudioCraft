@@ -24,6 +24,10 @@ ab_glyph.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Opens a picture or table file without waiting on a named pipe.
+libc.workspace = true
+
 [dev-dependencies]
 craft-audio = { workspace = true, features = ["vorbis-encode"] }
 craft-gpu-interop.workspace = true

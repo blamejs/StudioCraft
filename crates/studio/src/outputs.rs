@@ -757,6 +757,17 @@ struct Plan {
     encoder_settings: Settings,
     rate: RateControl,
     audio_kbps: u32,
+    /// The mix tracks a recording writes, one audio stream each, in order; empty for the outputs
+    /// that take the program mix.
+    tracks: Vec<usize>,
+}
+
+/// An error when `planned` is a recording that writes no audio track.
+fn check_tracks(planned: &Plan, kind: OutputKind) -> Result<(), StudioError> {
+    if kind == OutputKind::Recording && planned.tracks.is_empty() {
+        return Err(StudioError::Output("choose at least one audio track to record in the profile's output.recording_tracks setting".into()));
+    }
+    Ok(())
 }
 
 /// How profile `p` starts the output `kind`.
@@ -769,6 +780,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
             encoder_settings: p.output.video_encoder_settings(),
             rate: p.output.quality.quality_level().map_or(RateControl::Lossless, RateControl::Quality),
             audio_kbps: 192,
+            tracks: p.output.recording_tracks.numbers().collect(),
         },
         OutputKind::Streaming => Plan {
             output_id: "rtmp",
@@ -781,6 +793,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
                 keyframe_s: p.stream.keyframe_interval_s.clamp(1, 20),
             },
             audio_kbps: p.stream.audio_bitrate_kbps,
+            tracks: Vec::new(),
         },
         OutputKind::Replay => {
             let r = p.replay.sanitized();
@@ -793,6 +806,7 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
                 // The recording's quality; the built-in encoder has no lossless mode, so Lossless keeps High.
                 rate: RateControl::Quality(p.output.quality.quality_level().or(RecordingQuality::High.quality_level()).unwrap_or(23)),
                 audio_kbps: 192,
+                tracks: Vec::new(),
             }
         }
     }
@@ -854,9 +868,15 @@ impl Plan {
             video_encoder_settings: self.encoder_settings.clone(),
             rate: self.rate,
             audio_bitrate_kbps: self.audio_kbps,
+            // One stream stays unnamed, as a recording of the program mix is.
+            audio_streams: match self.tracks.len() {
+                0 | 1 => vec![String::new(); self.tracks.len()],
+                _ => self.tracks.iter().map(|t| format!("Track {t}")).collect(),
+            },
             ffmpeg,
             stats,
             start,
+            captions: None,
         }
     }
 }
@@ -1318,6 +1338,15 @@ impl Studio {
         Ok(())
     }
 
+    /// Start the next try of the destination `id` of the running stream at once, when it waits to
+    /// try again or waits for the network; whether it was waiting.
+    pub fn retry_stream_destination(&self, id: &str) -> Result<bool, StudioError> {
+        let Some(a) = self.outputs.active.get(&OutputKind::Streaming) else {
+            return Err(StudioError::Output("the stream is not running".into()));
+        };
+        Ok(a.instance.retry_destination(id)?)
+    }
+
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             self.stop_output(kind);
@@ -1486,6 +1515,7 @@ impl Studio {
             return Err(StudioError::Output("nothing can be recorded or streamed without the graphics device".into()));
         }
         let mut planned = plan(&self.profile, kind);
+        check_tracks(&planned, kind)?;
         // The key the stream's automatic checks are kept under, recorded once the stream starts.
         let mut check_key = None;
         if kind == OutputKind::Streaming {
@@ -1562,7 +1592,12 @@ impl Studio {
         let stats = Arc::new(EncoderStats::default());
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
         let start = self.clock.now();
-        let job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        let mut job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        if kind == OutputKind::Streaming {
+            // Phrases live captions finish while the stream runs go out as closed captions.
+            job.captions = Some(self.caption_feed());
+        }
+        let tracks = std::mem::take(&mut planned.tracks);
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
@@ -1593,7 +1628,14 @@ impl Studio {
         };
         self.outputs.next_id += 1;
         let id = self.outputs.next_id;
-        self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
+        if tracks.is_empty() {
+            self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
+        } else {
+            // Each of the recording's audio streams takes its mix track.
+            for (track, queue) in tracks.iter().zip(instance.audio_streams()) {
+                self.mixer.send(MixerCmd::AddTrackOutput { id, track: *track, queue });
+            }
+        }
         let target = instance.target();
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
         if let Some(key) = check_key {
@@ -1649,6 +1691,7 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     use studiocraft_media::audio::PooledBlock;
+    use studiocraft_model::MixTracks;
     use studiocraft_plugin::Plugin;
 
     use super::*;
@@ -1842,6 +1885,7 @@ mod tests {
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
@@ -2206,6 +2250,8 @@ mod tests {
                 bytes: 0,
                 dropped: 0,
                 reconnects: self.reconnects.load(Ordering::SeqCst),
+                next_try: None,
+                max_tries: 10,
             }]
         }
         fn reconnects(&self) -> u64 {
@@ -2383,6 +2429,39 @@ mod tests {
             let Some(ffmpeg) = job.video_encoder.ffmpeg() else { panic!("{} runs in ffmpeg", plan.encoder_id) };
             let args = ffmpeg.ffmpeg_args(&job.video_encoder_settings, job.rate, 30.0).unwrap().join(" ");
             assert!(args.contains(preset), "{args}");
+        }
+    }
+
+    #[test]
+    fn a_recording_writes_the_profile_s_mix_tracks_and_the_other_outputs_the_program() {
+        let mut p = Profile::default();
+        let video = VideoFormat { width: 64, height: 48, fps_num: 30, fps_den: 1, pixel: PixelFormat::Nv12 };
+        let streams = |p: &Profile, kind| {
+            let plan = plan(p, kind);
+            let encoder = Arc::new(studiocraft_encode::H264);
+            let job = plan.job(encoder, video, PathBuf::new(), Arc::new(EncoderStats::default()), Tick::from_units(0, 1));
+            (plan.tracks, job.audio_streams)
+        };
+        assert_eq!(streams(&p, OutputKind::Recording), (vec![1], vec![String::new()]), "track 1, one unnamed stream, by default");
+        p.output.recording_tracks = MixTracks::from_numbers(&[2, 1, 5]).unwrap();
+        let named = ["Track 1", "Track 2", "Track 5"].map(String::from).to_vec();
+        assert_eq!(streams(&p, OutputKind::Recording), (vec![1, 2, 5], named), "in track order, each named");
+        for kind in [OutputKind::Streaming, OutputKind::Replay] {
+            assert_eq!(streams(&p, kind), (vec![], vec![]), "{kind:?} takes the program mix");
+        }
+    }
+
+    #[test]
+    fn a_recording_without_tracks_names_the_profile_setting() {
+        let mut p = Profile::default();
+        assert!(check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording).is_ok());
+        p.output.recording_tracks = MixTracks::from_bits(0);
+        let Err(StudioError::Output(m)) = check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording) else {
+            panic!("a recording without tracks started")
+        };
+        assert!(m.contains("output.recording_tracks"), "{m}");
+        for kind in [OutputKind::Streaming, OutputKind::Replay] {
+            assert!(check_tracks(&plan(&p, kind), kind).is_ok(), "{kind:?} takes the program mix");
         }
     }
 

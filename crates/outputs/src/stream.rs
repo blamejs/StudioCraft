@@ -5,6 +5,10 @@
 //!   thread hands each packet, in decoding order, to [`Publish`], which shares the packet once
 //!   ([`craft_packet::PacketPool`]) and offers it to every destination ([`craft_packet::Fanout`]).
 //!   Offering a packet never waits for a network.
+//! - When the job has a caption feed, [`Publish`] takes the phrases waiting in it before each
+//!   video packet, without waiting, and puts the CEA-608 roll-up caption pairs due for that
+//!   picture into the packet as an SEI message ([`craft_closed_captions`]), before its first
+//!   slice. Platforms that read captions embedded in H.264 show them as closed captions.
 //! - Each destination that sends has a thread of its own. The thread connects
 //!   ([`craft_rtmp::Publisher`]), sends `onMetaData` and the H.264 and AAC sequence headers, and
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
@@ -38,6 +42,10 @@
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
+//! - A destination that waits to try again, or waits for the network, reports when its next try
+//!   starts ([`DestinationState::next_try`]), and Try Now ([`OutputInstance::retry_destination`])
+//!   starts that try at once, without a route too. Unlike a stop and start, the try counts toward
+//!   the failed tries in a row.
 //!
 //! No log line, error or status of this module holds a stream key: the keys go to
 //! [`craft_rtmp::Config`] and nowhere else, and that crate keeps them out of its errors.
@@ -48,6 +56,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use craft_closed_captions::sei::{self, Codec};
+use craft_closed_captions::{Config as CaptionConfig, MAX_PAIRS_PER_FRAME, RollUp};
 use craft_flv::{Body, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Metadata};
 use craft_media::matroska::TrackSpec;
 use craft_packet::{
@@ -69,6 +79,7 @@ use studiocraft_plugin::{
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 
 pub mod diagnose;
+pub mod ingests;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
@@ -382,6 +393,30 @@ impl Counts {
     }
 }
 
+/// When a destination's next try starts while it waits to try again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NextTry {
+    /// It does not wait to try again.
+    None,
+    /// At this time of the system's clock.
+    At(Instant),
+    /// At this time of the stream's clock ([`Seams::clock`]), while it waits for the network.
+    Clocked(Instant),
+    /// When a route to the server returns, while it waits for the network.
+    Route,
+}
+
+/// The bits of [`Dest::next`] that hold the kind of the next try.
+const NEXT_KIND: u64 = 0b11;
+const NEXT_NONE: u64 = 0;
+const NEXT_AT: u64 = 1;
+const NEXT_CLOCKED: u64 = 2;
+const NEXT_ROUTE: u64 = 3;
+/// The bit of [`Dest::next`] that holds Try Now's request.
+const NEXT_TRY_NOW: u64 = 0b100;
+/// Where the deadline starts in [`Dest::next`].
+const NEXT_SHIFT: u32 = 3;
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
@@ -419,6 +454,12 @@ struct Dest {
     /// Whether its latest check is still wanted, shared with that check while it waits for a
     /// place; cleared with `checked`.
     wanted: Mutex<Arc<Mutex<bool>>>,
+    /// When its next try starts while it waits to try again, with Try Now's request, in one word
+    /// ([`Dest::pack`]). The request is set only while there is a next try, and cleared as the try
+    /// starts.
+    next: AtomicU64,
+    /// The time the deadlines in `next` count from.
+    epoch: Instant,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -448,6 +489,8 @@ impl Dest {
             recovered: AtomicU32::new(0),
             checked: Arc::new(AtomicBool::new(false)),
             wanted: Mutex::new(Arc::new(Mutex::new(false))),
+            next: AtomicU64::new(0),
+            epoch: Instant::now(),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -487,7 +530,80 @@ impl Dest {
         if *status == DestinationStatus::Live {
             self.uncheck();
         }
+        // Only a destination that waits to try again has a next try.
+        if !matches!(*status, DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. }) {
+            self.wait_until(NextTry::None);
+        }
         drop(status);
+        self.touch();
+    }
+
+    /// `next` as one word: the kind in bits 0 and 1, Try Now's request (bit 2) left clear, and the
+    /// deadline in the bits above, in nanoseconds from `epoch`, signed. A deadline more than about
+    /// 36 years from `epoch` is kept at that limit.
+    fn pack(&self, next: NextTry) -> u64 {
+        let (kind, at) = match next {
+            NextTry::None => (NEXT_NONE, None),
+            NextTry::At(at) => (NEXT_AT, Some(at)),
+            NextTry::Clocked(at) => (NEXT_CLOCKED, Some(at)),
+            NextTry::Route => (NEXT_ROUTE, None),
+        };
+        let limit = i64::MAX >> NEXT_SHIFT;
+        let nanos = at.map_or(0, |at| match at.checked_duration_since(self.epoch) {
+            Some(after) => i64::try_from(after.as_nanos()).unwrap_or(limit).min(limit),
+            None => -i64::try_from(self.epoch.duration_since(at).as_nanos()).unwrap_or(limit).min(limit),
+        });
+        ((nanos << NEXT_SHIFT) as u64) | kind
+    }
+
+    /// The next try held in `word`.
+    fn unpack(&self, word: u64) -> NextTry {
+        let nanos = (word as i64) >> NEXT_SHIFT;
+        let at = if nanos >= 0 {
+            self.epoch.checked_add(Duration::from_nanos(nanos.unsigned_abs()))
+        } else {
+            self.epoch.checked_sub(Duration::from_nanos(nanos.unsigned_abs()))
+        }
+        .unwrap_or(self.epoch);
+        match word & NEXT_KIND {
+            NEXT_AT => NextTry::At(at),
+            NEXT_CLOCKED => NextTry::Clocked(at),
+            NEXT_ROUTE => NextTry::Route,
+            _ => NextTry::None,
+        }
+    }
+
+    /// When the next try starts.
+    fn next_try(&self) -> NextTry {
+        self.unpack(self.next.load(Ordering::SeqCst))
+    }
+
+    /// Sets when the next try starts, before the status that shows the wait is set. A Try Now
+    /// request stays until the try starts.
+    fn wait_until(&self, next: NextTry) {
+        let word = self.pack(next);
+        // The closure always gives a value, so the update cannot fail.
+        let _ = self.next.try_update(Ordering::SeqCst, Ordering::SeqCst, |old| Some(word | (old & NEXT_TRY_NOW)));
+    }
+
+    /// Ends the wait before the next try, so the try starts at once; whether it was waiting.
+    fn try_now(&self) -> bool {
+        let asked =
+            self.next.try_update(Ordering::SeqCst, Ordering::SeqCst, |old| (old & NEXT_KIND != NEXT_NONE).then_some(old | NEXT_TRY_NOW)).is_ok();
+        if asked {
+            self.wake();
+        }
+        asked
+    }
+
+    /// Whether Try Now asked the thread to end its wait.
+    fn trying_now(&self) -> bool {
+        self.next.load(Ordering::SeqCst) & NEXT_TRY_NOW != 0
+    }
+
+    /// The wait is over and the try starts: there is no next try until it fails.
+    fn begin_try(&self) {
+        self.next.store(self.pack(NextTry::None), Ordering::SeqCst);
         self.touch();
     }
 
@@ -555,14 +671,24 @@ impl Dest {
         self.alive.store(false, Ordering::SeqCst);
     }
 
-    fn state(&self) -> DestinationState {
+    fn state(&self, hub: &Hub) -> DestinationState {
+        let status = self.status();
+        // Read after the status, which is set after the next try, so a waiting status has its time.
+        let next_try = match self.next_try() {
+            NextTry::At(at) => Some(at.saturating_duration_since(Instant::now())),
+            NextTry::Clocked(at) => Some(at.saturating_duration_since(hub.seams.clock.now())),
+            NextTry::None | NextTry::Route => None,
+        };
+        let waiting = matches!(status, DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. });
         DestinationState {
             id: self.target.id.clone(),
             target: self.shown(),
-            status: self.status(),
+            status,
             bytes: self.bytes.load(Ordering::Relaxed),
             dropped: self.dropped.load(Ordering::Relaxed),
             reconnects: self.reconnects.load(Ordering::Relaxed),
+            next_try: next_try.filter(|_| waiting),
+            max_tries: hub.timing.max_tries,
         }
     }
 }
@@ -783,12 +909,12 @@ fn fail(hub: &Hub, d: &Dest, f: Failure) {
     d.fail(f);
 }
 
-/// Waits `delay`, or less when the destination is stopped or started again or the stream ends.
-fn wait(hub: &Hub, d: &Dest, delay: Duration) {
-    let deadline = Instant::now() + delay;
+/// Waits until `deadline`, or less when the destination is stopped or started again, Try Now ends
+/// the wait, or the stream ends.
+fn wait(hub: &Hub, d: &Dest, deadline: Instant) {
     loop {
         let now = Instant::now();
-        if d.stopping() || d.restarted.load(Ordering::SeqCst) || hub.control.is_ended() || now >= deadline {
+        if d.stopping() || d.restarted.load(Ordering::SeqCst) || d.trying_now() || hub.control.is_ended() || now >= deadline {
             return;
         }
         std::thread::park_timeout(deadline - now);
@@ -859,6 +985,7 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
     let mut since = start;
     d.net_up.store(false, Ordering::SeqCst);
     let watched = watch_network(hub, d);
+    d.wait_until(until.and_then(|u| start.checked_add(u)).map_or(NextTry::Route, NextTry::Clocked));
     d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
     let ended = loop {
         if d.stopping() || hub.control.is_ended() {
@@ -867,6 +994,10 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
         // Started again while it waits: it tries at once, as after the wait before a try.
         if d.restarted.load(Ordering::SeqCst) {
             break NetWait::Restarted;
+        }
+        // Try Now: it tries at once, without a route, as the next of its tries.
+        if d.trying_now() {
+            break NetWait::Up;
         }
         // Without a route thread, the destination checks for itself.
         if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
@@ -1077,21 +1208,28 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // With no route, the wait for the network takes the place of the wait before the try.
             let mut route = gate(hub, d, &failure);
             if route == Gate::Open {
+                // The next try is set before the status that shows the wait.
+                let at = Instant::now() + delay;
+                d.wait_until(NextTry::At(at));
                 d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure: failure.clone() });
-                wait(hub, d, delay);
+                wait(hub, d, at);
                 // Checked again right before the try: the route may have gone during the wait.
                 route = match gate(hub, d, &failure) {
                     Gate::Closed => Gate::Closed,
                     Gate::Open | Gate::NoDefault => Gate::Open,
                 };
             }
-            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
+            // Try Now tries at once, also without a route.
+            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !d.trying_now() && !hub.control.is_ended() {
                 let until = (route == Gate::NoDefault).then_some(delay);
                 match wait_for_network(hub, d, &mut failures, &failure, until) {
                     NetWait::Up => {
+                        let at = Instant::now() + refusal_left(&hub.timing, refused_at, Instant::now());
+                        d.wait_until(NextTry::At(at));
                         d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
-                        // A route that returns soon after a refused `publish` does not cut its wait.
-                        wait(hub, d, refusal_left(&hub.timing, refused_at, Instant::now()));
+                        // A route that returns soon after a refused `publish` does not cut its wait;
+                        // Try Now does.
+                        wait(hub, d, at);
                     }
                     NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return fail(hub, d, f),
@@ -1101,6 +1239,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         if d.ends(hub) {
             return;
         }
+        d.begin_try();
         // Started again while it waited: the try is shown as a first one.
         if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
@@ -1257,6 +1396,40 @@ fn send_packet(p: &mut Publisher, packet: &SharedPacket, zero: i64) -> Result<()
     p.send_flv(timestamp, &checked)
 }
 
+/// Closed captions for the stream's pictures: finished phrases from the job's feed, as CEA-608
+/// roll-up captions in an SEI message on each H.264 access unit that has pairs due. Streams have
+/// no B-frames, so packets come in the order their pictures are shown.
+struct Captions {
+    feed: Arc<Fifo<String>>,
+    roll: RollUp,
+    pairs: Vec<[u8; 2]>,
+    nal: Vec<u8>,
+}
+
+impl Captions {
+    /// Captions for a stream at `fps_num / fps_den`; the phrases already waiting are left out.
+    fn new(feed: Arc<Fifo<String>>, fps_num: u32, fps_den: u32) -> Result<Captions, PluginError> {
+        while feed.pop().is_some() {}
+        let roll = RollUp::new(fps_num, fps_den, CaptionConfig::default()).map_err(|e| PluginError::Failed(format!("closed captions: {e}")))?;
+        Ok(Captions { feed, roll, pairs: Vec::with_capacity(MAX_PAIRS_PER_FRAME), nal: Vec::new() })
+    }
+
+    /// Put this picture's caption pairs into `au`, a length-prefixed access unit. An access unit
+    /// with no picture is sent as it was, and its pairs are lost.
+    fn add(&mut self, au: &mut Vec<u8>) {
+        while let Some(text) = self.feed.pop() {
+            self.roll.push(&text);
+        }
+        self.roll.frame(&mut self.pairs);
+        if self.pairs.is_empty() {
+            return;
+        }
+        self.nal.clear();
+        sei::sei_nal(Codec::H264, &self.pairs, &mut self.nal);
+        let _ = sei::insert_sei(Codec::H264, au, &self.nal);
+    }
+}
+
 /// The third thread's sink: each packet is shared and offered to every destination.
 struct Publish {
     fanout: Fanout,
@@ -1266,6 +1439,7 @@ struct Publish {
     refused: Arc<AtomicU64>,
     /// A video packet could not be shared, so video waits for the next keyframe.
     video_gap: bool,
+    captions: Option<Captions>,
 }
 
 impl Sink for Publish {
@@ -1278,6 +1452,9 @@ impl Sink for Publish {
         }
         let info = if video { Info::video(item.pts_ns, item.dts_ns, item.keyframe) } else { Info::audio(item.pts_ns) };
         let mut data = item.data;
+        if video && let Some(c) = &mut self.captions {
+            c.add(&mut data);
+        }
         match self.fanout.share(&mut self.pool, &mut data, info) {
             Ok(packet) => {
                 self.video_gap &= !video;
@@ -1364,9 +1541,13 @@ impl Streaming {
         let refused = Arc::new(AtomicU64::new(0));
         let mut headers = None;
         let sink_refused = Arc::clone(&refused);
+        let captions = match &job.captions {
+            Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
+            None => None,
+        };
         let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
             headers = Some(Headers::new(job, kbps, &tracks)?);
-            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false }))
+            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false, captions }))
         };
         let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
         let Some(headers) = headers else {
@@ -1518,7 +1699,7 @@ impl OutputInstance for Streaming {
     }
 
     fn destinations(&self) -> Vec<DestinationState> {
-        self.hub.dests.iter().map(|d| d.state()).collect()
+        self.hub.dests.iter().map(|d| d.state(&self.hub)).collect()
     }
 
     fn reconnects(&self) -> u64 {
@@ -1553,6 +1734,14 @@ impl OutputInstance for Streaming {
             checks.cancel(&auto.profile, id);
         }
         Ok(())
+    }
+
+    fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
+        let d = self.hub.find(id)?;
+        if self.stopped || self.hub.control.is_ended() {
+            return Err(PluginError::Failed("the stream is ending".into()));
+        }
+        Ok(d.try_now())
     }
 }
 

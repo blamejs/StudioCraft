@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Kończenie nagrywania…
 	Fit to Screen	Dopasuj do ekranu
+	Flip Horizontal	Odbij w poziomie
+	Flip Vertical	Odbij w pionie
 	Font	Czcionka
 	Font family	Rodzina czcionek
 	Format	Format
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (wbudowany)
 	VA-API H.264 (built in)	VA-API H.264 (wbudowany)
 	VA-API HEVC (built in)	VA-API HEVC (wbudowany)
+	VA-API AV1 (built in)	VA-API AV1 (wbudowany)
 	Height	Wysokość
 	Help	Pomoc
 	Hide	Ukryj
@@ -329,6 +332,7 @@
 	the audio stream failed	błąd strumienia dźwięku
 	the camera capture could not start	nie można uruchomić przechwytywania z kamery
 	the camera is already open in another format	kamera jest już otwarta w innym formacie
+	the camera is not connected	kamera nie jest podłączona
 	the camera is still closing	kamera wciąż się zamyka
 	the camera offers no format StudioCraft reads	kamera nie oferuje żadnego formatu, który StudioCraft odczytuje
 	the camera sends frames that cannot be read	kamera wysyła klatki, których nie można odczytać
@@ -366,7 +370,7 @@
 	Video	Wideo
 	Video bitrate	Przepływność wideo
 	Video encoder	Koder wideo
-	Video settings can't change while recording, streaming or running the replay buffer.	Ustawień wideo nie można zmienić podczas nagrywania, transmisji ani działania bufora powtórek.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Ustawień wideo nie można zmienić podczas nagrywania, transmisji ani działania bufora powtórek lub wirtualnej kamery.
 	View	Widok
 	Waiting for the program picture…	Oczekiwanie na obraz programu…
 	waiting for a choice in the system picker	oczekiwanie na wybór w systemowym oknie wyboru
@@ -562,3 +566,5 @@ menu	Transform	Przekształć
 	Custom	Niestandardowy
 	Fill Screen	Wypełnij ekran
 @msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}
+	Filter delay	Opóźnienie filtrów
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Filtry audio tego źródła opóźniają jego dźwięk o {frames} próbek przy 48 kHz

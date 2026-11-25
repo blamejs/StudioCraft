@@ -11,13 +11,17 @@ mod audio_tracks;
 mod captions;
 pub mod capture;
 mod events;
+mod face_models;
 pub mod files;
 mod golive;
+mod model_jobs;
 mod monitor;
 mod outputs;
 mod pause;
 mod recording_markers;
 mod recordings;
+pub mod session_marker;
+mod virtual_camera;
 mod wiring;
 
 use std::collections::HashMap;
@@ -31,16 +35,14 @@ use studiocraft_engine::command::MAX_SOURCE_SIDE;
 use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{LoudnessReading, Mixer, MixerCmd};
 use studiocraft_engine::scheduler::Scheduler;
-use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, RuntimeAction, SourceSize};
+use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, PauseValues, RuntimeAction, SourceSize};
 use studiocraft_media::clock::{MasterClock, duration_of, tick_of};
 use studiocraft_media::mix::{BlockLevels, Levels};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
 use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
-use studiocraft_model::{
-    FilterId, FitMode, ItemId, LoudnessTarget, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings,
-};
+use studiocraft_model::{FilterId, FitMode, ItemId, LoudnessTarget, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared, ThumbnailRequest, ThumbnailViews};
@@ -53,6 +55,7 @@ pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, recording_folder
 pub use pause::{countdown_text, media_extensions as pause_media_extensions, paused_text};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_outputs::stream::diagnose;
+pub use studiocraft_outputs::stream::ingests;
 pub use studiocraft_platform::PlatformError;
 pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
 pub use studiocraft_render::{Capture, View};
@@ -313,6 +316,8 @@ pub struct Studio {
     engine: Engine,
     clock: MasterClock,
     sources: SourceSet,
+    /// Safe Mode: no source runs until [`Studio::leave_safe_mode`].
+    safe_mode: bool,
     mixer: Mixer,
     /// Meter levels of each audio source, kept across mixer rebuilds.
     levels: HashMap<SourceId, Arc<Levels>>,
@@ -355,6 +360,8 @@ pub struct Studio {
     /// showed a picture with those pictures' sizes, when [`Studio::place_fit_later`] last looked.
     fit_seen: Option<(u64, usize, u64)>,
     outputs: outputs::Outputs,
+    /// The virtual camera, while it runs.
+    vcam: Option<virtual_camera::VirtualCamera>,
     /// What the go-live check keeps between calls: how each destination did on earlier streams,
     /// and the free space query.
     golive: golive::GoLive,
@@ -367,6 +374,8 @@ pub struct Studio {
     audio_tracks: audio_tracks::AudioTracks,
     /// Speech recognition of the program audio, and the caption files of recordings.
     captions: captions::Captions,
+    /// The download or install of the face tracking model.
+    face_models: face_models::FaceModels,
     /// Markers set during the recording, and the timeline files of recordings that stopped.
     recording_markers: recording_markers::RecordingMarkers,
     /// The scan of the recording folder for `recordings.list`, and its last result.
@@ -410,6 +419,16 @@ pub fn scope_size(canvas: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
     (even(w), even(h))
 }
 
+/// `frames` sample frames at the mixer's sample rate, in milliseconds rounded to 0.1 ms.
+pub fn latency_ms(frames: usize) -> f64 {
+    (frames as f64 * 1000.0 / f64::from(studiocraft_media::audio::SAMPLE_RATE) * 10.0).round() / 10.0
+}
+
+/// `{"frames", "ms"}`, a delay of `frames` sample frames as the state reports it.
+fn latency_json(frames: usize) -> Value {
+    json!({"frames": frames, "ms": latency_ms(frames)})
+}
+
 /// What `audio.loudness` reports: the readings of `reading`, each `null` while it is −∞ (silence,
 /// or too little of the program since the start or a reset), and the band of `target`.
 fn loudness_json(reading: &LoudnessReading, target: &LoudnessTarget) -> Value {
@@ -437,6 +456,31 @@ impl Studio {
         ffmpeg: FfmpegSetting,
         captions: Arc<CaptionBoard>,
     ) -> Studio {
+        Studio::start(gpu, collection, profile, registry, ffmpeg, captions, false)
+    }
+
+    /// The same studio in Safe Mode: the collection opens and can be edited, and no source runs
+    /// (no device, file, capture or network source is opened) until [`Studio::leave_safe_mode`].
+    pub fn new_in_safe_mode(
+        gpu: Option<Gpu>,
+        collection: SceneCollection,
+        profile: Profile,
+        registry: Arc<Registry>,
+        ffmpeg: FfmpegSetting,
+        captions: Arc<CaptionBoard>,
+    ) -> Studio {
+        Studio::start(gpu, collection, profile, registry, ffmpeg, captions, true)
+    }
+
+    fn start(
+        gpu: Option<Gpu>,
+        collection: SceneCollection,
+        profile: Profile,
+        registry: Arc<Registry>,
+        ffmpeg: FfmpegSetting,
+        captions: Arc<CaptionBoard>,
+        safe_mode: bool,
+    ) -> Studio {
         let clock = MasterClock::new();
         if let Ok(mut f) = ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
@@ -458,6 +502,7 @@ impl Studio {
             engine: Engine::new(collection, registry),
             clock,
             sources: SourceSet::new(clock),
+            safe_mode,
             mixer,
             levels: HashMap::new(),
             gpu,
@@ -482,12 +527,14 @@ impl Studio {
             fit_layout: None,
             fit_seen: None,
             outputs: outputs::Outputs::default(),
+            vcam: None,
             golive: golive::GoLive::default(),
             notices: Vec::new(),
             scope_feed: None,
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
+            face_models: face_models::FaceModels::default(),
             recording_markers: recording_markers::RecordingMarkers::default(),
             recordings: recordings::Recordings::default(),
             pause: None,
@@ -508,6 +555,18 @@ impl Studio {
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// Whether the studio is in Safe Mode, with no source running.
+    pub fn safe_mode(&self) -> bool {
+        self.safe_mode
+    }
+
+    /// Leave Safe Mode: the collection's sources start. Nothing happens outside Safe Mode.
+    pub fn leave_safe_mode(&mut self) {
+        if std::mem::take(&mut self.safe_mode) {
+            self.refresh();
+        }
     }
 
     pub fn collection(&self) -> &SceneCollection {
@@ -538,6 +597,7 @@ impl Studio {
         // Finished caption work is collected first, so a status reads the current state and a
         // start or download does not meet a worker that has already ended.
         self.sync_captions();
+        self.sync_face_models();
         let outcome = self.engine.execute(cmd);
         let outcome = match outcome {
             Ok(o) => o,
@@ -572,22 +632,29 @@ impl Studio {
                 RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
                 RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
                 RuntimeAction::SaveReplay => self.save_replay()?,
+                RuntimeAction::StartVirtualCamera => self.start_virtual_camera()?,
+                RuntimeAction::StopVirtualCamera => self.stop_virtual_camera(),
+                RuntimeAction::ToggleVirtualCamera => self.toggle_virtual_camera()?,
                 RuntimeAction::CaptionsStart { model, language } => result = self.start_captions(model, language)?,
                 RuntimeAction::CaptionsStop => self.stop_captions(),
                 RuntimeAction::CaptionsToggle => result = self.toggle_captions()?,
                 RuntimeAction::CaptionsStatus => result = self.captions_json(),
                 RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
+                RuntimeAction::AvatarModels => result = self.face_models_json(),
+                RuntimeAction::AvatarModelDownload { model } => result = self.download_face_model(model)?,
+                RuntimeAction::AvatarModelDownloadCancel => self.cancel_face_model_job(),
+                RuntimeAction::AvatarModelInstall { path, model } => result = self.install_face_model(path, model)?,
                 RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::FilterMeter { source, filter } => result = self.filter_meter_json(source, filter),
-                RuntimeAction::PauseStart { media, countdown_s, at_zero } => result = self.start_pause(media, countdown_s, at_zero)?,
+                RuntimeAction::PauseStart(values) => result = self.start_pause(values)?,
                 RuntimeAction::PauseStop => self.stop_pause()?,
                 RuntimeAction::PauseToggle => {
                     if self.pause.is_some() {
                         self.stop_pause()?;
                         result = self.pause_json();
                     } else {
-                        result = self.start_pause(None, None, None)?;
+                        result = self.start_pause(PauseValues::default())?;
                     }
                 }
                 RuntimeAction::PauseExtend { seconds } => result = self.extend_pause(seconds)?,
@@ -703,8 +770,10 @@ impl Studio {
         for id in events.removed {
             self.mixer.send(MixerCmd::RemoveOutput { id });
         }
+        self.poll_virtual_camera();
         self.sync_audio_tracks();
         self.sync_captions();
+        self.sync_face_models();
         self.sync_recording_markers();
         self.mixer.free_retired();
     }
@@ -736,6 +805,7 @@ impl Studio {
             for kind in [OutputKind::Recording, OutputKind::Streaming, OutputKind::Replay] {
                 self.stop_output(kind);
             }
+            self.stop_virtual_camera();
         }
         let Some(gpu) = &self.gpu else { return };
         let Some(loss) = &mut self.gpu_loss else { return };
@@ -772,13 +842,17 @@ impl Studio {
         self.gpu.as_ref()
     }
 
-    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor.
+    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor. A running
+    /// virtual camera keeps running when the compositor starts again, and stops when it does not.
     pub fn set_gpu(&mut self, gpu: Option<Gpu>) {
         self.recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
         self.gpu = gpu;
         self.gpu_loss = None;
         self.outputs.forget_hardware_tests();
         self.restart_video();
+        if self.video.is_none() {
+            self.stop_virtual_camera();
+        }
     }
 
     /// Bring sources, the mixer and the compositor in line with the collection, and start a
@@ -786,7 +860,8 @@ impl Studio {
     fn refresh(&mut self) {
         self.seen_revision = self.engine.revision();
         let c = self.engine.collection();
-        for (id, problem) in self.sources.sync(c, self.engine.registry()) {
+        let failed = if self.safe_mode { Vec::new() } else { self.sources.sync(c, self.engine.registry()) };
+        for (id, problem) in failed {
             let name = c.source(id).map_or_else(|| id.to_string(), |s| s.name.clone());
             self.notices.push(Notice::new("{name}: {problem}", vec![("name", name), ("problem", problem.to_string())], true));
         }
@@ -842,7 +917,9 @@ impl Studio {
     fn sync_monitor(&mut self) {
         let c = self.engine.collection();
         let registry = self.engine.registry();
-        let wanted = c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
+        // Safe Mode opens no device, the monitoring device included.
+        let wanted =
+            !self.safe_mode && c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
         self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &self.mixer, &mut self.notices);
     }
 
@@ -1046,39 +1123,58 @@ impl Studio {
         if let Some(on) = hold {
             // The program audio goes the rest of its way from where it is now, and ends its fade
             // when the picture ends its transition.
-            let level = self.hold_fade.map_or(1.0, |h| h.level(now));
-            let distance = if on { level } else { 1.0 - level };
-            let fade = if self.transition.is_some() { turned_fade_ms(ms, distance, 1.0 - q) } else { 0 };
-            self.hold_fade = Some(HoldFade { start: now, from: level, down: on, ms: fade });
-            self.mixer.send(MixerCmd::FadeMs(fade));
-            self.mixer.send(MixerCmd::Hold(on));
+            let running = self.transition.is_some();
+            self.hold_scene_audio(on, |distance| if running { turned_fade_ms(ms, distance, 1.0 - q) } else { 0 });
         }
     }
 
+    /// Fade the program mix out (`on`) or back in, from the level it has now. `fade` gives the
+    /// fade's length for the whole range from the share of the range still to go.
+    fn hold_scene_audio(&mut self, on: bool, fade: impl FnOnce(f64) -> u32) {
+        let now = self.clock.now();
+        let level = self.hold_fade.map_or(1.0, |h| h.level(now));
+        let distance = if on { level } else { 1.0 - level };
+        let fade = fade(distance);
+        self.hold_fade = Some(HoldFade { start: now, from: level, down: on, ms: fade });
+        self.mixer.send(MixerCmd::FadeMs(fade));
+        self.mixer.send(MixerCmd::Hold(on));
+    }
+
     /// Pause the program, or while paused apply the given values ([`Command::PauseStart`]).
-    fn start_pause(&mut self, media: Option<String>, countdown_s: Option<u32>, at_zero: Option<PauseAtZero>) -> Result<Value, StudioError> {
-        if let Some(m) = media.as_deref().filter(|m| !m.is_empty()) {
+    fn start_pause(&mut self, values: PauseValues) -> Result<Value, StudioError> {
+        // The pause screen's picture or video is a source too.
+        if self.safe_mode {
+            return Err(StudioError::Engine(EngineError::Invalid("the pause screen can't start in Safe Mode; leave Safe Mode first".into())));
+        }
+        if let Some(m) = values.media.as_deref().filter(|m| !m.is_empty()) {
             pause::media_kind(self.engine.registry(), m).map_err(|e| StudioError::Engine(EngineError::Invalid(e)))?;
         }
         let now_ms = self.now_ms();
         let canvas = self.canvas();
         if let Some(state) = &mut self.pause {
-            if let Some(s) = countdown_s {
+            if let Some(s) = values.countdown_s {
                 state.set_countdown(now_ms, s);
             }
-            if let Some(z) = at_zero {
-                state.settings.at_zero = z;
-            }
-            if let Some(m) = media {
-                state.settings.media = m;
-                if let Some(l) = &mut self.pause_layers {
-                    let mut problems = Vec::new();
-                    l.set_media(self.engine.registry(), self.clock, &state.settings.media, &mut problems);
-                    l.look.clone_from(&state.settings);
-                    for p in problems {
-                        self.notices.push(Notice::new(pause::MEDIA_NOTICE, vec![("error", p)], true));
-                    }
+            let held = state.settings.mute_scene;
+            values.apply_to(&mut state.settings);
+            let hold = state.settings.mute_scene;
+            if values.media.is_some()
+                && let Some(l) = &mut self.pause_layers
+            {
+                let mut problems = Vec::new();
+                l.set_media(self.engine.registry(), self.clock, &state.settings.media, &mut problems);
+                l.look.clone_from(&state.settings);
+                for p in problems {
+                    self.notices.push(Notice::new(pause::MEDIA_NOTICE, vec![("error", p)], true));
                 }
+            }
+            if hold != held {
+                // The program mix fades out or back in over the collection's transition length,
+                // as it does when a pause starts or ends.
+                let t = &self.engine.collection().transition;
+                let instant = self.engine.registry().transition(&t.kind).map_or(true, |p| p.instant());
+                let ms = if instant { 0 } else { t.duration_ms };
+                self.hold_scene_audio(hold, |distance| turned_fade_ms(ms, distance, 1.0));
             }
             self.pause_seen = None;
             self.tick_pause();
@@ -1086,14 +1182,9 @@ impl Studio {
             return Ok(self.pause_json());
         }
         let mut settings = self.profile.pause.clone().sanitized();
-        if let Some(m) = media {
-            settings.media = m;
-        }
-        if let Some(z) = at_zero {
-            settings.at_zero = z;
-        }
+        values.apply_to(&mut settings);
         let mut state = pause::PauseState::new(now_ms, settings);
-        if let Some(s) = countdown_s {
+        if let Some(s) = values.countdown_s {
             state.set_countdown(now_ms, s);
         }
         // The layers of a pause whose fade back still runs keep drawing; only what changed starts
@@ -1157,6 +1248,13 @@ impl Studio {
     /// filter has no meter.
     pub fn filter_meter_json(&self, source: SourceId, filter: FilterId) -> Value {
         self.wiring.filter_meter(source, filter).map_or(Value::Null, |db| json!({"gain_reduction_db": (f64::from(db) * 100.0).round() / 100.0}))
+    }
+
+    /// The sample frames, at the mixer's 48 kHz, that the audio filters the mixer runs on `source`
+    /// delay its audio by, in total: 0 for a source the mixer does not run or whose filters add no
+    /// delay.
+    pub fn filter_latency_frames(&self, source: SourceId) -> usize {
+        self.wiring.filter_latency(source)
     }
 
     /// Whether the program is paused, since when, and the countdown.
@@ -1469,6 +1567,9 @@ impl Studio {
         if video_changed && self.outputs.any_active() {
             return Err(StudioError::Output("stop recording, streaming and the replay buffer before changing the video settings".into()));
         }
+        if video_changed && self.vcam.is_some() {
+            return Err(StudioError::Output("stop the virtual camera before changing the video settings".into()));
+        }
         if let Ok(mut f) = self.ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
         }
@@ -1532,9 +1633,9 @@ impl Studio {
     /// Place the items with a fit mode whose sources showed nothing at the last canvas change,
     /// once those sources show a picture: by their mode on the current canvas, as one undo step.
     /// An item is placed only while the undo step of that change's layout is in effect and the
-    /// item still has its mode and the transform that change gave it. An undo that takes that
-    /// layout back, or a later edit, leaves it where it is; a redo, or an undo that brings back a
-    /// removed item, makes it wait again. Once the layout step can no longer be undone or redone
+    /// item still has its mode and the transform that change gave it, apart from its flips. An
+    /// undo that takes that layout back, or a later edit, leaves it where it is; a redo, or an
+    /// undo that brings back a removed item, makes it wait again. Once the layout step can no longer be undone or redone
     /// (a new edit after its undo, or the oldest steps dropped), nothing waits.
     fn place_fit_later(&mut self) {
         // This runs every frame. Until a waiting source starts to show a picture, its picture
@@ -1560,6 +1661,8 @@ impl Studio {
         {
             return;
         }
+        // A flip leaves the item's box and its fit mode as they are, so it does not end the wait.
+        let unflipped = |t: Transform| Transform { flip_horizontal: false, flip_vertical: false, ..t };
         let c = self.engine.collection();
         let waiting: Vec<&FitLater> = self
             .fit_later
@@ -1568,7 +1671,7 @@ impl Studio {
                 c.scenes
                     .iter()
                     .flat_map(|s| &s.items)
-                    .any(|i| i.id == w.item && i.source == w.source && i.fit == Some(w.fit) && i.transform == w.transform)
+                    .any(|i| i.id == w.item && i.source == w.source && i.fit == Some(w.fit) && unflipped(i.transform) == unflipped(w.transform))
             })
             .collect();
         let mut sources: Vec<SourceId> = waiting.iter().map(|w| w.source).collect();
@@ -1627,6 +1730,11 @@ impl Studio {
                 }
             }
             o.insert("replay".into(), replay);
+            let vcam = self.virtual_camera().map_or(
+                json!({"active": false}),
+                |s| json!({"active": true, "status": s.status_text(), "target": s.target, "seconds": s.elapsed.as_secs_f64(), "bytes": s.bytes}),
+            );
+            o.insert("virtual_camera".into(), vcam);
             o.insert("transitioning".into(), json!(self.transition.is_some()));
             let mut monitoring = json!({"device": self.profile.audio.monitoring_device, "playing": self.monitor.playing()});
             if let (Some(m), Some(f)) = (monitoring.as_object_mut(), self.monitor.format()) {
@@ -1637,6 +1745,9 @@ impl Studio {
             o.insert("audio_tracks".into(), self.audio_tracks_json());
             o.insert("captions".into(), self.captions_json());
             o.insert("pause".into(), self.pause_json());
+            let latencies: serde_json::Map<String, Value> =
+                self.wiring.filter_latencies().map(|(id, frames)| (id.0.to_string(), latency_json(frames))).collect();
+            o.insert("filter_latency".into(), Value::Object(latencies));
             o.insert(
                 "stats".into(),
                 json!({
@@ -1653,7 +1764,8 @@ impl Studio {
     fn update_encode_target(&mut self) {
         let Some(v) = &self.video else { return };
         let vs = self.profile.video.sanitized();
-        let sinks = self.outputs.video_sinks();
+        let mut sinks = self.outputs.video_sinks();
+        sinks.extend(self.virtual_camera_sink());
         let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks });
         v.shared.encode.publish(target);
     }
@@ -1689,9 +1801,11 @@ impl Drop for Studio {
         self.stop_audio_tracks();
         let closed = self.clock.now();
         self.outputs.stop_all_blocking();
+        self.stop_virtual_camera();
         self.finish_audio_tracks_blocking();
         // Caption files of a recording that just stopped are written before the studio closes.
         self.finish_captions_blocking();
+        self.finish_face_models_blocking();
         // So is the marker file, with the recording ending when the app closed.
         self.finish_recording_markers_blocking(closed);
     }

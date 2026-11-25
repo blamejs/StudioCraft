@@ -10,6 +10,9 @@
 //! - Frames go in as samples in system memory, and output samples are read back to bytes: Annex B
 //!   for H.264 and HEVC, OBUs for AV1.
 //!   Output samples this side allocates have the alignment the encoder asks for.
+//! - Input samples come from the encoder's [`InputSamples`] and are reused once the encoder has
+//!   released them. When the encoder does not provide its output samples, one output sample is
+//!   made for each output type and reused for every read.
 //! - Each `METransformHaveOutput` event reads one sample, and each `METransformNeedInput` event
 //!   takes one frame.
 //! - A wait for the encoder's next event ends with an error after [`EVENT_TIMEOUT`].
@@ -35,12 +38,16 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
-use super::api::{self, Api};
+use super::api::{self, Api, InputSamples};
 use super::{MAX_HEADER, OpenError, Output, Params, Read, alignment_flag, cbr_buffer_bytes, nominal_bitrate, output_size, quality, read_again};
 use crate::{Codec, Rate};
 
 /// How long a wait for the encoder's next event lasts before it is an error.
 const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The time the reused output sample carries before each read. A sample the encoder does not
+/// timestamp keeps it, and reads as having no time.
+const NO_TIME: i64 = i64::MIN;
 
 /// What one event of the encoder asked for.
 enum Event {
@@ -87,11 +94,15 @@ pub struct Transform {
     /// The `MFCreateAlignedMemoryBuffer` alignment of an output sample this side allocates, when
     /// the encoder asks for one.
     output_align: Option<u32>,
+    /// The output sample this side reuses for every read, made for the current output type.
+    output: Option<IMFSample>,
     /// Input requests not answered yet.
     wanted: u32,
     /// Set by [`Transform::drain`]: the stream has ended.
     ended: bool,
     header: Option<Vec<u8>>,
+    /// Dropped after the MFT has shut down and released the samples it held.
+    inputs: InputSamples,
 }
 
 // SAFETY: hardware encoder MFTs are free-threaded COM objects, and a `Transform` is used from one
@@ -167,9 +178,11 @@ impl Transform {
             provides_samples: false,
             output_size: 0,
             output_align: None,
+            output: None,
             wanted: 0,
             ended: false,
             header: None,
+            inputs: InputSamples::new(),
         };
         t.set_up(p, subtype)?;
         Ok(t)
@@ -255,6 +268,8 @@ impl Transform {
         self.output_size = output_size(info.cbSize, self.width, self.height).map_err(|e| format!("{}: {e}", self.name))?;
         // The alignment applies to the samples this side allocates.
         self.output_align = if self.provides_samples { None } else { alignment_flag(info.cbAlignment).map_err(|e| format!("{}: {e}", self.name))? };
+        // The next read makes an output sample for these needs.
+        self.output = None;
         Ok(())
     }
 
@@ -289,7 +304,7 @@ impl Transform {
         if self.ended {
             return Err(format!("{}: the stream has ended", self.name));
         }
-        let sample = self.api.sample_of(frame, time, duration)?;
+        let sample = self.inputs.sample_of(self.api, frame, time, duration)?;
         while self.wanted == 0 {
             match self.next_event(true)? {
                 Some(Event::NeedInput) => self.wanted += 1,
@@ -384,7 +399,7 @@ impl Transform {
     }
 
     fn read_once(&mut self, out: &mut Vec<Output>) -> Result<Read, String> {
-        let ours = if self.provides_samples { None } else { Some(self.api.empty_sample(self.output_size, self.output_align)?.0) };
+        let ours = if self.provides_samples { None } else { Some(self.output_sample()?) };
         let mut buffers =
             [MFT_OUTPUT_DATA_BUFFER { dwStreamID: self.output_id, pSample: ManuallyDrop::new(ours), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
         let mut status = 0u32;
@@ -404,6 +419,31 @@ impl Transform {
             Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => Ok(Read::StreamChanged),
             Err(e) => Err(format!("{}: reading a frame failed: {e}", self.name)),
         }
+    }
+
+    /// This side's output sample, emptied for the next read: the one made for the current output
+    /// type while it holds one buffer of at least [`output_size`] bytes, otherwise a new one. Its
+    /// attributes and flags are cleared and its time is [`NO_TIME`].
+    fn output_sample(&mut self) -> Result<IMFSample, String> {
+        // SAFETY: plain COM calls on live interfaces.
+        let kept = self.output.as_ref().and_then(|s| unsafe {
+            let buffer = if s.GetBufferCount().ok()? == 1 { s.GetBufferByIndex(0).ok()? } else { return None };
+            buffer.GetMaxLength().is_ok_and(|max| max >= self.output_size).then(|| (s.clone(), buffer))
+        });
+        let (sample, buffer) = match kept {
+            Some(k) => k,
+            None => self.api.empty_sample(self.output_size, self.output_align)?,
+        };
+        let cleared = |e: windows::core::Error| format!("{}: cannot clear the output sample: {e}", self.name);
+        // SAFETY: plain COM calls on live interfaces.
+        unsafe {
+            sample.DeleteAllItems().map_err(cleared)?;
+            sample.SetSampleFlags(0).map_err(cleared)?;
+            sample.SetSampleTime(NO_TIME).map_err(cleared)?;
+            buffer.SetCurrentLength(0).map_err(cleared)?;
+        }
+        self.output = Some(sample.clone());
+        Ok(sample)
     }
 
     /// Set the output type the encoder offers first after it changed its output, and read the
@@ -427,7 +467,7 @@ impl Transform {
         // SAFETY: `Lock` gives a readable block of `len` bytes valid until `Unlock`; it is copied
         // before the buffer is unlocked.
         unsafe {
-            let time = sample.GetSampleTime().ok();
+            let time = sample.GetSampleTime().ok().filter(|&t| t != NO_TIME);
             let total = sample.GetTotalLength().map_err(|e| format!("{}: cannot size a frame: {e}", self.name))?;
             if total > self.output_size {
                 return Err(format!("{}: a frame of {total} bytes is larger than {} bytes", self.name, self.output_size));

@@ -1,0 +1,11 @@
+# Build with `trunk build --release` in apps/studiocraft-web; `trunk serve` serves it on
+# http://127.0.0.1:8770.
+[build]
+target = "index.html"
+dist = "../../target/web"
+public_url = "./"
+filehash = true
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8770

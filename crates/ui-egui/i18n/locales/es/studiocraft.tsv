@@ -107,6 +107,8 @@
 	Filters…	Filtros…
 	Finishing Recording…	Terminando la grabación…
 	Fit to Screen	Ajustar a la pantalla
+	Flip Horizontal	Voltear horizontalmente
+	Flip Vertical	Voltear verticalmente
 	Font	Fuente tipográfica
 	Font family	Familia tipográfica
 	Format	Formato
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrado)
 	VA-API H.264 (built in)	VA-API H.264 (integrado)
 	VA-API HEVC (built in)	VA-API HEVC (integrado)
+	VA-API AV1 (built in)	VA-API AV1 (integrado)
 	Height	Alto
 	Help	Ayuda
 	Hide	Ocultar
@@ -332,6 +335,7 @@
 	the audio stream failed	falló el flujo de audio
 	the camera capture could not start	no se pudo iniciar la captura de la cámara
 	the camera is already open in another format	la cámara ya está abierta en otro formato
+	the camera is not connected	la cámara no está conectada
 	the camera is still closing	la cámara todavía se está cerrando
 	the camera offers no format StudioCraft reads	la cámara no ofrece ningún formato que StudioCraft pueda leer
 	the camera sends frames that cannot be read	la cámara envía fotogramas que no se pueden leer
@@ -369,7 +373,7 @@
 	Video	Video
 	Video bitrate	Tasa de bits de video
 	Video encoder	Codificador de video
-	Video settings can't change while recording, streaming or running the replay buffer.	La configuración de video no se puede cambiar mientras se graba, se transmite o funciona el búfer de repetición.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	La configuración de video no se puede cambiar mientras se graba, se transmite o funcionan el búfer de repetición o la cámara virtual.
 	View	Ver
 	Waiting for the program picture…	Esperando la imagen del programa…
 	waiting for a choice in the system picker	esperando una elección en el selector del sistema
@@ -566,3 +570,5 @@ menu	Transform	Transformar
 	Custom	Personalizado
 	Fill Screen	Llenar la pantalla
 @msg	The scenes could not be laid out for the new canvas: {error}	No se pudieron reorganizar las escenas para el nuevo lienzo: {error}
+	Filter delay	Retardo de los filtros
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Los filtros de audio de esta fuente retrasan su sonido {frames} muestras a 48 kHz

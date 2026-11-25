@@ -1,0 +1,25 @@
+[package]
+name = "craft-face-track"
+description = "Face tracking on the device from a camera picture: a TensorFlow Lite reader and interpreter in pure Rust, the face detector and 478-point 3D face mesh of the Face Landmarker model bundle, head pose by a weighted rigid fit to the bundle's canonical face, expression weights measured from the mesh, One Euro smoothing, and a tracker that follows one face without allocating"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+rayon = { workspace = true }
+# The SHA-256 check of a model file.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+stats_alloc = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "tracker"
+harness = false

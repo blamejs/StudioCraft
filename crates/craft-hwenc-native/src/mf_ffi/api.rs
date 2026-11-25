@@ -1,18 +1,22 @@
 //! `mfplat.dll`, loaded from the system directory at run time and started once per process, and
-//! COM set up on each thread that uses an encoder. Windows "N" editions ship without the Media
-//! Feature Pack: on them loading fails with an error and the program still starts.
+//! COM set up on each thread that uses an encoder, and the input samples of one encoder. Windows
+//! "N" editions ship without the Media Feature Pack: on them loading fails with an error and the
+//! program still starts.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{HMODULE, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{E_NOTIMPL, HMODULE, RPC_E_CHANGED_MODE};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, MF_VERSION, MFMediaType_Video, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_FRIENDLY_NAME_Attribute, MFT_REGISTER_TYPE_INFO, MFVideoFormat_NV12,
+    IMFActivate, IMFAsyncCallback, IMFAsyncCallback_Impl, IMFAsyncResult, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTrackedSample, MF_VERSION,
+    MFMediaType_Video, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_FRIENDLY_NAME_Attribute,
+    MFT_REGISTER_TYPE_INFO, MFVideoFormat_NV12,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
-use windows::core::{GUID, HRESULT, Interface, PCSTR, PWSTR, w};
+use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PWSTR, Ref, implement, w};
+
+use super::{FREE_INPUTS, Recycler, Returner};
 
 type StartupFn = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type CreateFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
@@ -25,6 +29,9 @@ type EnumFn =
 pub struct Api {
     create_media_type: CreateFn,
     create_sample: CreateFn,
+    /// `MFCreateTrackedSample`, which Windows 8 and later export. Without it every frame gets a
+    /// new input sample.
+    create_tracked_sample: Option<CreateFn>,
     create_memory_buffer: CreateBufferFn,
     create_aligned_memory_buffer: CreateAlignedBufferFn,
     enum_transforms: EnumFn,
@@ -63,7 +70,7 @@ fn load() -> Result<Api, String> {
     let module = unsafe { LoadLibraryExW(w!("mfplat.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
         .map_err(|_| "Media Foundation is not installed".to_string())?;
     // SAFETY: each symbol is looked up with the signature Microsoft documents for it
-    // (MFStartup, MFCreateMediaType, MFCreateSample, MFCreateMemoryBuffer,
+    // (MFStartup, MFCreateMediaType, MFCreateSample, MFCreateTrackedSample, MFCreateMemoryBuffer,
     // MFCreateAlignedMemoryBuffer, MFTEnumEx).
     let (startup, api) = unsafe {
         (
@@ -71,6 +78,7 @@ fn load() -> Result<Api, String> {
             Api {
                 create_media_type: symbol(module, PCSTR(c"MFCreateMediaType".as_ptr().cast()))?,
                 create_sample: symbol(module, PCSTR(c"MFCreateSample".as_ptr().cast()))?,
+                create_tracked_sample: symbol(module, PCSTR(c"MFCreateTrackedSample".as_ptr().cast())).ok(),
                 create_memory_buffer: symbol(module, PCSTR(c"MFCreateMemoryBuffer".as_ptr().cast()))?,
                 create_aligned_memory_buffer: symbol(module, PCSTR(c"MFCreateAlignedMemoryBuffer".as_ptr().cast()))?,
                 enum_transforms: symbol(module, PCSTR(c"MFTEnumEx".as_ptr().cast()))?,
@@ -123,23 +131,29 @@ impl Api {
         made(hr, raw, "MFCreateMediaType")
     }
 
-    /// A sample holding one empty buffer of `len` bytes, aligned as the `MFCreateAlignedMemoryBuffer`
-    /// constant `align` says when there is one.
-    pub fn empty_sample(&self, len: u32, align: Option<u32>) -> Result<(IMFSample, IMFMediaBuffer), String> {
+    /// An empty buffer of `len` bytes, aligned as the `MFCreateAlignedMemoryBuffer` constant
+    /// `align` says when there is one.
+    fn buffer(&self, len: u32, align: Option<u32>) -> Result<IMFMediaBuffer, String> {
         let mut raw = std::ptr::null_mut();
-        let buffer: IMFMediaBuffer = match align {
+        match align {
             Some(a) => {
                 // SAFETY: the out-pointer refers to a live local, and `a` is one of the documented
                 // alignment constants (`alignment_flag`).
                 let hr = unsafe { (self.create_aligned_memory_buffer)(len, a, &mut raw) };
-                made(hr, raw, "MFCreateAlignedMemoryBuffer")?
+                made(hr, raw, "MFCreateAlignedMemoryBuffer")
             }
             None => {
                 // SAFETY: the out-pointer refers to a live local.
                 let hr = unsafe { (self.create_memory_buffer)(len, &mut raw) };
-                made(hr, raw, "MFCreateMemoryBuffer")?
+                made(hr, raw, "MFCreateMemoryBuffer")
             }
-        };
+        }
+    }
+
+    /// A sample holding one empty buffer of `len` bytes, aligned as the `MFCreateAlignedMemoryBuffer`
+    /// constant `align` says when there is one.
+    pub fn empty_sample(&self, len: u32, align: Option<u32>) -> Result<(IMFSample, IMFMediaBuffer), String> {
+        let buffer = self.buffer(len, align)?;
         let mut raw = std::ptr::null_mut();
         // SAFETY: the out-pointer refers to a live local.
         let hr = unsafe { (self.create_sample)(&mut raw) };
@@ -149,26 +163,19 @@ impl Api {
         Ok((sample, buffer))
     }
 
-    /// An input sample holding a copy of `data`, at `time` for `duration` (100 ns units).
-    pub fn sample_of(&self, data: &[u8], time: i64, duration: i64) -> Result<IMFSample, String> {
-        let len = u32::try_from(data.len()).map_err(|_| "a frame is too large".to_string())?;
-        let (sample, buffer) = self.empty_sample(len, None)?;
-        // SAFETY: `Lock` gives a writable block of at least `max` bytes valid until `Unlock`; the
-        // copy stays within `len <= max` bytes and the buffer is unlocked before it is used.
-        unsafe {
-            let (mut ptr, mut max) = (std::ptr::null_mut::<u8>(), 0u32);
-            buffer.Lock(&mut ptr, Some(&mut max), None).map_err(|e| format!("cannot lock the input buffer: {e}"))?;
-            if ptr.is_null() || max < len {
-                let _ = buffer.Unlock();
-                return Err("the input buffer is too small".into());
-            }
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            buffer.Unlock().map_err(|e| format!("cannot unlock the input buffer: {e}"))?;
-            buffer.SetCurrentLength(len).map_err(|e| format!("cannot size the input buffer: {e}"))?;
-            sample.SetSampleTime(time).map_err(|e| format!("cannot timestamp the input: {e}"))?;
-            sample.SetSampleDuration(duration).map_err(|e| format!("cannot set the input's duration: {e}"))?;
-        }
-        Ok(sample)
+    /// A tracked sample (`MFCreateTrackedSample`) holding one empty buffer of `len` bytes, or a
+    /// plain one when the system has no tracked samples.
+    fn input_sample(&self, len: u32) -> Result<(IMFSample, IMFMediaBuffer), String> {
+        let Some(create) = self.create_tracked_sample else { return self.empty_sample(len, None) };
+        let buffer = self.buffer(len, None)?;
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: the out-pointer refers to a live local.
+        let hr = unsafe { create(&mut raw) };
+        let tracked: IMFTrackedSample = made(hr, raw, "MFCreateTrackedSample")?;
+        let sample: IMFSample = tracked.cast().map_err(|e| format!("a tracked sample is not a sample: {e}"))?;
+        // SAFETY: a plain COM call on live interfaces.
+        unsafe { sample.AddBuffer(&buffer) }.map_err(|e| format!("cannot add a buffer to a sample: {e}"))?;
+        Ok((sample, buffer))
     }
 
     /// The hardware encoder MFTs that take NV12 and write `subtype`, in the order Media Foundation
@@ -213,5 +220,101 @@ pub fn friendly_name(a: &IMFActivate) -> Option<String> {
         let name = s.to_string().ok();
         CoTaskMemFree(Some(s.0 as *const c_void));
         name
+    }
+}
+
+/// A released input sample. Nothing else holds a reference to it.
+struct Free(IMFSample);
+
+// SAFETY: a released sample has no other reference, so one thread at a time uses it: the thread
+// that released it gives it back, and the encoder's thread takes it. Media Foundation samples are
+// not tied to the thread that made them; its work queues pass them between threads.
+unsafe impl Send for Free {}
+
+/// The owner of an encoder's tracked input samples. A tracked sample calls it, on the thread that
+/// released the sample, once nothing else holds a reference to it, and it gives the sample back to
+/// the encoder's recycler without a lock or an allocation.
+#[implement(IMFAsyncCallback)]
+struct Released {
+    back: Returner<Free>,
+}
+
+impl IMFAsyncCallback_Impl for Released_Impl {
+    fn GetParameters(&self, _flags: *mut u32, _queue: *mut u32) -> windows::core::Result<()> {
+        // No flags, on the default work queue.
+        Err(E_NOTIMPL.into())
+    }
+
+    fn Invoke(&self, result: Ref<IMFAsyncResult>) -> windows::core::Result<()> {
+        let result = result.ok()?;
+        // SAFETY: a plain COM call on a live interface; the result's object is the released sample.
+        let object = unsafe { result.GetObject() }?;
+        self.back.give_back(Free(object.cast()?));
+        Ok(())
+    }
+}
+
+/// The input samples of one encoder. A frame is copied into a sample the encoder has released,
+/// when one of at least the frame's size is free, and otherwise into a new one: the encoder's
+/// thread does not wait for a release. Up to [`FREE_INPUTS`] released samples are kept.
+pub struct InputSamples {
+    free: Recycler<Free>,
+    released: IMFAsyncCallback,
+}
+
+impl InputSamples {
+    pub fn new() -> InputSamples {
+        let free = Recycler::new(FREE_INPUTS);
+        let released = Released { back: free.returner() }.into();
+        InputSamples { free, released }
+    }
+
+    /// An input sample holding a copy of `data`, at `time` for `duration` (100 ns units).
+    pub fn sample_of(&self, api: &Api, data: &[u8], time: i64, duration: i64) -> Result<IMFSample, String> {
+        let len = u32::try_from(data.len()).map_err(|_| "a frame is too large".to_string())?;
+        let (sample, buffer) = match self.reusable(len) {
+            Some(free) => free,
+            None => api.input_sample(len)?,
+        };
+        if let Ok(tracked) = sample.cast::<IMFTrackedSample>() {
+            // SAFETY: a plain COM call on live interfaces. The sample is new, or released, which
+            // cleared its owner.
+            unsafe { tracked.SetAllocator(&self.released, None::<&IUnknown>) }.map_err(|e| format!("cannot track an input sample: {e}"))?;
+        }
+        // SAFETY: `Lock` gives a writable block of at least `max` bytes valid until `Unlock`; the
+        // copy stays within `len <= max` bytes and the buffer is unlocked before it is used.
+        unsafe {
+            let (mut ptr, mut max) = (std::ptr::null_mut::<u8>(), 0u32);
+            buffer.Lock(&mut ptr, Some(&mut max), None).map_err(|e| format!("cannot lock the input buffer: {e}"))?;
+            if ptr.is_null() || max < len {
+                let _ = buffer.Unlock();
+                return Err("the input buffer is too small".into());
+            }
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            buffer.Unlock().map_err(|e| format!("cannot unlock the input buffer: {e}"))?;
+            buffer.SetCurrentLength(len).map_err(|e| format!("cannot size the input buffer: {e}"))?;
+            sample.SetSampleTime(time).map_err(|e| format!("cannot timestamp the input: {e}"))?;
+            sample.SetSampleDuration(duration).map_err(|e| format!("cannot set the input's duration: {e}"))?;
+        }
+        Ok(sample)
+    }
+
+    /// A released sample with one buffer of at least `len` bytes, with that buffer, cleared of the
+    /// attributes and flags its last frame had. Released samples that do not fit are dropped.
+    fn reusable(&self, len: u32) -> Option<(IMFSample, IMFMediaBuffer)> {
+        for _ in 0..FREE_INPUTS {
+            let Free(sample) = self.free.take()?;
+            // SAFETY: plain COM calls on a live interface that nothing else holds.
+            let fits = unsafe {
+                let buffer = if sample.GetBufferCount().ok() == Some(1) { sample.GetBufferByIndex(0).ok() } else { None };
+                buffer.filter(|b| b.GetMaxLength().is_ok_and(|max| max >= len))
+            };
+            let Some(buffer) = fits else { continue };
+            // SAFETY: as above.
+            if unsafe { sample.DeleteAllItems().and_then(|()| sample.SetSampleFlags(0)) }.is_ok() {
+                return Some((sample, buffer));
+            }
+        }
+        None
     }
 }

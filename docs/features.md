@@ -13,7 +13,13 @@ the action safe area (3.5% in from each canvas edge) or the title safe area (5% 
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
-and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
+and each edge snaps on its own. With Ctrl (Command on macOS) held the corner drag resizes the
+source around its center: the opposite corner moves by the same amount, either edge on an axis
+can snap, and the edge across from it moves to match. Ctrl and Shift together resize around the
+center and change the ratio. The round handle above the middle of the selected source's top edge
+rotates the source around its center, in steps of 15 degrees. When the source's top edge is at the
+edge of the preview, the handle moves inside the preview, just below the source's center. Holding
+Alt (Option on macOS) turns snapping off, and the rotate handle then turns the source by any angle. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
 
@@ -25,6 +31,14 @@ out for the new size in one undo step: a source that was fit, filled or stretche
 commands is fit, filled or stretched again, and any other source keeps its place in proportion to
 the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
 or cropping a source ends its fit, fill or stretch.
+
+Flip Horizontal and Flip Vertical, in the same menu, mirror the source's picture inside its box,
+left to right or top to bottom. The box keeps its place, size and rotation, so a fit, filled or
+stretched source stays that way, and a source can be flipped before it shows a picture. Each flip
+is one undo step, and flipping again turns the picture back. A crop still cuts the source's own
+edges, so the part cropped from a source's left edge is missing at the right of its flipped picture.
+The flips are saved with the scene collection and set with `item.transform`'s `flip_horizontal`
+and `flip_vertical`.
 
 ### Built-in sources
 
@@ -145,7 +159,9 @@ The camera source behaves as follows:
 | Format is Default | The camera opens at its largest picture up to 1920 × 1080 at 30 fps or more. |
 | A camera is plugged in or out while the Properties window is open | The lists update within about 3 seconds. |
 | A saved camera is not plugged in | The camera shows as "(not connected)". |
-| The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. |
+| The source's camera is unplugged on Windows or Linux | The source clears its picture at once, and the Properties window reports "the camera is not connected". The source does not try to open the camera while the system does not list it. |
+| The source's camera is plugged in on Windows or Linux | The source opens it at once. A camera unplugged and plugged in again so quickly that the system's list does not change is opened again as soon as its old stream fails. |
+| The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. On Windows and Linux, a camera the system does not list is opened when it is plugged in instead. On Linux a camera that another program holds stays listed, and the source opens it again every 2 seconds. |
 | Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
@@ -155,11 +171,12 @@ reads and reopens a camera.
 ## Filters
 
 Each source can carry a list of filters. The video filters are color correction, chroma key,
-color key, crop and pad, image mask, scroll and sharpen. The audio filters are gain, noise gate,
-compressor, limiter and a three-band equalizer.
+color key, crop and pad, image mask, scroll, sharpen and Apply LUT. The audio filters are gain,
+noise gate, compressor, limiter and a three-band equalizer.
 
 | Filter | What it does |
 | --- | --- |
+| Apply LUT | Changes a source's colors through a color lookup table, blended with the original colors by Amount (0 to 100%). The table comes from a `.cube` file (a 3D table of 2 to 90 colors a side, or a 1D table of up to 65536 entries, with its input range) or a `.png` picture (a row of n tiles of n x n pixels, or a square grid of tiles such as 512 x 512 pixels for 64 colors a side). Colors between the table's entries are blended from the nearest eight, and transparency is kept. A 1D table is read at up to 64 evenly spaced points per channel, blended from its two nearest entries, so detail in a longer table that falls between those points is not kept. Table values below 0 or above 1 are blended as they are, and only the result is clipped to 0 to 1. The file is read when the filter starts or its file changes; a file that could not be read is tried again at the next change to the scene collection. |
 | Color correction | Sets gamma, contrast, brightness, saturation and opacity, and the white balance by temperature and tint. |
 | Chroma key | Makes the pixels near a key color transparent by their chroma distance from it, with key color spill reduction. |
 | Color key | Makes the pixels near a key color transparent by their RGB distance from it, with Similarity and Smoothness, and adjusts the rest by gamma, contrast, brightness and opacity. |
@@ -167,7 +184,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -205,8 +222,29 @@ A source's Properties window sets two more audio options:
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
 
+The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
+the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
+Disabled filters and filters whose settings were refused are not counted. The MCP tool
+`source_audio` and `document.inspect` report the same delay.
+
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
+
+Audio input capture and audio output capture stay in step with the mix when the device's clock
+runs a little fast or slow. Each of these sources keeps about 53 ms of audio waiting for the mixer
+(2.5 blocks of 1024 samples at 48 kHz). To hold that amount, it makes up to 0.1% more or fewer
+samples from the device's audio, and changes that amount by at most 20 parts per million per
+second. When the mixer starts reading the source, the source adds silence or drops its oldest
+audio to start at that amount. While the mixer does not read the source, the source keeps the
+rate it had.
+
+The mixer also makes six mix tracks, numbered 1 to 6. Each source with audio is assigned to any
+of them, and a new source goes to all six. A track holds the sources assigned to it at their
+volume, mute and monitoring settings, and it is clipped at full scale like the program mix. The
+`source.mix_tracks` command assigns a source; the Settings window and the Audio Mixer dock do not
+show the assignment yet. A recording writes the tracks listed in its profile's
+`output.recording_tracks`, each as its own stereo audio stream (see [Recording](#recording)).
+Streams and the replay buffer always take the program mix.
 
 ### Application Audio dock
 
@@ -250,6 +288,14 @@ The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs wit
 `-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
 and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
 
+A recording writes one audio stream for each [mix track](#audio) in the profile's
+`output.recording_tracks`, a list of track numbers from 1 to 6 that is `[1]` by default. With one
+track the file has one unnamed audio stream. With several, the streams follow the track order and
+are titled `Track 1`, `Track 2` and so on. The built-in MKV writer and recordings through `ffmpeg`
+both write them. A track that misses a block of sound is written as silence for that block, so
+every stream keeps the same length. A recording with an empty list does not start, and the status
+bar gives the reason.
+
 StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
 it uses your Videos folder, then your home folder when the system has no Videos folder, and then
 the folder StudioCraft was started in. It names each file `YYYY-MM-DD HH-MM-SS.<ext>`. File › Show
@@ -268,7 +314,7 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
-| VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
+| VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
 built-in hardware encoders for MKV recordings, and the built-in hardware H.264 encoders for streams,
@@ -332,6 +378,18 @@ the recording folder, and the buffer keeps running. Settings › Output sets the
 seconds, 20 by default) and the memory limit (32 to 16384 MB, 512 by default). Start or Stop
 Replay Buffer and Save Replay can be given shortcuts in Settings › Hotkeys. While the buffer runs,
 the status bar shows REPLAY with the time it has run.
+
+### Virtual camera
+
+File › Virtual Camera sends the program at the output size and frame rate to a virtual camera
+device, which video call and other camera apps then list as a camera. It runs no encoder and sends
+no audio. On Linux the device is a v4l2loopback output device: load the module first, for example
+with `sudo modprobe v4l2loopback exclusive_caps=1`, and the first such device is used. Frames go
+out as YUYV when the device takes it, otherwise as NV12 or I420. When the device is busy, older
+frames are dropped and the newest one is sent. Video settings can't change while the virtual camera
+runs. Windows and macOS do not have a virtual camera yet. Start or Stop Virtual Camera can be given
+a shortcut in Settings › Hotkeys, and the `vcam.start`, `vcam.stop` and `vcam.toggle` commands start
+and stop it.
 
 ### Audio tracks
 
@@ -416,6 +474,26 @@ A recording that ran while captions ran gets caption files beside it: `<recordin
 was recognized gets no caption files. A file of that name that already
 exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
+While captions run, the stream also carries each finished phrase as closed captions, which viewers
+of platforms that read captions embedded in the video can turn on and off. The captions are
+CEA-608 roll-up captions on channel 1, three rows at the bottom of the picture, sent as
+CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, ATSC A/53 Part 4).
+A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
+captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
+left out. Recordings do not carry closed captions; they get the caption files.
+
+### Face tracking model
+
+The face tracker reads the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. No source or command runs the tracker yet: the commands below only put the model file in
+place, and installing it does not turn face tracking on. `avatar.model_download` downloads it once
+into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant
@@ -494,7 +572,11 @@ tried (at most four) with its own outcome. A lookup with no answer within 10 s s
 did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
-Stop send to one destination or stop sending to it while the others go on. A destination added
+Stop send to one destination or stop sending to it while the others go on. A destination that
+waits to try again shows its try number out of the tries it has, such as "try 3 of 10", and when
+the next try starts, as a countdown in seconds, or "when a network route to the server returns" for
+a server given as an IP address that has no route. Try Now starts that try at once, without a route
+too; unlike Stop and Start, the try counts toward the tries. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
 Check Connection, under each destination of the Streaming window, checks what this computer's
@@ -502,7 +584,8 @@ network can reach on the way to the destination's server and shows one verdict, 
 server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
 check found opens the list of every step with its outcome. The check runs its steps at the same
 time and reports after at most 20 s; a step still running then is listed as unfinished. Each
-connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+connection, secure handshake, RTMP handshake and fetch may take 5 s, and the name lookup 10 s. The
+steps are:
 
 - The check asks the system whether it has a route to any address and to each of the server's
   addresses. This sends nothing.
@@ -510,9 +593,16 @@ connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. T
   by name only. The check itself uses no proxy.
 - It looks the server's name up again.
 - It opens a TCP connection to up to four of the server's addresses on the destination's port and,
-  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
-  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
-- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. Over each
+  connection that opens it runs the RTMP handshake: it sends C0 and C1, reads S0 and S1, sends C2
+  and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
+  key and no part of the address after the host. A port that takes the connection is reported as
+  not answering as a stream server when, at every address that connected, it answered the RTMP
+  handshake with other data, closed the connection or sent nothing within 5 s. One address that
+  completes the handshake gives another verdict, and so does a handshake still running when the
+  check reports.
+- When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
+  addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and
   a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
   other ingest servers up and makes a secure connection to each on port 443. It reads at most
@@ -536,7 +626,13 @@ The first destination uses the profile's stream key; the others have no key of t
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
 server for every account fills in that server. For the other services the details link to the
 service's page that shows the account's server and key. Edit opens a destination's service, name,
-server and key source. Choosing another service replaces a server that is empty or that is one of
+server and key source. For a service that publishes a list of its ingest servers, List Servers in
+the details fetches that list over HTTPS, following no redirect and using no proxy, reading at most
+256 KiB within 5 s, and sends no stream key. The service sees this computer's address. Ingest server
+then offers the servers of the list, at most 128, with the service's default first and the others
+in the order of their priority; choosing one puts its address in the server field. A typed server is
+kept until a server of the list is chosen. The list is kept for the session, and one that could not
+be read can be fetched again. Choosing another service replaces a server that is empty or that is one of
 the services' documented servers, and keeps any other server. A service without a shared server leaves the server
 empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
 shows the service it streams to, and the row and the details show a service's logo only where the
@@ -592,7 +688,9 @@ background, the countdown and its text, what happens at zero, the text at zero, 
 sits, its size as a share of the canvas height, its font, color and outline, and whether the
 program audio is muted. The defaults are listed in
 [MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
-`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+`pause.start` can give a pause its own picture or video and how it is sized, background, countdown
+and its text, choice at zero and text at zero, text position and size, and whether the program
+audio is muted. The profile keeps its settings.
 
 While the program audio is muted, every source the program hears fades out with the transition and
 fades back in when the program resumes. Monitoring and each source's own audio track keep the
@@ -645,9 +743,10 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists, on Windows.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
-- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva, on 64-bit
-  Linux. VA-API H.264 or HEVC chosen by name is tested the same way, and then records with the
-  built-in encoder.
+- VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
+  Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with
+  the built-in encoder. VA-API AV1 needs a driver that takes the sequence and frame headers from
+  StudioCraft.
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
@@ -776,6 +875,42 @@ A profile is a set of stream and output settings, and a scene collection is a se
 can keep several of each and switch between them from the menu bar. Scene Collection › Import…
 and Export… read and write a scene collection as a file.
 
+### Scene collections in the browser
+
+The browser editor in `apps/studiocraft-web` edits a scene collection file without the app. Open…
+reads a file of any version the app imports, up to 16 MiB (16,777,216 bytes), and refuses a
+larger file before reading it. The page stays usable while the file is read. Picking another file or New before the
+read ends drops the first file.
+
+The Scenes list adds, renames, reorders and removes scenes, and a click on a scene lists its
+sources, the top of the picture first. The Sources list reorders a scene's sources, renames a
+source in every scene that shows it, and removes a source from the scene. Add to Scene places a
+source that another scene shows. A removed scene or source takes with it the sources that no
+other scene shows, as in the app. New sources are added in the app. Each edit runs the app's
+command, with the same names and limits, and Undo and Redo step through the edits. In the browser
+each change is its own undo step.
+
+Save downloads the collection as `<name>.json` in the current format, which Scene Collection ›
+Import… reads. Characters that file systems refuse become `_` in the file name, and a name that
+Windows reserves for a device, such as `CON` or `COM1`, gets a leading `_`. New, opening a
+file and leaving the page ask first when the collection has unsaved changes.
+
+The page shows its labels and messages in the browser's preferred language when the app has a
+translation for it, from the app's own catalogs, and in English otherwise.
+
+To build and serve the editor, add the target and `trunk` once, then run `trunk serve` in
+`apps/studiocraft-web`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+cd apps/studiocraft-web
+trunk serve
+```
+
+The editor opens on http://127.0.0.1:8770. `trunk build --release` writes the page to
+`target/web`.
+
 ### Stats and scopes
 
 View › Stats shows the frame count, late frames, frame times, encoded and skipped frames, the
@@ -795,6 +930,23 @@ shows the license texts.
 
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
+
+### Safe Mode
+
+In Safe Mode the scene collection opens and can be edited, but no source runs: no camera,
+display, window, audio device, media file or network source is opened. The control server that
+`--control <port>` asks for does not start, so neither `studiocraft-cli send` nor the MCP server
+connected with `--connect` can reach the app. A banner under the menu row says that Safe Mode is
+on. Leave Safe Mode in the banner starts the sources and the control server.
+
+While StudioCraft runs, it keeps a file of its own in the `sessions` folder of its settings folder
+and removes it when it closes. When such a file is still there at the next start and no running
+copy of StudioCraft holds it, a session ended without closing (a crash, a forced quit or a power
+loss). The window then asks whether to start in Safe Mode or normally; Esc picks Safe Mode, Start Normally
+leaves it, and until the answer no source runs. The window also asks when the `sessions` folder or a file in it
+can't be read, or when this session's file can't be written, and the status bar gives the reason.
+`studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
+started with `--no-prefs`, `--screenshot` or `--self-test` keep no marker.
 
 ## Hotkeys
 
@@ -817,7 +969,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer or the virtual camera. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation
@@ -851,7 +1003,7 @@ studiocraft-cli mcp --connect 9876
 ### Command-line options
 
 ```text
-studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]
+studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]
 studiocraft --screenshot <file.png>
 studiocraft --self-test <file.json>
 studiocraft --version
@@ -861,6 +1013,7 @@ studiocraft --version
 | --- | --- |
 | `--config-dir <dir>` | Keeps settings, scene collections and profiles in `<dir>`. |
 | `--no-prefs` | Keeps everything in memory, and reads and writes no settings. |
+| `--safe-mode` | Starts in [Safe Mode](#safe-mode): no source runs and the control server does not start until Safe Mode is left. |
 | `--control <port>` | Accepts control requests on `127.0.0.1:<port>`. |
 | `--screenshot <file>` | Draws about 120 frames, saves the window as a PNG and exits. |
 | `--self-test <file>` | Runs a short scripted session and writes its steps as JSON. |

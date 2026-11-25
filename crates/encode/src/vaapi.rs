@@ -1,9 +1,11 @@
-//! The VA-API hardware encoders that run in StudioCraft's own process on 64-bit Linux: H.264 and
-//! HEVC from the compositor's NV12 frames, with the `avcC` or `hvcC` record a container stores.
+//! The VA-API hardware encoders that run in StudioCraft's own process on 64-bit Linux: H.264,
+//! HEVC and AV1 from the compositor's NV12 frames, with the `avcC`, `hvcC` or `av1C` record a
+//! container stores.
 //!
 //! - The rate control, the keyframe interval and the limits on them are the ones every built-in
 //!   hardware encoder takes ([`crate::hardware`]).
-//! - Every picture is an IDR or P picture, so each packet's decoding time is its presentation time.
+//! - Every picture is an IDR or P picture (an AV1 key or inter frame), so each packet's decoding
+//!   time is its presentation time.
 //! - The encoder runs on the first render node whose driver encodes the codec.
 
 use craft_hwenc_native::Codec as NativeCodec;
@@ -24,6 +26,8 @@ impl VaApi {
     pub const H264: VaApi = VaApi { codec: NativeCodec::H264 };
     /// VA-API HEVC, registered as `vaapi_native_hevc`.
     pub const HEVC: VaApi = VaApi { codec: NativeCodec::Hevc };
+    /// VA-API AV1, registered as `vaapi_native_av1`.
+    pub const AV1: VaApi = VaApi { codec: NativeCodec::Av1 };
 
     /// Open a session for `params` without a registry.
     pub fn session(&self, params: &VideoParams) -> Result<VaSession, PluginError> {
@@ -174,6 +178,9 @@ mod tests {
         let recording = EncoderEnv { ffmpeg_encoders: None, builtin: true };
         let expected = if craft_hwenc_native::vaapi::available(NativeCodec::Hevc).is_ok() { Availability::Ready } else { Availability::NotRunHere };
         assert_eq!(VaApi::HEVC.availability(&recording), expected);
+        let expected = if craft_hwenc_native::vaapi::available(NativeCodec::Av1).is_ok() { Availability::Ready } else { Availability::NotRunHere };
+        assert_eq!(VaApi::AV1.availability(&recording), expected);
+        assert_eq!((VaApi::AV1.id(), VaApi::AV1.name(), VaApi::AV1.codec()), ("vaapi_native_av1", "VA-API AV1 (built in)", Codec::Av1));
     }
 
     #[test]

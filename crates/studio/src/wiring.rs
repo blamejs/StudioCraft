@@ -7,7 +7,7 @@ use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{MixInput, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
-use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
+use studiocraft_model::{FilterId, MixTracks, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance, FilterMeter, FilterTarget, Reframe, Registry};
 use studiocraft_render::{ItemDesc, Plan, SceneDesc, ThumbnailRequest, TransitionDesc};
 
@@ -65,9 +65,13 @@ pub(crate) struct Wiring {
     /// The gain-reduction handles of the audio filters in the mixer's inputs, by source and
     /// filter; replaced with the inputs.
     meters: HashMap<(SourceId, FilterId), FilterMeter>,
+    /// The sample frames the audio filters in the mixer's inputs delay each source by, in total;
+    /// replaced with the inputs. A source whose filters add no delay has no entry.
+    latencies: HashMap<SourceId, usize>,
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
+    mix_tracks: HashMap<SourceId, MixTracks>,
 }
 
 impl Wiring {
@@ -154,11 +158,13 @@ impl Wiring {
                 seen.insert(f.id);
                 match self.video_filters.get_mut(&f.id) {
                     Some(v) if v.kind == f.kind => {
+                        // `settings` are the last ones the filter took, so rejected settings
+                        // reach it again at the next sync.
                         if v.settings != f.settings {
-                            if let Err(e) = v.instance.update(&f.settings) {
-                                notices.push(problem(&f.name, &e));
+                            match v.instance.update(&f.settings) {
+                                Ok(()) => v.settings = f.settings.clone(),
+                                Err(e) => notices.push(problem(&f.name, &e)),
                             }
-                            v.settings = f.settings.clone();
                         }
                     }
                     _ => match plugin.create(&f.settings) {
@@ -209,6 +215,7 @@ impl Wiring {
         let gains: HashMap<SourceId, (f32, bool)> = audio_sources.iter().map(|(s, _)| (s.id, (s.audio.gain, s.audio.muted))).collect();
         let offsets: HashMap<SourceId, u32> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.sync_offset_ms)).collect();
         let modes: HashMap<SourceId, MonitorMode> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.monitor)).collect();
+        let mix_tracks: HashMap<SourceId, MixTracks> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.mix_tracks)).collect();
         levels.retain(|id, _| gains.contains_key(id));
 
         if self.mix.as_ref() == Some(&key) {
@@ -223,14 +230,22 @@ impl Wiring {
             cmds.extend(
                 modes.iter().filter(|(id, m)| self.modes.get(id) != Some(m)).map(|(id, mode)| MixerCmd::Monitor { source: *id, mode: *mode }),
             );
+            cmds.extend(
+                mix_tracks
+                    .iter()
+                    .filter(|(id, t)| self.mix_tracks.get(id) != Some(t))
+                    .map(|(id, tracks)| MixerCmd::MixTracks { source: *id, tracks: *tracks }),
+            );
             self.gains = gains;
             self.offsets = offsets;
             self.modes = modes;
+            self.mix_tracks = mix_tracks;
             return (!cmds.is_empty()).then_some(cmds);
         }
 
         let mut inputs = Vec::new();
         let mut meters = HashMap::new();
+        let mut latencies = HashMap::new();
         for (k, (s, audio)) in key.iter().zip(&audio_sources) {
             let mut filters = Vec::new();
             for (id, kind, settings) in &k.filters {
@@ -238,6 +253,10 @@ impl Wiring {
                     Ok(f) => {
                         if let Some(m) = f.meter() {
                             meters.insert((s.id, *id), m);
+                        }
+                        if f.latency_frames() > 0 {
+                            let total: &mut usize = latencies.entry(s.id).or_default();
+                            *total = total.saturating_add(f.latency_frames());
                         }
                         filters.push(f);
                     }
@@ -255,13 +274,16 @@ impl Wiring {
                 filters,
                 sync_offset_ms: s.audio.sync_offset_ms,
                 monitor: s.audio.monitor,
+                mix_tracks: s.audio.mix_tracks,
             });
         }
         self.mix = Some(key);
         self.meters = meters;
+        self.latencies = latencies;
         self.gains = gains;
         self.offsets = offsets;
         self.modes = modes;
+        self.mix_tracks = mix_tracks;
         Some(vec![MixerCmd::Inputs(inputs)])
     }
 
@@ -270,6 +292,17 @@ impl Wiring {
     /// that is not running, settings it refused) or the filter has no meter.
     pub(crate) fn filter_meter(&self, source: SourceId, filter: FilterId) -> Option<f32> {
         self.meters.get(&(source, filter)).map(FilterMeter::get)
+    }
+
+    /// The sample frames the audio filters the mixer runs on `source` delay its audio by, in
+    /// total: 0 for a source the mixer does not run or whose filters add no delay.
+    pub(crate) fn filter_latency(&self, source: SourceId) -> usize {
+        self.latencies.get(&source).copied().unwrap_or(0)
+    }
+
+    /// Each source whose running audio filters delay its audio, with that delay in sample frames.
+    pub(crate) fn filter_latencies(&self) -> impl Iterator<Item = (SourceId, usize)> + '_ {
+        self.latencies.iter().map(|(id, frames)| (*id, *frames))
     }
 }
 
@@ -345,6 +378,28 @@ mod tests {
         assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
     }
 
+    #[test]
+    fn changed_mix_tracks_reach_the_mixer_without_a_new_input_list() {
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        sources.sync(&c, &registry);
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().audio.mix_tracks = MixTracks::from_bits(0b10);
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.mix_tracks), Some(MixTracks::from_bits(0b10)));
+        c.source_mut(mic).unwrap().audio.mix_tracks = MixTracks::FIRST;
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(
+            matches!(cmds.as_slice(), [MixerCmd::MixTracks { source, tracks }] if *source == mic && *tracks == MixTracks::FIRST),
+            "{} commands",
+            cmds.len()
+        );
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+    }
+
     /// The mixer's compressor and gate readings are found by source and filter while the mixer
     /// runs them; a filter without a meter, a disabled one and a removed one have none, and new
     /// inputs drop the old instances' readings.
@@ -414,6 +469,50 @@ mod tests {
         assert!(notices.is_empty(), "{} notices", notices.len());
     }
 
+    /// A source's filter latency is the sum of the delays of the audio filters the mixer runs on
+    /// it: disabled filters, video filters and settings a filter refused add nothing.
+    #[test]
+    fn the_filter_latency_adds_up_the_running_audio_filters() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        let filter = |n: u64, kind: &str, enabled: bool, settings: Settings| FilterConfig {
+            id: FilterId(900 + n),
+            kind: kind.into(),
+            kind_version: 1,
+            name: format!("{kind} {n}"),
+            enabled,
+            settings,
+        };
+        let limiter = registry.filter("limiter").and_then(|f| f.create(&Settings::new())).map(|f| f.latency_frames()).unwrap();
+        assert!(limiter > 0);
+        c.source_mut(mic).unwrap().filters = vec![
+            filter(1, "limiter", true, Settings::new()),
+            filter(2, "compressor", true, Settings::new()),
+            filter(3, "limiter", true, Settings::new().with("ceiling_db", -3.0)),
+            filter(4, "limiter", false, Settings::new()),
+            filter(5, "limiter", true, Settings::new().with("ceiling_db", "loud")),
+            filter(6, "crop_pad", true, Settings::new()),
+        ];
+        sources.sync(&c, &registry);
+        assert_eq!(wiring.filter_latency(mic), 0, "no inputs yet");
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), 2 * limiter, "two running limiters");
+        assert_eq!(notices.len(), 1, "the refused settings");
+        assert_eq!(wiring.filter_latency(SourceId(123_456)), 0, "another source");
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+        assert_eq!(wiring.filter_latency(mic), 2 * limiter, "unchanged inputs keep their latency");
+        c.source_mut(mic).unwrap().filters[0].enabled = false;
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), limiter);
+        c.source_mut(mic).unwrap().filters.retain(|f| f.kind != "limiter" || !f.enabled);
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), 0, "no filter adds a delay");
+    }
+
     /// A source's size follows its enabled crop and pad filters in order, and a disabled one or
     /// one that rejected its settings changes nothing.
     #[test]
@@ -449,5 +548,43 @@ mod tests {
         wiring.sync_video_filters(&c, &registry, &mut notices);
         assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (0, 0));
         assert_eq!(wiring.filtered_size(&c, SourceId(123_456), (640, 360)), (640, 360));
+    }
+
+    /// Settings a filter rejected reach it again at the next sync, so a file that was missing
+    /// is read once it is there.
+    #[test]
+    fn rejected_filter_settings_are_tried_again_at_the_next_sync() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let table = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+        let identity = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        std::fs::write(table("first.cube"), identity).unwrap();
+        let mut c = default_collection("Test");
+        let id = FilterId(950);
+        c.sources[0].filters = vec![FilterConfig {
+            id,
+            kind: "apply_lut".into(),
+            kind_version: 1,
+            name: "Look".into(),
+            enabled: true,
+            settings: Settings::new().with("file", table("first.cube")),
+        }];
+        let (mut wiring, mut notices) = (Wiring::default(), Vec::new());
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert!(notices.is_empty());
+        let image = |w: &Wiring| w.video_filters.get(&id).and_then(|v| v.instance.video_effect()).and_then(|e| e.image);
+        let first = image(&wiring);
+        assert!(first.is_some());
+        // The second file is missing: the filter keeps its table.
+        c.sources[0].filters[0].settings = Settings::new().with("file", table("second.cube"));
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(image(&wiring), first);
+        // Once the file is there, the same settings load it.
+        std::fs::write(table("second.cube"), identity.replace("1 1 1\n", "0.5 0.5 0.5\n")).unwrap();
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(notices.len(), 1);
+        assert_ne!(image(&wiring), first);
     }
 }

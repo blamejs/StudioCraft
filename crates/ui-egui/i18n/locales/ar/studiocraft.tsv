@@ -110,6 +110,8 @@
 	Filters…	المرشحات…
 	Finishing Recording…	جارٍ إنهاء التسجيل…
 	Fit to Screen	ملاءمة الشاشة
+	Flip Horizontal	قلب أفقي
+	Flip Vertical	قلب عمودي
 	Font	الخط
 	Font family	عائلة الخط
 	Format	التنسيق
@@ -142,6 +144,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (مدمج)
 	VA-API H.264 (built in)	VA-API H.264 (مدمج)
 	VA-API HEVC (built in)	VA-API HEVC (مدمج)
+	VA-API AV1 (built in)	VA-API AV1 (مدمج)
 	Height	الارتفاع
 	Help	تعليمات
 	Hide	إخفاء
@@ -346,6 +349,7 @@
 	the audio stream failed	حدث خطأ في دفق الصوت
 	the camera capture could not start	تعذّر بدء التقاط الكاميرا
 	the camera is already open in another format	الكاميرا مفتوحة بالفعل بتنسيق آخر
+	the camera is not connected	الكاميرا غير متصلة
 	the camera is still closing	لا تزال الكاميرا قيد الإغلاق
 	the camera offers no format StudioCraft reads	لا تقدم الكاميرا أي تنسيق يقرؤه StudioCraft
 	the camera sends frames that cannot be read	ترسل الكاميرا إطارات لا يمكن قراءتها
@@ -385,7 +389,7 @@
 	Video	الفيديو
 	Video bitrate	معدل بت الفيديو
 	Video encoder	مرمِّز الفيديو
-	Video settings can't change while recording, streaming or running the replay buffer.	لا يمكن تغيير إعدادات الفيديو أثناء التسجيل أو البث أو تشغيل مخزن الإعادة.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	لا يمكن تغيير إعدادات الفيديو أثناء التسجيل أو البث أو تشغيل مخزن الإعادة أو الكاميرا الافتراضية.
 	View	عرض
 	waiting for a choice in the system picker	في انتظار الاختيار في نافذة الاختيار في النظام
 	waiting for the camera	في انتظار الكاميرا
@@ -551,3 +555,5 @@ menu	Transform	التحويل
 	Custom	مخصص
 	Fill Screen	ملء الشاشة
 @msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}
+	Filter delay	تأخير المرشحات
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	تؤخر مرشحات الصوت في هذا المصدر صوته بمقدار {frames} عينة عند 48 كيلوهرتز

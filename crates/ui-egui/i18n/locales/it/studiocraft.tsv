@@ -106,6 +106,8 @@
 	Filters…	Filtri…
 	Finishing Recording…	Completamento della registrazione…
 	Fit to Screen	Adatta allo schermo
+	Flip Horizontal	Rifletti orizzontalmente
+	Flip Vertical	Rifletti verticalmente
 	Font	Carattere
 	Font family	Famiglia di caratteri
 	Format	Formato
@@ -138,6 +140,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrato)
 	VA-API H.264 (built in)	VA-API H.264 (integrato)
 	VA-API HEVC (built in)	VA-API HEVC (integrato)
+	VA-API AV1 (built in)	VA-API AV1 (integrato)
 	Height	Altezza
 	Help	Aiuto
 	Hide	Nascondi
@@ -327,6 +330,7 @@
 	the audio stream failed	il flusso audio non è riuscito
 	the camera capture could not start	impossibile avviare la cattura della fotocamera
 	the camera is already open in another format	la fotocamera è già aperta in un altro formato
+	the camera is not connected	la fotocamera non è collegata
 	the camera is still closing	la fotocamera si sta ancora chiudendo
 	the camera offers no format StudioCraft reads	la fotocamera non offre nessun formato che StudioCraft sa leggere
 	the camera sends frames that cannot be read	la fotocamera invia fotogrammi illeggibili
@@ -363,7 +367,7 @@
 	Vertical speed (px/s)	Velocità verticale (px/s)
 	Video bitrate	Bitrate video
 	Video encoder	Encoder video
-	Video settings can't change while recording, streaming or running the replay buffer.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay attivo.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay o la videocamera virtuale attivi.
 	View	Visualizza
 	Waiting for the program picture…	In attesa dell'immagine del programma…
 	waiting for a choice in the system picker	in attesa di una scelta nel selettore di sistema
@@ -559,3 +563,5 @@ menu	Transform	Trasforma
 	Custom	Personalizzata
 	Fill Screen	Riempi lo schermo
 @msg	The scenes could not be laid out for the new canvas: {error}	Impossibile disporre le scene per la nuova area di lavoro: {error}
+	Filter delay	Ritardo dei filtri
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	I filtri audio di questa sorgente ritardano il suo suono di {frames} campioni a 48 kHz

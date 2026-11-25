@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Dokončování nahrávky…
 	Fit to Screen	Přizpůsobit obrazovce
+	Flip Horizontal	Převrátit vodorovně
+	Flip Vertical	Převrátit svisle
 	Font	Písmo
 	Font family	Rodina písma
 	Format	Formát
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
 	VA-API HEVC (built in)	VA-API HEVC (vestavěný)
+	VA-API AV1 (built in)	VA-API AV1 (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt
@@ -330,6 +333,7 @@
 	the audio stream failed	zvukový stream selhal
 	the camera capture could not start	zachytávání z kamery nelze spustit
 	the camera is already open in another format	kamera je už otevřená v jiném formátu
+	the camera is not connected	kamera není připojená
 	the camera is still closing	kamera se stále zavírá
 	the camera offers no format StudioCraft reads	kamera nenabízí žádný formát, který StudioCraft umí číst
 	the camera sends frames that cannot be read	kamera posílá snímky, které nelze přečíst
@@ -367,7 +371,7 @@
 	Video	Video
 	Video bitrate	Datový tok videa
 	Video encoder	Kodér videa
-	Video settings can't change while recording, streaming or running the replay buffer.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu či virtuální kamery.
 	View	Zobrazení
 	waiting for a choice in the system picker	čekání na výběr v systémovém dialogu
 	waiting for the camera	čekání na kameru
@@ -564,3 +568,5 @@ menu	Transform	Transformace
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Vyplnit obrazovku
 @msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}
+	Filter delay	Zpoždění filtrů
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Zvukové filtry tohoto zdroje zpožďují jeho zvuk o {frames} vzorků při 48 kHz

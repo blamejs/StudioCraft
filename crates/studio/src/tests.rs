@@ -68,6 +68,38 @@ fn switching_scenes_runs_the_transition() {
 }
 
 #[test]
+fn safe_mode_starts_no_source_until_it_is_left() {
+    let mut normal = headless();
+    normal.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+    let collection = normal.collection().clone();
+    let want = collection.sources.len();
+    assert!(want > 0);
+    drop(normal);
+
+    let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+    let captions = Arc::new(CaptionBoard::new());
+    let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+    let mut s = Studio::new_in_safe_mode(None, collection, Profile::default(), registry, ffmpeg, captions);
+    assert!(s.safe_mode());
+    assert_eq!(s.sources.len(), 0, "no source of the opened collection runs");
+    // The collection can still be edited, and a new source does not start either.
+    s.run("source.add", &json!({"kind": "color", "name": "Second"})).unwrap();
+    s.tick();
+    assert_eq!(s.sources.len(), 0);
+    assert_eq!(s.collection().sources.len(), want + 1);
+    // The pause screen's picture or video is a source too.
+    assert!(s.run("pause.start", &json!({"countdown_s": 0})).is_err());
+
+    s.leave_safe_mode();
+    assert!(!s.safe_mode());
+    assert_eq!(s.sources.len(), want + 1, "every source starts when Safe Mode is left");
+    // Leaving again changes nothing.
+    s.leave_safe_mode();
+    assert_eq!(s.sources.len(), want + 1);
+    s.run("pause.start", &json!({"countdown_s": 0})).unwrap();
+}
+
+#[test]
 fn a_cut_switches_at_once() {
     let mut s = headless();
     s.run("transition.set", &json!({"kind": "cut"})).unwrap();
@@ -349,6 +381,24 @@ fn filter_meter_reads_a_compressor_and_is_null_for_a_filter_without_a_meter() {
     assert!(meter(&mut s, json!("Ghost"), comp).is_err());
     s.run("filter.remove", &json!({"source": "Mic", "filter": comp})).unwrap();
     assert!(meter(&mut s, json!("Mic"), comp).is_err(), "a removed filter");
+}
+
+#[test]
+fn the_state_reports_how_long_each_source_s_audio_filters_delay_it() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    let latency = |s: &Studio| s.state_json()["filter_latency"].clone();
+    assert_eq!(latency(&s), json!({}), "no filter delays anything");
+    let (out, _) = s.run("filter.add", &json!({"source": "Mic", "kind": "limiter"})).unwrap();
+    let limiter = out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.run("filter.add", &json!({"source": "Mic", "kind": "gain"})).unwrap();
+    assert_eq!(latency(&s), json!({mic.to_string(): {"frames": 248, "ms": 5.2}}));
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 248);
+    s.run("filter.enable", &json!({"source": "Mic", "filter": limiter, "enabled": false})).unwrap();
+    assert_eq!(latency(&s), json!({}), "a disabled filter does not run");
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 0);
+    assert_eq!([latency_ms(0), latency_ms(480), latency_ms(1)], [0.0, 10.0, 0.0]);
 }
 
 #[test]
@@ -747,6 +797,44 @@ fn a_filled_source_that_shows_nothing_at_a_canvas_change_fills_it_once_it_shows_
     video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
     s.tick();
     assert_eq!(at(&s), fill, "the restore took the layout back");
+}
+
+#[test]
+fn a_filled_source_flipped_while_it_waits_for_a_picture_still_fills_the_new_canvas() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let native = s.source_size(source).unwrap();
+    s.run("item.transform", &json!({"item": item, "transform": studiocraft_model::Transform::fill(native, (1920, 1080)), "fit": "fill"})).unwrap();
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    // The flip keeps the fit mode, so the item still waits to fill the new canvas.
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let flipped = studiocraft_model::Transform { flip_horizontal: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": flipped, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    let want = studiocraft_model::Transform { flip_horizontal: true, ..studiocraft_model::Transform::fill(native, (1080, 1920)) };
+    assert_eq!(at(&s), want);
+    // A move made while it waits still leaves it where it is.
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1920, 1080);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    let moved = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(5.0, 5.0), flip_vertical: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": moved, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), moved);
 }
 
 #[test]
@@ -1224,6 +1312,20 @@ mod monitoring {
 
     fn errors(s: &mut Studio) -> Vec<String> {
         s.take_notices().into_iter().filter(|n| n.error && n.template.starts_with("Audio monitoring")).map(|n| n.text()).collect()
+    }
+
+    #[test]
+    fn safe_mode_keeps_the_monitoring_device_closed_until_it_is_left() {
+        let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+        let captions = Arc::new(CaptionBoard::new());
+        let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+        let mut s = Studio::new_in_safe_mode(None, default_collection("Test"), Profile::default(), registry, ffmpeg, captions);
+        let sink = Arc::new(FakeSink::default());
+        s.set_audio_sink(Arc::clone(&sink) as Arc<dyn AudioSink>);
+        monitor(&mut s, "Microphone", "monitor_only");
+        assert!(sink.opened().is_empty() && s.monitoring().is_none(), "a monitored source opens no device in Safe Mode");
+        s.leave_safe_mode();
+        assert_eq!(sink.opened(), ["default"]);
     }
 
     #[test]
@@ -2587,6 +2689,47 @@ mod pause_screen {
     }
 
     #[test]
+    fn every_pause_screen_setting_can_be_given_for_one_pause() {
+        use studiocraft_model::PauseAnchor;
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        let before = s.profile().pause.clone();
+        assert!(before.mute_scene, "the default profile holds the scene's audio");
+        let given = json!({
+            "text": "On air in {time}", "zero_text": "Starting now", "anchor": "top_left", "size_pct": 12,
+            "fit": "fill", "background": "#20304080", "mute_scene": false
+        });
+        s.run("pause.start", &given).unwrap();
+        let Some(p) = &s.pause else { panic!("the program is paused") };
+        let set = p.settings.clone();
+        assert_eq!((set.text.as_str(), set.zero_text.as_str()), ("On air in {time}", "Starting now"));
+        assert_eq!((set.anchor, set.size_pct, set.fit, set.background.as_str()), (PauseAnchor::TopLeft, 12, FitMode::Fill, "#20304080"));
+        assert!(!set.mute_scene);
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.clone()), Some(set), "the screen is drawn with the given values");
+        assert!(s.hold_fade.is_none(), "the scene's audio is not held");
+        assert_eq!(s.profile().pause, before, "the profile keeps its settings");
+
+        // While paused, a given value applies at once, and the scene's audio fades out over the
+        // collection's transition length.
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let ms = s.engine().collection().transition.duration_ms;
+        assert!(ms > 0);
+        s.run("pause.start", &json!({"mute_scene": true, "anchor": "center"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        let Some(h) = s.hold_fade else { panic!("the scene's audio fades out") };
+        assert!(h.down && h.ms == ms, "{h:?}");
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.anchor), Some(PauseAnchor::Center));
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.text.as_str()), Some("On air in {time}"), "the values not given stay");
+        // The value the pause already has starts no new fade.
+        s.run("pause.start", &json!({"mute_scene": true})).unwrap();
+        assert_eq!(s.hold_fade.map(|h| h.start), Some(h.start));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.hold_fade.is_some_and(|h| !h.down), "resuming brings the scene's audio back");
+        assert_eq!(s.profile().pause, before);
+    }
+
+    #[test]
     fn a_scene_switch_while_paused_changes_what_resuming_shows() {
         let (mut s, _) = with_a_scene_source();
         s.run("pause.start", &json!({})).unwrap();
@@ -2922,5 +3065,190 @@ mod pause_screen {
         bmp.resize(bmp.len() + (row * h) as usize, 0x80);
         std::fs::write(&path, bmp).unwrap();
         pauses_with_a_media_error(&path);
+    }
+}
+
+mod virtual_camera {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use studiocraft_media::audio::PooledBlock;
+    use studiocraft_media::video::PixelFormat;
+    use studiocraft_model::{Settings, SettingsSchema};
+    use studiocraft_plugin::{Output, OutputInstance, OutputJob, OutputStatus, Plugin};
+
+    use super::*;
+
+    /// What the stand-in virtual camera was started at, its frame queue, whether it was stopped,
+    /// and a switch that makes its device fail.
+    #[derive(Default)]
+    struct Board {
+        size: Mutex<Option<(u32, u32)>>,
+        queue: Mutex<Option<Arc<Fifo<Arc<PooledFrame>>>>>,
+        fail: AtomicBool,
+        stopped: AtomicBool,
+    }
+
+    struct FakeOutput(Arc<Board>);
+
+    impl Plugin for FakeOutput {
+        fn id(&self) -> &'static str {
+            "vcam"
+        }
+        fn name(&self) -> &'static str {
+            "Virtual Camera"
+        }
+        fn schema(&self) -> SettingsSchema {
+            SettingsSchema::default()
+        }
+    }
+
+    impl Output for FakeOutput {
+        fn start(&self, _: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
+            let video = Arc::new(Fifo::new(2));
+            *self.0.queue.lock().unwrap() = Some(Arc::clone(&video));
+            *self.0.size.lock().unwrap() = Some((job.video.width, job.video.height));
+            Ok(Box::new(FakeRun { board: Arc::clone(&self.0), video }))
+        }
+    }
+
+    struct FakeRun {
+        board: Arc<Board>,
+        video: Arc<Fifo<Arc<PooledFrame>>>,
+    }
+
+    impl OutputInstance for FakeRun {
+        fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
+            Arc::clone(&self.video)
+        }
+        fn audio(&self) -> Arc<Fifo<PooledBlock>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn status(&self) -> OutputStatus {
+            if self.board.fail.load(Ordering::SeqCst) { OutputStatus::Failed("unplugged".into()) } else { OutputStatus::Running }
+        }
+        fn target(&self) -> String {
+            "Test camera".into()
+        }
+        fn stop(&mut self) -> Result<(), PluginError> {
+            self.board.stopped.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A studio whose `vcam` output is the stand-in, with its board.
+    fn studio(gpu: Option<Gpu>) -> (Studio, Arc<Board>) {
+        let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+        let captions = Arc::new(CaptionBoard::new());
+        let all = builtin_registry(&ffmpeg, &captions).unwrap();
+        let mut reg = Registry::new();
+        for p in all.sources() {
+            reg.register_source(p.clone()).unwrap();
+        }
+        for p in all.filters() {
+            reg.register_filter(p.clone()).unwrap();
+        }
+        for p in all.transitions() {
+            reg.register_transition(p.clone()).unwrap();
+        }
+        for p in all.encoders() {
+            reg.register_encoder(p.clone()).unwrap();
+        }
+        for p in all.outputs().iter().filter(|p| p.id() != "vcam") {
+            reg.register_output(p.clone()).unwrap();
+        }
+        let board = Arc::new(Board::default());
+        reg.register_output(Arc::new(FakeOutput(Arc::clone(&board)))).unwrap();
+        let s = Studio::new(gpu, SceneCollection::new("Test", "Scene"), small_profile(), Arc::new(reg), ffmpeg, captions);
+        (s, board)
+    }
+
+    #[test]
+    fn the_virtual_camera_needs_the_graphics_device() {
+        let (mut s, board) = studio(None);
+        let e = s.run("vcam.start", &json!({})).unwrap_err();
+        assert!(e.to_string().contains("graphics device"), "{e}");
+        assert!(board.size.lock().unwrap().is_none(), "nothing was started");
+        s.run("vcam.stop", &json!({})).unwrap();
+        assert_eq!(s.state_json()["virtual_camera"], json!({"active": false}));
+    }
+
+    #[test]
+    fn the_virtual_camera_gets_the_program_at_the_output_size_until_it_stops() {
+        let Some(gpu) = shared_gpu() else {
+            eprintln!("no graphics device; skipped");
+            return;
+        };
+        let (mut s, board) = studio(Some(gpu));
+        s.run("vcam.start", &json!({})).unwrap();
+        assert_eq!(*board.size.lock().unwrap(), Some((320, 180)));
+        let state = s.state_json()["virtual_camera"].clone();
+        assert_eq!((state["active"].clone(), state["target"].clone()), (json!(true), json!("Test camera")), "{state}");
+        // A second start keeps the running camera.
+        s.run("vcam.start", &json!({})).unwrap();
+        let queue = board.queue.lock().unwrap().clone().unwrap();
+        // Each capture waits for a compositor frame, which also sends the camera its copy.
+        let mut got = None;
+        for _ in 0..50 {
+            s.capture(View::Program, Duration::from_secs(5)).unwrap();
+            got = queue.pop();
+            if got.is_some() {
+                break;
+            }
+        }
+        let f = got.expect("a frame reached the virtual camera");
+        assert_eq!((f.width, f.height, f.format), (320, 180, PixelFormat::Nv12));
+        // Its frame size is fixed while it runs.
+        let mut p = s.profile().clone();
+        p.video.output_width = 640;
+        p.video.output_height = 360;
+        let e = s.set_profile(p).unwrap_err();
+        assert!(e.to_string().contains("virtual camera"), "{e}");
+        s.run("vcam.toggle", &json!({})).unwrap();
+        assert!(board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"], json!({"active": false}));
+    }
+
+    #[test]
+    fn a_failed_virtual_camera_stops_with_a_notice() {
+        let Some(gpu) = shared_gpu() else {
+            eprintln!("no graphics device; skipped");
+            return;
+        };
+        let (mut s, board) = studio(Some(gpu));
+        s.run("vcam.start", &json!({})).unwrap();
+        s.tick();
+        assert_eq!(s.state_json()["virtual_camera"]["active"], json!(true));
+        board.fail.store(true, Ordering::SeqCst);
+        s.tick();
+        assert!(board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"], json!({"active": false}));
+        let notices = s.take_notices();
+        let n = notices.iter().find(|n| n.template == "The virtual camera stopped: {error}").expect("a notice");
+        assert_eq!(n.args, [("error", "unplugged".to_string())]);
+        assert!(n.error);
+    }
+
+    #[test]
+    fn the_virtual_camera_stops_when_the_graphics_device_goes_and_runs_on_when_it_changes() {
+        let Some(gpu) = shared_gpu() else {
+            eprintln!("no graphics device; skipped");
+            return;
+        };
+        let (mut s, board) = studio(Some(gpu.clone()));
+        s.run("vcam.start", &json!({})).unwrap();
+        // A new device restarts the compositor, and the camera keeps running.
+        s.set_gpu(Some(gpu));
+        assert!(!board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"]["active"], json!(true));
+        // Without a device nothing is drawn, so the camera stops.
+        s.set_gpu(None);
+        assert!(board.stopped.load(Ordering::SeqCst));
+        assert_eq!(s.state_json()["virtual_camera"], json!({"active": false}));
+        // The video settings can change again.
+        let mut p = s.profile().clone();
+        p.video.output_width = 640;
+        p.video.output_height = 360;
+        s.set_profile(p).unwrap();
     }
 }
