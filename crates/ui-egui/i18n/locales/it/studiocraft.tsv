@@ -366,7 +366,7 @@
 	Vertical speed (px/s)	Velocità verticale (px/s)
 	Video bitrate	Bitrate video
 	Video encoder	Encoder video
-	Video settings can't change while recording, streaming or running the replay buffer.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay attivo.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Le impostazioni video non si possono cambiare durante una registrazione, una diretta o con il buffer di replay o la videocamera virtuale attivi.
 	View	Visualizza
 	Waiting for the program picture…	In attesa dell'immagine del programma…
 	waiting for a choice in the system picker	in attesa di una scelta nel selettore di sistema

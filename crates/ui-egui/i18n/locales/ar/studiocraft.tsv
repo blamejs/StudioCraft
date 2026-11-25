@@ -388,7 +388,7 @@
 	Video	الفيديو
 	Video bitrate	معدل بت الفيديو
 	Video encoder	مرمِّز الفيديو
-	Video settings can't change while recording, streaming or running the replay buffer.	لا يمكن تغيير إعدادات الفيديو أثناء التسجيل أو البث أو تشغيل مخزن الإعادة.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	لا يمكن تغيير إعدادات الفيديو أثناء التسجيل أو البث أو تشغيل مخزن الإعادة أو الكاميرا الافتراضية.
 	View	عرض
 	waiting for a choice in the system picker	في انتظار الاختيار في نافذة الاختيار في النظام
 	waiting for the camera	في انتظار الكاميرا

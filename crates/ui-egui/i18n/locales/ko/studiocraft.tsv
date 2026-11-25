@@ -370,7 +370,7 @@
 	Video	비디오
 	Video bitrate	비디오 비트레이트
 	Video encoder	비디오 인코더
-	Video settings can't change while recording, streaming or running the replay buffer.	녹화, 방송 또는 리플레이 버퍼 실행 중에는 비디오 설정을 바꿀 수 없습니다.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	녹화, 방송, 리플레이 버퍼 또는 가상 카메라 실행 중에는 비디오 설정을 바꿀 수 없습니다.
 	View	보기
 	waiting for a choice in the system picker	시스템 선택 창에서 선택을 기다리는 중
 	waiting for the camera	카메라를 기다리는 중

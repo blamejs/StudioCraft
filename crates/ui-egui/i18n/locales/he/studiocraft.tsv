@@ -388,7 +388,7 @@
 	Video	וידאו
 	Video bitrate	קצב סיביות וידאו
 	Video encoder	מקודד וידאו
-	Video settings can't change while recording, streaming or running the replay buffer.	לא ניתן לשנות את הגדרות הווידאו בזמן הקלטה, שידור או הפעלת מאגר ההילוך החוזר.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	לא ניתן לשנות את הגדרות הווידאו בזמן הקלטה, שידור, הפעלת מאגר ההילוך החוזר או המצלמה הווירטואלית.
 	View	תצוגה
 	waiting for a choice in the system picker	ממתין לבחירה בבורר של המערכת
 	waiting for the camera	ממתין למצלמה

@@ -369,7 +369,7 @@
 	Video	Wideo
 	Video bitrate	Przepływność wideo
 	Video encoder	Koder wideo
-	Video settings can't change while recording, streaming or running the replay buffer.	Ustawień wideo nie można zmienić podczas nagrywania, transmisji ani działania bufora powtórek.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Ustawień wideo nie można zmienić podczas nagrywania, transmisji ani działania bufora powtórek lub wirtualnej kamery.
 	View	Widok
 	Waiting for the program picture…	Oczekiwanie na obraz programu…
 	waiting for a choice in the system picker	oczekiwanie na wybór w systemowym oknie wyboru

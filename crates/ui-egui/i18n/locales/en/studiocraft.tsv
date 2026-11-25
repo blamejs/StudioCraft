@@ -548,7 +548,7 @@
 	Video	Video
 	Video bitrate	Video bitrate
 	Video encoder	Video encoder
-	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
+	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.	Video settings can't change while recording, streaming or running the replay buffer or the virtual camera.
 	View	View
 	Virtual Camera	Virtual Camera
 	waiting for a choice in the system picker	waiting for a choice in the system picker
