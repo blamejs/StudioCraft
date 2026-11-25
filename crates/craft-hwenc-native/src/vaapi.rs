@@ -1040,6 +1040,9 @@ mod tests {
         assert!(d(3, u32::MAX, u32::MAX, PrimeFrame { size: u64::from(u32::MAX), pitches: [u32::MAX; 2], ..ok }).is_err(), "no overflow");
         assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [0, 18432], ..ok }).is_err(), "a plane of no bytes");
         assert!(d(3, 255, 144, PrimeFrame { pitches: [255, 255], ..ok }).is_err(), "an odd width needs a whole chroma pair");
+        // Linear rows must lie inside their plane's reported bytes, not only inside the buffer.
+        assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [1, 1], ..ok }).is_err(), "no reported plane holds a row");
+        assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [36864, 18431], ..ok }).is_err(), "the chroma plane is one byte short");
     }
 
     /// A tiled plane's extent is the size the exporting driver reports, not pitch x rows.

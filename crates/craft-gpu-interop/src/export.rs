@@ -148,7 +148,8 @@ pub(crate) fn dev_number(major: u32, minor: u32) -> u64 {
 /// overflowing. Each plane's reported bytes must lie inside `size`. In a linear layout (`linear`)
 /// each luma row must also hold the picture's width, each chroma row its whole interleaved pairs
 /// (two bytes for every two pixels, an odd last pixel included), and every row must lie inside
-/// `size`; in a tiled one the driver lays the rows out, and its plane sizes are the planes' extent.
+/// `size` and inside its plane's reported bytes; in a tiled one the driver lays the rows out, and
+/// its plane sizes are the planes' extent.
 pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], plane_sizes: [u64; 2], linear: bool) -> bool {
     let chroma_row = 2 * u64::from(width.div_ceil(2));
     if width == 0
@@ -168,7 +169,14 @@ pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pi
     }
     let end = |offset: u32, pitch: u32, rows: u32| u64::from(pitch).checked_mul(u64::from(rows)).and_then(|n| n.checked_add(u64::from(offset)));
     let (Some(luma), Some(chroma)) = (end(offsets[0], pitches[0], height), end(offsets[1], pitches[1], height.div_ceil(2))) else { return false };
-    luma <= size && chroma <= size
+    let rows = [(height, u64::from(width)), (height.div_ceil(2), chroma_row)];
+    luma <= size && chroma <= size && (0..2).all(|plane| linear_rows_fit(pitches[plane], rows[plane].0, rows[plane].1, plane_sizes[plane]))
+}
+
+/// Whether `rows` linear rows `pitch` bytes apart, the last one `row_bytes` long, lie inside a
+/// plane of `plane_size` bytes.
+fn linear_rows_fit(pitch: u32, rows: u32, row_bytes: u64, plane_size: u64) -> bool {
+    u64::from(pitch).checked_mul(u64::from(rows.saturating_sub(1))).and_then(|n| n.checked_add(row_bytes)).is_some_and(|end| end <= plane_size)
 }
 
 impl std::fmt::Debug for ExportRing {

@@ -760,7 +760,16 @@ fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
     assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], [128, 64], true));
     assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], [128, 64], true));
     assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], [128, 64], true), "a chroma plane past the end");
-    assert!(nv12_planes_fit(u32::MAX - 1, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [1, 1], true), "the largest values do not overflow");
+    let largest = u64::MAX - u64::from(u32::MAX);
+    assert!(
+        nv12_planes_fit(u32::MAX - 1, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [largest; 2], true),
+        "the largest values do not overflow"
+    );
+    // Linear rows must lie inside their plane's reported bytes, not only inside the buffer.
+    assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [1, 1], true), "no reported plane holds a row");
+    assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 7], true), "the chroma plane holds 7 of its 8 bytes");
+    assert!(nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 8], true));
+    assert!(nv12_planes_fit(3, 3, 22, [0, 12], [4, 4], [11, 8], true), "the last row needs only its pixels");
     // A 3-pixel row has two chroma pairs: 4 bytes, past a 3-byte pitch.
     assert!(!nv12_planes_fit(3, 2, 9, [0, 6], [3, 3], [6, 3], true), "an odd width needs a whole chroma pair");
     assert!(nv12_planes_fit(3, 2, 10, [0, 6], [3, 4], [6, 4], true));
