@@ -660,6 +660,26 @@ impl PauseAnchor {
         let i = Self::ALL.iter().position(|a| *a == self).unwrap_or(7);
         ((i % 3) as f32 * 0.5, (i / 3) as f32 * 0.5)
     }
+
+    /// The name commands and files use.
+    pub fn id(self) -> &'static str {
+        match self {
+            PauseAnchor::TopLeft => "top_left",
+            PauseAnchor::TopCenter => "top_center",
+            PauseAnchor::TopRight => "top_right",
+            PauseAnchor::MiddleLeft => "middle_left",
+            PauseAnchor::Center => "center",
+            PauseAnchor::MiddleRight => "middle_right",
+            PauseAnchor::BottomLeft => "bottom_left",
+            PauseAnchor::BottomCenter => "bottom_center",
+            PauseAnchor::BottomRight => "bottom_right",
+        }
+    }
+
+    /// The value named `id`.
+    pub fn from_id(id: &str) -> Option<PauseAnchor> {
+        Self::ALL.into_iter().find(|v| v.id() == id)
+    }
 }
 
 /// The pause screen: what the program shows while it is paused, and its countdown.
@@ -845,6 +865,16 @@ mod tests {
         assert_eq!(v.scaled_output((u32::MAX, 0)), (8192, 8192));
         let odd = v.with_canvas(1001, 99_999);
         assert_eq!((odd.base_width, odd.base_height, odd.output_width, odd.output_height), (1000, 8192, 666, 5460));
+    }
+
+    #[test]
+    fn each_text_position_is_named_as_files_name_it() {
+        for a in PauseAnchor::ALL {
+            assert_eq!(serde_json::to_value(a).unwrap(), serde_json::json!(a.id()));
+            assert_eq!(PauseAnchor::from_id(a.id()), Some(a));
+        }
+        assert_eq!(PauseAnchor::from_id("Center"), None);
+        assert_eq!(PauseAnchor::from_id(""), None);
     }
 
     #[test]

@@ -986,6 +986,7 @@ impl Plan {
             ffmpeg,
             stats,
             start,
+            captions: None,
         }
     }
 }
@@ -1691,7 +1692,11 @@ impl Studio {
         let stats = Arc::new(EncoderStats::default());
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
         let start = self.clock.now();
-        let job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        let mut job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        if kind == OutputKind::Streaming {
+            // Phrases live captions finish while the stream runs go out as closed captions.
+            job.captions = Some(self.caption_feed());
+        }
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
@@ -1995,6 +2000,7 @@ pub(crate) mod tests {
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 

@@ -34,7 +34,8 @@ impl Instance {
         let (audio, clock) = (Arc::clone(&io.audio), io.clock);
         let mut feed: Option<AudioFeed> = None;
         let on_data = move |samples: &[f32], format: studiocraft_platform::audio::Format| {
-            feed.get_or_insert_with(|| AudioFeed::new(format.rate, usize::from(format.channels), Arc::clone(&audio), clock)).push(samples);
+            feed.get_or_insert_with(|| AudioFeed::new(format.rate, usize::from(format.channels), Arc::clone(&audio), clock).keep_in_step())
+                .push(samples);
         };
         let err = Arc::clone(&self.error);
         let on_error = move |e: String| {
