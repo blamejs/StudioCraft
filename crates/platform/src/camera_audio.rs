@@ -127,16 +127,29 @@ fn by_id_serial(link: &str) -> Option<&str> {
 }
 
 /// The USB serial in a PipeWire input node name (`alsa_input.usb-<serial>-<interface>.<profile>`).
-/// Only the profile after the last period is removed, so a serial may contain periods.
+/// The profile is a profile name after the last period, or `capture.<device>.<subdevice>` for a
+/// node without a profile name. Only the profile is removed, so a serial may contain periods.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn node_serial(node: &str) -> Option<&str> {
     let rest = node.strip_prefix("alsa_input.")?;
-    let device = rest.rsplit_once('.').map_or(rest, |(d, _)| d);
+    let device = without_pcm_profile(rest).unwrap_or_else(|| rest.rsplit_once('.').map_or(rest, |(d, _)| d));
     let serial = match device.rsplit_once('-') {
         Some((serial, iface)) if !iface.is_empty() && iface.bytes().all(|b| b.is_ascii_digit()) => serial,
         _ => device,
     };
     (!serial.is_empty()).then_some(serial)
+}
+
+/// `rest` without a `.capture.<device>.<subdevice>` profile at its end, when it has one.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn without_pcm_profile(rest: &str) -> Option<&str> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (head, subdevice) = rest.rsplit_once('.')?;
+    let (head, device) = head.rsplit_once('.')?;
+    if !(digits(device) && digits(subdevice)) {
+        return None;
+    }
+    head.strip_suffix(".capture")
 }
 
 #[cfg(windows)]
@@ -533,6 +546,9 @@ mod tests {
         let dotted = "alsa_input.usb-Acme_USB_2.0_Camera_123-02.analog-stereo";
         assert_eq!(node_serial(dotted), Some("usb-Acme_USB_2.0_Camera_123"));
         assert_eq!(node_serial(dotted), by_id_serial("usb-Acme_USB_2.0_Camera_123-video-index0"));
+        // A node without a profile name ends in the PCM's stream, device and subdevice.
+        assert_eq!(node_serial("alsa_input.usb-HD_Webcam_123-02.capture.0.0"), Some("usb-HD_Webcam_123"));
+        assert_eq!(node_serial("alsa_input.usb-Acme_USB_2.0_Camera_123-02.capture.1.10"), Some("usb-Acme_USB_2.0_Camera_123"));
         assert_eq!(node_serial("alsa_output.usb-046d_Speaker-00.analog-stereo"), None);
         assert_eq!(node_serial("alsa_input."), None);
         assert_eq!(node_serial("bluez_input.00_11_22"), None);
@@ -560,5 +576,21 @@ mod tests {
             },
         ];
         assert_eq!(microphone_index("HD Pro Webcam C920", camera, &inputs), Some(1));
+    }
+
+    #[test]
+    fn a_camera_and_its_input_without_a_profile_name_on_linux_share_the_serial() {
+        let input = |id: &str, name: &str| Input {
+            device: DeviceInfo { id: id.into(), name: name.into(), default: false },
+            container: node_serial(id).map(str::to_string),
+        };
+        let camera = by_id_serial("usb-HD_Webcam_123-video-index0");
+        let inputs = [
+            // Another known device whose name matches the camera's stays excluded.
+            input("alsa_input.usb-Other_Cam_9-02.capture.0.0", "HD Webcam"),
+            input("alsa_input.usb-HD_Webcam_123-02.capture.0.0", "Webcam Audio"),
+        ];
+        assert_eq!(microphone_index("HD Webcam", camera, &inputs), Some(1));
+        assert_eq!(microphone_index("HD Webcam", camera, &inputs[..1]), None);
     }
 }

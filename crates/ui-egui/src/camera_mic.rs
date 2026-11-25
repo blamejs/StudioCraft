@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use studiocraft_model::{SceneCollection, SceneId, SourceId};
-use studiocraft_platform::audio::{DEFAULT_DEVICE, DeviceInfo};
+use studiocraft_platform::audio::DeviceInfo;
 
 use crate::forms::{Reply, try_read_off};
 use crate::i18n::Msg;
@@ -103,9 +103,9 @@ pub(crate) fn then(c: &SceneCollection, asked: &Asked, found: Option<&DeviceInfo
     let Some(mic) = found else {
         return Some(Then::Say(tmsg!("No microphone of the camera in {source} was found", source = cam.name), true));
     };
-    // A source set to the system's default input captures the microphone when it is the default.
-    let captures = |device: &str| device == mic.id || (mic.default && (device.is_empty() || device == DEFAULT_DEVICE));
-    let existing: Vec<_> = c.sources.iter().filter(|s| s.kind == AUDIO_INPUT && captures(s.settings.str("device").unwrap_or_default())).collect();
+    // Only a source set to the microphone itself captures it. A source of the default input keeps
+    // the device that was the default when it opened, which may be another one now.
+    let existing: Vec<_> = c.sources.iter().filter(|s| s.kind == AUDIO_INPUT && s.settings.str("device") == Some(mic.id.as_str())).collect();
     if let Some(global) = existing.iter().find(|s| c.global_audio.contains(&s.id)) {
         return Some(Then::Say(tmsg!("{source} already plays in every scene", source = global.name), false));
     }
@@ -125,6 +125,7 @@ mod tests {
     use std::sync::mpsc;
 
     use studiocraft_model::{Scene, SceneItem, SourceConfig};
+    use studiocraft_platform::audio::DEFAULT_DEVICE;
 
     use super::*;
 
@@ -278,14 +279,18 @@ mod tests {
     }
 
     #[test]
-    fn a_source_of_the_default_input_captures_the_microphone_when_it_is_the_default() {
+    fn a_source_of_the_default_input_does_not_count_as_capturing_the_microphone() {
         let (mut c, asked) = with_camera();
+        // The default input's source opened whichever device was the default then, so it is not
+        // taken as a capture of the microphone, even when the microphone is the default now.
         let global = add_source(&mut c, AUDIO_INPUT, "Microphone", DEFAULT_DEVICE);
         c.global_audio.push(global);
+        let placed = add_source(&mut c, AUDIO_INPUT, "Mic", "");
+        place(&mut c, asked.scene, placed);
         let default = DeviceInfo { default: true, ..mic("mic-1", "Webcam") };
-        let Some(Then::Say(m, false)) = then(&c, &asked, Some(&default)) else { panic!("a message") };
-        assert_eq!(m.english(), "Microphone already plays in every scene");
-        // Not the default: the default input's source does not capture it.
+        let Some(Then::Run(id, params)) = then(&c, &asked, Some(&default)) else { panic!("a command") };
+        assert_eq!(id, "source.add");
+        assert_eq!(params["settings"]["device"], "mic-1");
         let Some(Then::Run(id, _)) = then(&c, &asked, Some(&mic("mic-1", "Webcam"))) else { panic!("a command") };
         assert_eq!(id, "source.add");
     }

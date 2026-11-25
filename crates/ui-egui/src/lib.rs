@@ -2508,7 +2508,12 @@ impl StudioApp {
         self.camera_mic = None;
         match camera_mic::then(self.studio.collection(), &asked, found.as_ref()) {
             Some(camera_mic::Then::Run(id, params)) => {
+                // Added to a scene other than the one being edited: the selection there stays.
+                let kept = (asked.scene != self.studio.engine().edit_scene()).then_some(self.selected);
                 let _ = self.perform(ctx, &CommandRef::with_params(id, params));
+                if let Some(kept) = kept {
+                    self.selected = kept;
+                }
             }
             Some(camera_mic::Then::Say(msg, error)) => self.notify(msg, error),
             None => {}

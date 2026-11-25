@@ -191,8 +191,7 @@ goes into the scene that was being edited when the search started. When the came
 removed, taken out of that scene or set to another camera before the search ends, or another
 scene collection is loaded, nothing is added. When an audio
 input capture source already records that input, it is placed in the scene instead of a second
-one. A source set to the default device counts as recording the input while that input is the
-system's default. When that source is already in the scene, or is a global audio source that every scene
+one. A source set to the default device does not count as recording the input. When that source is already in the scene, or is a global audio source that every scene
 records ([Audio](#audio)), nothing is added and the status bar says so. When no input matches, or the camera is not plugged
 in, the status bar reports that no microphone was found.
 
