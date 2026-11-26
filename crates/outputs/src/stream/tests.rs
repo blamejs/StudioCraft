@@ -2996,7 +2996,7 @@ fn an_encoder_no_destination_holds_gives_up_its_place() {
     assert_eq!(lock(&out.own).len(), 3);
     {
         let mut groups = lock(&out.own);
-        out.drop_unused(&mut groups);
+        out.drop_unused(&mut groups, true);
     }
     let left: Vec<Option<u32>> = lock(&out.own).iter().map(|(f, _)| f.own.as_ref().map(|o| o.kbps)).collect();
     assert_eq!(left, vec![Some(1200), Some(800)], "b's encoder and the held one stay, in order");
@@ -3141,6 +3141,66 @@ fn a_stopped_destination_started_with_another_encoder_lets_go_of_its_own_first()
     out.stop().unwrap();
     until_closed(&seen_a);
     until_closed(&seen_b);
+}
+
+#[test]
+fn an_encoder_a_destination_leaves_for_another_stops_at_once() {
+    let (mut out, feed, seen_a, _seen_b, old) = with_b_stopped(vec![Plan::Accept]);
+    drop(old);
+    // Started again with the stream's encoder, it no longer uses the one it ran for itself, and
+    // that one stops though the stream has room for more.
+    out.start_destination_as(&setup("b", &closed_url(), "kb")).unwrap();
+    assert!(Arc::ptr_eq(&feed_of(&out, "b"), &out.hub.main));
+    assert!(lock(&out.own).is_empty(), "the encoder no destination uses still runs");
+    assert_eq!(lock(&out.ending).len(), 1, "it ends on a thread of its own, which the stream keeps");
+    // The other destination goes on, and the feed no longer waits for the encoder.
+    feed.pace(&out);
+    media(&seen_a, 3);
+    drop(feed);
+    // b has no server to reach, so the stream may have failed by now.
+    let _ = out.stop();
+    assert!(lock(&out.ending).is_empty(), "the stop waited for the encoder to end");
+    until_closed(&seen_a);
+}
+
+#[test]
+fn encoders_still_ending_count_toward_the_limit() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![with_own("b", &closed_url(), "kb", own(1200, "quality"))], quick()).unwrap();
+    // A thread that stands for an encoder still ending, until it is told to finish.
+    let (finish, finished) = mpsc::channel::<()>();
+    lock(&out.ending).push(std::thread::spawn(move || {
+        let _ = finished.recv();
+    }));
+    // With room left, a start does not wait for it.
+    out.finish_ending(0);
+    assert_eq!(lock(&out.ending).len(), 1);
+    // When it and the running encoders fill every place, a start waits for it to end.
+    std::thread::scope(|s| {
+        let waits = s.spawn(|| out.finish_ending(MAX_SUBSCRIBERS - 1));
+        finish.send(()).unwrap();
+        waits.join().unwrap();
+    });
+    assert!(lock(&out.ending).is_empty());
+    // b has no server to reach, so the stream may have failed by now.
+    let _ = out.stop();
+}
+
+#[test]
+fn an_encoder_still_held_when_its_destination_switched_stops_on_the_next_status_read() {
+    let (mut out, feed, seen_a, _seen_b, old) = with_b_stopped(vec![Plan::Accept]);
+    // `old` stands for the thread of b that has not ended yet and still holds the encoder.
+    out.start_destination_as(&setup("b", &closed_url(), "kb")).unwrap();
+    assert_eq!(lock(&out.own).len(), 1, "an encoder still held keeps running");
+    drop(old);
+    let _ = out.status();
+    assert!(lock(&out.own).is_empty(), "the encoder no destination uses still runs");
+    feed.pace(&out);
+    media(&seen_a, 3);
+    drop(feed);
+    // b has no server to reach, so the stream may have failed by now.
+    let _ = out.stop();
+    until_closed(&seen_a);
 }
 
 #[test]

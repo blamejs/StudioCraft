@@ -2013,6 +2013,9 @@ pub struct Streaming {
     split: Option<Split>,
     /// The encoders destinations run for themselves, in the order they started.
     own: Mutex<Vec<(Arc<EncoderFeed>, Native)>>,
+    /// The threads that end encoders taken out of `own`. Their encoders count toward the limit
+    /// until they end, and a stop waits for them. Locked after `own` when both are.
+    ending: Mutex<Vec<JoinHandle<()>>>,
     /// The caption feeds of the running encoders in `own`, which the stream's encoder copies each
     /// phrase into. Changed only with `own` locked.
     taps: Arc<CaptionTaps>,
@@ -2272,6 +2275,7 @@ impl Streaming {
             copy,
             split,
             own: Mutex::new(Vec::new()),
+            ending: Mutex::new(Vec::new()),
             taps,
             job: job.clone(),
             stopped: false,
@@ -2315,8 +2319,9 @@ impl Streaming {
             ));
         };
         if groups.len() >= MAX_SUBSCRIBERS {
-            self.drop_unused(&mut groups);
+            self.drop_unused(&mut groups, true);
         }
+        self.finish_ending(groups.len());
         if groups.len() >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!("a stream can run at most {MAX_SUBSCRIBERS} encoders for its destinations")));
         }
@@ -2363,10 +2368,16 @@ impl Streaming {
     }
 
     /// Stops and drops the encoders of `groups`, held from `own`, that no destination holds: one a
-    /// destination left when it was started again with another encoder. A destination that is
+    /// destination left when it was started again with another encoder. Run after each such start,
+    /// on each status read, and before an encoder is refused for the limit. A destination that is
     /// stopped keeps its encoder until a start of it, or of one that takes its place, lets go of
-    /// it, and one being started with an encoder keeps that one.
-    fn drop_unused(&self, groups: &mut Vec<(Arc<EncoderFeed>, Native)>) {
+    /// it, and one being started with an encoder keeps that one. With `end_here` the encoders end
+    /// before it returns; otherwise they end on a thread of their own.
+    fn drop_unused(&self, groups: &mut Vec<(Arc<EncoderFeed>, Native)>, end_here: bool) {
+        // Checked first, so a call that finds every encoder in use does not allocate.
+        if !groups.iter().any(|(f, _)| Arc::strong_count(f) == 1) {
+            return;
+        }
         // Only `groups` holds the feed of such an encoder, and it is held locked, so no
         // destination can take that feed meanwhile.
         let unused: Vec<(Arc<EncoderFeed>, Native)> = {
@@ -2379,7 +2390,30 @@ impl Streaming {
         }
         self.set_taps(groups);
         self.retire(&unused);
-        drop(unused);
+        // An encoder can take seconds to end, which a status read must not wait for. One started
+        // next for the limit waits, so it does not compete with them for an encoder session. When
+        // no thread can be started, they end here.
+        for (_, native) in &unused {
+            native.ask_end();
+        }
+        if end_here {
+            drop(unused);
+        } else if let Ok(t) = std::thread::Builder::new().name("encoder end".into()).spawn(move || drop(unused)) {
+            lock(&self.ending).push(t);
+        }
+    }
+
+    /// Forgets the threads of `ending` whose encoders have ended, and waits for the others when
+    /// they and `running` encoders fill the stream's [`MAX_SUBSCRIBERS`] places, so the encoders
+    /// running at once never pass the limit.
+    fn finish_ending(&self, running: usize) {
+        let mut ending = lock(&self.ending);
+        ending.retain(|t| !t.is_finished());
+        if running + ending.len() >= MAX_SUBSCRIBERS {
+            for t in ending.drain(..) {
+                let _ = t.join();
+            }
+        }
     }
 
     /// Makes the caption feeds of `groups`, the running encoders of `own`, the ones the stream's
@@ -2477,9 +2511,12 @@ impl OutputInstance for Streaming {
 
     fn status(&self) -> OutputStatus {
         // An encoder of a destination's own that ended gets no more input, also while no
-        // destination is started again.
+        // destination is started again, and so does one no destination holds any more: one whose
+        // destination switched to another encoder while its thread was still ending.
         if !self.stopped {
-            self.drop_ended(&mut lock(&self.own));
+            let mut groups = lock(&self.own);
+            self.drop_ended(&mut groups);
+            self.drop_unused(&mut groups, false);
         }
         let dests = lock(&self.hub.dests);
         let left = lock(&self.hub.left).sum().bytes;
@@ -2557,6 +2594,10 @@ impl OutputInstance for Streaming {
             let _ = native.end_by(deadline, grace);
         }
         drop(own);
+        // Encoders no destination used were asked to end already; the stop waits for them too.
+        for t in lock(&self.ending).drain(..) {
+            let _ = t.join();
+        }
         self.close_destinations();
         // The copy writes what its ring holds and finishes its file; its failure is in its state,
         // not in the stream's result.
@@ -2665,7 +2706,11 @@ impl OutputInstance for Streaming {
         };
         *lock(&d.own) = setup.encoder.clone();
         let given = Given { key: Some(&target.key), server: Some((&target.server, service)), feed: Some(&feed) };
-        spawn(&self.hub, &d, given)
+        let started = spawn(&self.hub, &d, given);
+        drop(feed);
+        // The encoder it ran before, when no destination uses it any more, stops now.
+        self.drop_unused(&mut lock(&self.own), false);
+        started
     }
 
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
