@@ -674,11 +674,12 @@ impl Exporter {
         &self.ring
     }
 
-    /// Make the one-texel textures that [`Exporter::prepare`] copies `planes` into, outside the
-    /// frame loop.
+    /// Make the one-texel textures that [`Exporter::prepare`] copies `planes` into, and the entry
+    /// that keeps `planes` alive for [`Exporter::copy`], outside the frame loop.
     pub fn reserve(&mut self, device: &wgpu::Device, planes: &[wgpu::Texture]) {
         let kept = self.scratch.take();
         self.scratch = Some(scratch_for(device, planes, kept));
+        drop(kept_planes(&mut self.planes, &self.queue, planes));
     }
 
     /// Record, as the last use of `planes` in `encoder`, a one-texel copy from each of them, which
