@@ -85,7 +85,8 @@ pub enum RuntimeAction {
     StartRecording,
     StopRecording,
     ToggleRecording,
-    /// Mark the running recording now, named `name` or numbered when it is `None`.
+    /// Mark the running recording and the running stream's copy now, named `name` or numbered
+    /// when it is `None`.
     RecordingMarker {
         name: Option<String>,
     },
@@ -145,8 +146,8 @@ pub enum RuntimeAction {
     AudioTracksMarker {
         name: Option<String>,
     },
-    /// Mark the running recording and the running take of audio tracks now with one marker,
-    /// named `name` or numbered when it is `None`.
+    /// Mark the running recording, the running stream's copy and the running take of audio
+    /// tracks now with one marker, named `name` or numbered when it is `None`.
     MarkerAdd {
         name: Option<String>,
     },
@@ -451,8 +452,8 @@ pub enum Command {
     RecordStop {},
     #[serde(rename = "record.toggle")]
     RecordToggle {},
-    /// Mark the running recording at this moment, named `name` or numbered; the timeline file
-    /// written beside the recording lists the marker.
+    /// Mark the running recording and the running stream's copy at this moment, named `name` or
+    /// numbered; the timeline file written beside the recording or the copy lists the marker.
     #[serde(rename = "record.marker")]
     RecordMarker {
         /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
@@ -553,8 +554,8 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
-    /// Mark the running recording and the running take of audio tracks at this moment with one
-    /// marker, named `name` or numbered in the session.
+    /// Mark the running recording, the running stream's copy and the running take of audio tracks
+    /// at this moment with one marker, named `name` or numbered in the session.
     #[serde(rename = "marker.add")]
     MarkerAdd {
         /// Absent gives a numbered marker; `null` or any value that is not a string is an error.

@@ -1400,7 +1400,7 @@ fn output_status_starts_with_nothing_running() {
 fn record_marker_needs_a_running_recording_and_a_checked_name() {
     let mut s = server();
     let idle = error_text(&call(&mut s, "record_marker", json!({"name": "Goal"})));
-    assert!(idle.contains("no recording is running"), "{idle}");
+    assert!(idle.contains("neither a recording nor a stream's copy is running"), "{idle}");
     let bad = error_text(&call(&mut s, "record_marker", json!({"name": ""})));
     assert!(bad.contains("a marker's name is 1 to 256 characters"), "{bad}");
     let null = error_text(&call(&mut s, "record_marker", json!({"name": null})));

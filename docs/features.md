@@ -401,21 +401,37 @@ next free number up to 999, and the status bar names the file. A recording witho
 timeline file, and neither does a recording whose file could not be finished; the status bar says
 the markers could not be saved.
 
-The `marker.add` command marks the running recording and the running take of
-[audio tracks](#audio-tracks) at the same moment with one marker. Both outputs get the same name,
-"Marker N" for the session's Nth marker when none is given. A session lasts from the start of the
-first of the two outputs until both have stopped, and holds at most 10,000 markers (StudioCraft's
+Add Recording Marker also marks the [copy of the stream](#copy-of-the-stream) while a stream that
+saves one runs, and the menu item is available while a recording or such a stream runs. The copy
+numbers its own markers and holds at most 10,000 of them. When the stream stops, or the app closes
+during it, and the copy's file is finished, StudioCraft writes `<copy name>.otio` beside
+`Stream <date> <time>.mkv` by the same rules as for a recording: the clip is as long as the frames
+the stream's encoder was handed, a marker past the clip's end goes on its last frame, the time
+skipped while the computer was suspended is left out, and a file of that name is not replaced. When
+the disk fell behind before the copy got the stream's first packets, its file starts at a later
+keyframe: the timeline then leaves that opening out of the clip, places each marker in the file, and
+puts a marker from before the file's start on its first frame. When the disk fell behind near the
+stream's end and the file lost the stream's last packets, the clip ends at the file's last picture.
+A copy whose file could not be finished gets no timeline file, and a copy that fails while its stream
+runs takes no more markers. When a recording and a stream's copy
+both run, each gets the marker, and when one of them does not keep it, the other still does.
+
+The `marker.add` command marks the running recording, the running stream's copy and the running
+take of [audio tracks](#audio-tracks) at the same moment with one marker. Every output gets the same
+name, "Marker N" for the session's Nth marker when none is given. A session lasts from the start of
+the first of those outputs until all have stopped, and holds at most 10,000 markers (StudioCraft's
 own limit). When one output does not keep a marker, for example because 1,024 markers are waiting
-to be written to the take, the reply names the cause and the other output keeps it. `marker.list`
+to be written to the take, the reply names the cause and the others keep it. `marker.list`
 lists the session's markers, and after the session ends it lists that session's markers until the
 next session starts ([`marker.add` and `marker.list`](control-protocol.md#markeradd-and-markerlist)).
 
-The `marker.rename` command renames one of the session's markers in the recording and the take of
-audio tracks, while they run and after they have ended. While an output runs, the new name goes
-into the file it writes at its end: the recording's timeline, and the take's session file, which
+The `marker.rename` command renames one of the session's markers in the recording, the stream's
+copy and the take of audio tracks, while they run and after they have ended. While an output runs,
+the new name goes into the file it writes at its end: the timeline of the recording or the copy, and
+the take's session file, which
 repair after a crash writes with the new name too. After an output has ended, its timeline or
 session file is written again with the new name, through a temporary file and a rename. When one output cannot take the new name, for example because its file
-was changed in another app, the reply names the cause and the other output keeps the new name
+was changed in another app, the reply names the cause and the others keep the new name
 ([`marker.rename`](control-protocol.md#markerrename)).
 
 ### Replay buffer

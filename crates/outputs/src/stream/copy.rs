@@ -10,7 +10,11 @@
 //!   encoder delay, since the copy's first sound packet comes after its first keyframe.
 //! - A disk that falls more than the ring's length behind loses packets up to the next keyframe,
 //!   as a destination does; [`StreamCopyState::lost_packets`] counts them. The encoders, the
-//!   destinations and the other subscribers never wait for the copy.
+//!   destinations and the other subscribers never wait for the copy. When the disk falls behind
+//!   before the copy gets its first packet, the file starts at a later keyframe, and
+//!   [`StreamCopyState::start_ns`] says how much of the stream comes before the file's start.
+//!   When it falls behind near the stream's end, the file ends before the stream's last frame,
+//!   and [`StreamCopyState::last_video_ns`] says where.
 //! - A file that cannot be created or written stops the copy and keeps what was written. A file
 //!   that already holds data when the copy opens it is not written to, nor is a link put in
 //!   place of the file. The stream goes on.
@@ -102,6 +106,10 @@ fn not_finished_in(secs: u64) -> String {
 struct Shared {
     /// Bytes written, counting those still in the file's buffer.
     stats: Arc<EncoderStats>,
+    /// [`StreamCopyState::start_ns`], once the copy got its first packet.
+    start_ns: AtomicU64,
+    /// [`StreamCopyState::last_video_ns`] plus 1, or 0 before the file holds a video frame.
+    last_video: AtomicU64,
     /// [`WRITING`], then [`FINISHED`] or [`ABANDONED`], whichever comes first.
     state: AtomicU8,
     /// How long the stop that abandoned the copy waited, in seconds.
@@ -168,6 +176,8 @@ impl StreamCopy {
             path: self.path.clone(),
             bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
             lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
+            start_ns: self.shared.start_ns.load(Ordering::SeqCst),
+            last_video_ns: self.shared.last_video.load(Ordering::SeqCst).checked_sub(1),
             finished: self.shared.state.load(Ordering::Acquire) == FINISHED,
             failure: self.shared.failure.get().cloned().or_else(|| {
                 // A stop abandoned the copy and is about to record why.
@@ -240,9 +250,18 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
             Kind::Data => continue,
         };
         // A time before the first packet is written at 0, as a destination sends it.
-        let pts = packet.pts().saturating_sub(*zero.get_or_insert(packet.dts())).max(0);
+        let zero = *zero.get_or_insert_with(|| {
+            // The encoders count the stream's times from its first frame, at 0.
+            shared.start_ns.store(u64::try_from(packet.dts()).unwrap_or(0), Ordering::SeqCst);
+            packet.dts()
+        });
+        let pts = packet.pts().saturating_sub(zero).max(0);
         if let Err(e) = mux.write_frame(track as usize, pts, keyframe, packet.data(), None) {
             return shared.fail(could_not(&e));
+        }
+        if track == Track::Video {
+            let at = u64::try_from(packet.pts()).unwrap_or(0).saturating_add(1);
+            shared.last_video.fetch_max(at, Ordering::SeqCst);
         }
     }
     let not_finished = |e: &dyn std::fmt::Display| format!("the copy of the stream at {shown} could not be finished: {e}");

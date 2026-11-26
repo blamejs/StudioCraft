@@ -474,9 +474,9 @@ fn recording_needs_the_graphics_device() {
     assert!(s.output(OutputKind::Recording).is_none());
     assert_eq!(s.state_json()["recording"]["active"], json!(false));
     let e = s.run("record.marker", &json!({"name": "Goal"})).unwrap_err();
-    assert_eq!(e.to_string(), "no recording is running");
+    assert_eq!(e.to_string(), "neither a recording nor a stream's copy is running");
     let e = s.run("marker.add", &json!({"name": "Goal"})).unwrap_err();
-    assert_eq!(e.to_string(), "neither a recording nor a take of audio tracks is running");
+    assert_eq!(e.to_string(), "no recording, stream copy or take of audio tracks is running");
     let (v, _) = s.run("marker.list", &json!({})).unwrap();
     assert_eq!(v, json!({"running": false, "markers": []}));
     let e = s.run("marker.rename", &json!({"index": 1, "name": "Goal"})).unwrap_err();
@@ -2333,7 +2333,7 @@ mod audio_tracks {
         assert_eq!(list["running"], json!(false));
         assert_eq!(list["markers"].as_array().unwrap().len(), 2);
         let e = s.run("marker.add", &json!({})).unwrap_err().to_string();
-        assert_eq!(e, "neither a recording nor a take of audio tracks is running");
+        assert_eq!(e, "no recording, stream copy or take of audio tracks is running");
         s.test_streaming = true;
         s.tick();
         armed(&mut s);

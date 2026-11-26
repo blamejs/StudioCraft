@@ -141,6 +141,15 @@ pub struct StreamCopyState {
     /// Packets the file did not get because the disk fell behind: the copy then waits for the next
     /// keyframe.
     pub lost_packets: u64,
+    /// Nanoseconds of the stream before the file's start. The file's times count from the first
+    /// packet the copy got, so this is above 0 when the disk fell behind before the copy got the
+    /// stream's first packets.
+    pub start_ns: u64,
+    /// Nanoseconds from the stream's first frame to the presentation time of the latest video
+    /// frame the file holds, counted as [`StreamCopyState::start_ns`] is; `None` until the file
+    /// holds a video frame. A copy that lost the stream's last packets ends before the stream's
+    /// last frame.
+    pub last_video_ns: Option<u64>,
     /// Whether the file was finished after the stream ended.
     pub finished: bool,
     /// Why the copy stopped, when it did; the stream goes on without it.

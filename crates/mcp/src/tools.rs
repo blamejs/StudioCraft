@@ -359,11 +359,14 @@ fn studio_tool_definitions() -> Vec<Value> {
         ),
         tool(
             "record_marker",
-            "Mark the running recording",
-            "Add a marker to the running recording at this moment, as Add Recording Marker does. When a recording with markers stops, \
-             `<recording name>.otio` is written beside it with each marker at its frame. `name` is 1 to 256 characters with no control \
-             characters (default \"Marker N\", the recording's Nth marker). Returns the marker's `name` and `seconds` from the \
-             recording's start. An error when no recording runs and when the recording already holds 10,000 markers.",
+            "Mark the running recording and stream copy",
+            "Add a marker to the running recording and to the copy the running stream saves at this moment, as Add Recording Marker \
+             does. When a recording or a stream's copy with markers stops, `<file name>.otio` is written beside its file with each \
+             marker at its frame. `name` is 1 to 256 characters with no control characters (default \"Marker N\", the output's Nth \
+             marker). Returns the marker's `name` and `seconds` from the start of the recording, or of the copy when the recording \
+             does not keep it, \
+             and `recording` and `stream_copy`, each `{name, seconds}`, `{error}` or null when that output does not run. An error \
+             when neither runs and when no output kept the marker, for example because it already holds 10,000 markers.",
             json!({"name": {"type": "string", "description": "The marker's name (default: \"Marker N\")."}}),
             &[],
             MARKS,
