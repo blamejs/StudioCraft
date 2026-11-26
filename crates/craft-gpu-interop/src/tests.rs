@@ -943,6 +943,54 @@ mod gpu {
         assert_eq!(crate::export::scratch_for(&device, &unorm, Some(scratch)), kept, "the same formats keep the textures");
     }
 
+    #[test]
+    fn the_export_copy_needs_8_bit_one_and_two_channel_plane_formats() {
+        use crate::export::plane_formats_fit;
+        use wgpu::TextureFormat as F;
+        assert!(plane_formats_fit(F::R8Uint, F::Rg8Uint), "the converter's planes");
+        assert!(plane_formats_fit(F::R8Unorm, F::Rg8Unorm));
+        assert!(plane_formats_fit(F::R8Snorm, F::Rg8Sint));
+        assert!(!plane_formats_fit(F::Rgba8Unorm, F::Rg8Unorm), "a four-byte luma plane");
+        assert!(!plane_formats_fit(F::R8Unorm, F::R16Float), "a two-byte chroma format of another family");
+        assert!(!plane_formats_fit(F::Rg8Unorm, F::R8Unorm), "the planes swapped");
+        assert!(!plane_formats_fit(F::R16Uint, F::Rg16Uint), "16-bit planes");
+    }
+
+    /// The copy into an export ring reads the planes outside wgpu's tracking, so the ticket keeps
+    /// them until the queue has finished the work submitted before it is dropped.
+    #[test]
+    fn a_value_kept_until_done_outlives_the_submitted_work() {
+        use std::sync::Arc;
+        let Some((device, queue)) = device() else { return };
+        let value = Arc::new(());
+        let src = texture(&device, 64, 1, wgpu::TextureUsages::COPY_SRC);
+        let dst = texture(&device, 64, 1, wgpu::TextureUsages::COPY_DST);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_texture(src.as_image_copy(), dst.as_image_copy(), wgpu::Extent3d { width: 64, height: 1, depth_or_array_layers: 1 });
+        queue.submit([encoder.finish()]);
+        drop(crate::export::UntilDone::new(&queue, Arc::clone(&value)));
+        assert_eq!(Arc::strong_count(&value), 2, "kept while the submitted work may run");
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(Arc::strong_count(&value), 1, "dropped once the queue has finished it");
+    }
+
+    #[test]
+    fn copies_from_the_same_planes_share_one_entry_that_keeps_them() {
+        use std::sync::Arc;
+        let Some((device, queue)) = device() else { return };
+        let planes = [texture(&device, 64, 2, wgpu::TextureUsages::COPY_SRC), texture(&device, 32, 1, wgpu::TextureUsages::COPY_SRC)];
+        let mut kept = None;
+        let first = crate::export::kept_planes(&mut kept, &queue, &planes);
+        let second = crate::export::kept_planes(&mut kept, &queue, &planes);
+        assert!(Arc::ptr_eq(&first, &second), "the same planes make no new entry");
+        assert_eq!(first.get().map(Vec::as_slice), Some(&planes[..]), "the entry holds the planes");
+        let other = [texture(&device, 64, 2, wgpu::TextureUsages::COPY_SRC), texture(&device, 32, 1, wgpu::TextureUsages::COPY_SRC)];
+        let third = crate::export::kept_planes(&mut kept, &queue, &other);
+        assert!(!Arc::ptr_eq(&first, &third), "other planes get a new entry");
+        assert_eq!(Arc::strong_count(&first), 2, "the tickets of the old planes still hold them");
+        assert!(kept.as_ref().is_some_and(|k| Arc::ptr_eq(k, &third)));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn elsewhere_than_windows_an_export_reports_the_fallback() {

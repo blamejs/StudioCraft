@@ -494,6 +494,12 @@ pub struct Exporter {
     slots: crate::ring::SlotTable,
     /// One-texel textures of the planes' formats that [`Exporter::prepare`] copies into.
     scratch: Option<Vec<wgpu::Texture>>,
+    /// The compositor's queue, which runs the copies.
+    queue: wgpu::Queue,
+    /// The planes of the last copy, shared with every [`Ticket`] of them. The copy reads them
+    /// outside wgpu's tracking, so they are kept until the queue has finished the last copy
+    /// recorded from them, and only planes that change make a new entry.
+    planes: Option<Arc<UntilDone<Vec<wgpu::Texture>>>>,
     /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device
     /// until the last copy recorded into them has been submitted.
     #[cfg(windows)]
@@ -534,10 +540,38 @@ pub(crate) fn scratch_for(device: &wgpu::Device, planes: &[wgpu::Texture], kept:
         .collect()
 }
 
+/// `value`, dropped only once the queue has finished the work submitted to it before this is
+/// dropped, without waiting.
+#[cfg(feature = "wgpu")]
+pub(crate) struct UntilDone<T: Send + 'static> {
+    queue: wgpu::Queue,
+    /// `None` only while being dropped.
+    value: Option<T>,
+}
+
+#[cfg(feature = "wgpu")]
+impl<T: Send + 'static> UntilDone<T> {
+    pub(crate) fn new(queue: &wgpu::Queue, value: T) -> UntilDone<T> {
+        UntilDone { queue: queue.clone(), value: Some(value) }
+    }
+
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl<T: Send + 'static> Drop for UntilDone<T> {
+    fn drop(&mut self) {
+        let value = self.value.take();
+        self.queue.on_submitted_work_done(move || drop(value));
+    }
+}
+
 /// A copy recorded by [`Exporter::copy`], to hand to [`Exporter::submitted`] once its command
 /// buffer has been submitted. It keeps the ring's textures open on the compositor's device, even
-/// after the [`Exporter`] is dropped, so drop it only after the command buffer has been submitted
-/// or dropped.
+/// after the [`Exporter`] is dropped, and the frame's plane textures alive until the queue has
+/// finished the copy, so drop it only after the command buffer has been submitted or dropped.
 #[cfg(feature = "wgpu")]
 #[must_use = "the frame is only handed to the encoder by `Exporter::submitted`"]
 pub struct Ticket {
@@ -545,6 +579,24 @@ pub struct Ticket {
     ready: u64,
     #[cfg(windows)]
     _textures: Arc<Raw>,
+    _planes: Arc<UntilDone<Vec<wgpu::Texture>>>,
+}
+
+/// The entry in `kept` that keeps `planes` alive for a copy from them. The entry of the same
+/// planes is shared; other planes replace it with a new one, and the old entry is handed to the
+/// queue once no ticket holds it.
+#[cfg(feature = "wgpu")]
+pub(crate) fn kept_planes(
+    kept: &mut Option<Arc<UntilDone<Vec<wgpu::Texture>>>>,
+    queue: &wgpu::Queue,
+    planes: &[wgpu::Texture],
+) -> Arc<UntilDone<Vec<wgpu::Texture>>> {
+    if let Some(entry) = kept
+        && entry.get().is_some_and(|kept| kept.as_slice() == planes)
+    {
+        return Arc::clone(entry);
+    }
+    Arc::clone(kept.insert(Arc::new(UntilDone::new(queue, planes.to_vec()))))
 }
 
 #[cfg(feature = "wgpu")]
@@ -559,6 +611,14 @@ impl std::fmt::Debug for Ticket {
 #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
 pub(crate) fn planes_fit(width: u32, height: u32, luma: (u32, u32), chroma: (u32, u32)) -> bool {
     luma == (width, height) && chroma == (width / 2, height / 2)
+}
+
+/// Whether `luma` and `chroma`, the formats of a frame's planes, can be copied into an NV12
+/// texture's planes: an 8-bit one-channel luma plane and an 8-bit two-channel chroma plane.
+#[cfg(feature = "wgpu")]
+pub(crate) fn plane_formats_fit(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
+    use wgpu::TextureFormat as F;
+    matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
 }
 
 /// The graphics API and adapter of `device`, as [`check_export`](crate::check_export) takes them.
@@ -594,12 +654,18 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw: Arc::new(raw) })
+            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, queue: queue.clone(), planes: None, raw: Arc::new(raw) })
         }
         #[cfg(not(windows))]
         {
-            let _ = (backend, compositor, queue);
-            ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None })
+            let _ = (backend, compositor);
+            ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                queue: queue.clone(),
+                planes: None,
+            })
         }
     }
 
@@ -637,7 +703,9 @@ impl Exporter {
     /// before the one returned. Returns the command buffer to submit and its ticket, or
     /// `None` when every texture is still being encoded (the frame is not exported). Returns the
     /// reason, also recorded on the ring, when the frames cannot stay on the GPU. Planes of other
-    /// sizes than the ring's luma and chroma planes are refused with [`Fallback::ImportFailed`].
+    /// sizes than the ring's luma and chroma planes, or of other formats than 8-bit one-channel
+    /// luma and 8-bit two-channel chroma, are refused with [`Fallback::ImportFailed`]. The ticket
+    /// keeps the planes alive until the queue has finished the copy.
     pub fn copy(
         &mut self,
         device: &wgpu::Device,
@@ -652,7 +720,9 @@ impl Exporter {
             return Err(reason);
         }
         let size = |t: &wgpu::Texture| (t.width(), t.height());
-        if !matches!(planes, [luma, chroma] if planes_fit(self.ring.width(), self.ring.height(), size(luma), size(chroma))) {
+        if !matches!(planes, [luma, chroma] if planes_fit(self.ring.width(), self.ring.height(), size(luma), size(chroma))
+            && plane_formats_fit(luma.format(), chroma.format()))
+        {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         }
@@ -679,6 +749,7 @@ impl Exporter {
             ready,
             #[cfg(windows)]
             _textures: Arc::clone(&self.raw),
+            _planes: kept_planes(&mut self.planes, &self.queue, planes),
         };
         Ok(Some((commands, ticket)))
     }

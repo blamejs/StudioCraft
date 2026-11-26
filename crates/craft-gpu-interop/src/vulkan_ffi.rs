@@ -657,8 +657,10 @@ impl Exported {
             // SAFETY: `cmd` is a command buffer of `device` being recorded. The plane images are
             // images of the device in `TRANSFER_SRC_OPTIMAL`, `dst` is an NV12 image of the device,
             // and each region lies inside both images: `Exporter::copy` refuses planes unless the
-            // luma plane is the NV12 image's size and the chroma plane half of it. The barriers
-            // move `dst` from the encoder side to this queue and back around the copies.
+            // luma plane is the NV12 image's size and the chroma plane half of it, with formats of
+            // the size of each NV12 plane's texels. The barriers move `dst` from the encoder side
+            // to this queue and back around the copies. The ticket keeps the plane images alive
+            // until the queue has finished the copies.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,
