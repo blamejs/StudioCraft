@@ -110,6 +110,9 @@ mod split;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
+/// The most destinations a stream lists, and the most of those that gave their place to added
+/// ones whose counts it keeps by id.
+pub const MAX_DESTINATIONS: usize = MAX_SUBSCRIBERS;
 /// The most a wait before a try again is cut by, in percent, so destinations that lost their
 /// connections together do not all try again at the same moment.
 pub const JITTER_PERCENT: u64 = 20;
@@ -522,6 +525,23 @@ struct Dest {
     /// either reaches a thread that goes on or finds none.
     alive: AtomicBool,
     thread: Mutex<Option<JoinHandle<()>>>,
+    /// Times [`Dest::sending`] found `thread` locked and waited for it.
+    #[cfg(test)]
+    waits: AtomicU32,
+    /// Where [`send_all`] tells a test it reached a [`Pause`], then waits until the test lets it
+    /// go on; `None`, or a test that hung up, lets it go on at once.
+    #[cfg(test)]
+    pause: Mutex<Option<(std::sync::mpsc::Sender<Pause>, std::sync::mpsc::Receiver<()>)>>,
+}
+
+/// A point in [`send_all`] where a test can hold the sending thread.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pause {
+    /// Past the check for a stop or a new setup, before the wait for a packet.
+    Waiting,
+    /// A packet was sent or the connection was read without an error.
+    Sent,
 }
 
 impl Dest {
@@ -553,6 +573,22 @@ impl Dest {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
+            #[cfg(test)]
+            waits: AtomicU32::new(0),
+            #[cfg(test)]
+            pause: Mutex::new(None),
+        }
+    }
+
+    /// Tells the test holding [`Dest::pause`] that the thread reached `at`, and waits until it
+    /// lets the thread go on.
+    #[cfg(test)]
+    fn pause_at(&self, at: Pause) {
+        let held = lock(&self.pause);
+        if let Some((tell, go)) = held.as_ref()
+            && tell.send(at).is_ok()
+        {
+            let _ = go.recv();
         }
     }
 
@@ -732,8 +768,27 @@ impl Dest {
     /// clears `alive` with `thread` locked when it decides to end, so a thread that has not decided
     /// by then goes on sending, and the start that follows finds one that has decided ended.
     fn sending(&self) -> bool {
-        let _slot = lock(&self.thread);
+        let _slot = self.slot();
         self.running() && !self.stopping()
+    }
+
+    /// `thread`, locked.
+    #[cfg(not(test))]
+    fn slot(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+        lock(&self.thread)
+    }
+
+    /// `thread`, locked, counted in `waits` when it was locked already.
+    #[cfg(test)]
+    fn slot(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+        match self.thread.try_lock() {
+            Ok(slot) => slot,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.waits.fetch_add(1, Ordering::SeqCst);
+                lock(&self.thread)
+            }
+        }
     }
 
     /// Asks the thread to stop, and wakes it from a wait before a try again.
@@ -1801,6 +1856,8 @@ fn send_all(d: &Dest, h: &Headers, p: &mut Publisher, rx: &mut Receiver) -> End 
         if d.stopping() || d.renew.load(Ordering::SeqCst) {
             return End::Done;
         }
+        #[cfg(test)]
+        d.pause_at(Pause::Waiting);
         let sent = match rx.recv_timeout(RECV_WAIT) {
             // Stopped or given a new setup during the wait: the packet is not sent with the old one.
             Ok(_) if d.stopping() || d.renew.load(Ordering::SeqCst) => return End::Done,
@@ -1814,9 +1871,16 @@ fn send_all(d: &Dest, h: &Headers, p: &mut Publisher, rx: &mut Receiver) -> End 
         if let Err(e) = sent {
             return end_for(e);
         }
+        #[cfg(test)]
+        d.pause_at(Pause::Sent);
         // A stop and start this loop did not see left the connection sending, so it is not a
-        // restart for the next try; one that comes as the connection closes is kept.
+        // restart for the next try; one that comes as the connection closes is kept. One with a
+        // new setup closes this connection, so it stays a restart: `spawn` sets `renew` before
+        // `restarted`, so one that `restarted` was cleared after shows here as `renew`.
         d.restarted.store(false, Ordering::SeqCst);
+        if d.renew.load(Ordering::SeqCst) {
+            d.restarted.store(true, Ordering::SeqCst);
+        }
     }
 }
 

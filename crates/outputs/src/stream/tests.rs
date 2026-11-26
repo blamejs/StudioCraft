@@ -832,35 +832,82 @@ fn a_packet_that_comes_after_a_new_setup_is_not_sent_with_the_old_one() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     // The stream gives the headers; its own destination plays no part.
     let mut out = Streaming::start_timed(&job, vec![target("x", &closed_url(), "k")], quick()).unwrap();
-    let main = Arc::clone(&out.hub.main);
-    let d = Arc::new(Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None, Arc::clone(&main)));
-    let mut p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
+    let d = Arc::new(Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None, Arc::clone(&out.hub.main)));
+    let p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
     assert_eq!(next(&seen_a), Seen::Publish("k".into()));
-    let (mut fanout, mut rx, _) = copy_feed();
-    let sender = {
-        let d = Arc::clone(&d);
-        std::thread::spawn(move || {
-            let end = send_all(&d, &main.headers, &mut p, &mut rx);
-            let _ = p.close();
-            matches!(end, End::Done)
-        })
-    };
-    // Once its headers are out, the thread waits for a packet.
+    let (mut fanout, rx, _) = copy_feed();
+    let (paused, go) = held_sender(&d);
+    let sender = sending(&d, p, rx);
+    // The thread is past its check for a new setup and about to wait for a packet.
     assert_eq!(media(&seen_a, 2).len(), 2, "the two sequence headers");
-    let mut changes = lock(&d.changes);
-    while d.status() != DestinationStatus::Live {
-        let (next, waited) = d.changed.wait_timeout(changes, GUARD).unwrap_or_else(PoisonError::into_inner);
-        changes = next;
-        assert!(!waited.timed_out(), "{:?}", d.status());
-    }
-    drop(changes);
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
     // A new setup, then a packet that ends the wait: the packet does not go out with the old one.
+    // The thread keeps its receiver until it is joined, so the packet reaches it.
     d.renew.store(true, Ordering::SeqCst);
     let mut pool = PacketPool::new(4, 0).unwrap();
     let packet = pool.share(&mut vec![0, 0, 0, 1, 0x65], Info::video(0, 0, true)).unwrap();
     assert_eq!(fanout.publish(&packet), 1);
-    assert!(sender.join().unwrap(), "sending ends for the new setup");
+    drop((paused, go));
+    let (done, _rx) = sender.join().unwrap();
+    assert!(done, "sending ends for the new setup");
     assert_eq!(next(&seen_a), Seen::Closed, "a packet went out with the old setup");
+    let _ = out.stop();
+}
+
+/// Holds the thread that sends for `d` at each [`Pause`]: the first receiver tells where it is,
+/// and a send on the second lets it go on. Dropping both lets it run freely.
+fn held_sender(d: &Dest) -> (mpsc::Receiver<Pause>, mpsc::Sender<()>) {
+    let (tell, paused) = mpsc::channel();
+    let (go, wait) = mpsc::channel();
+    *lock(&d.pause) = Some((tell, wait));
+    (paused, go)
+}
+
+/// Runs [`send_all`] for `d` on `p` and `rx`, with the headers of `d`'s encoder, in a thread that
+/// closes `p` after it, and gives back whether sending ended as done, with `rx`, so `rx` stays
+/// subscribed until the thread is joined.
+fn sending(d: &Arc<Dest>, mut p: Publisher, mut rx: Receiver) -> std::thread::JoinHandle<(bool, Receiver)> {
+    let (feed, d) = (d.feed(), Arc::clone(d));
+    std::thread::spawn(move || {
+        let end = send_all(&d, &feed.headers, &mut p, &mut rx);
+        let _ = p.close();
+        (matches!(end, End::Done), rx)
+    })
+}
+
+#[test]
+fn a_new_setup_given_while_a_packet_is_sent_stays_a_restart() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("x", &closed_url(), "k")], quick()).unwrap();
+    let d = Arc::new(Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None, Arc::clone(&out.hub.main)));
+    let p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
+    assert_eq!(next(&seen_a), Seen::Publish("k".into()));
+    let (mut fanout, rx, _) = copy_feed();
+    let (paused, go) = held_sender(&d);
+    let sender = sending(&d, p, rx);
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
+    let mut pool = PacketPool::new(4, 0).unwrap();
+    let packet = pool.share(&mut vec![0, 0, 0, 1, 0x65], Info::video(0, 0, true)).unwrap();
+    assert_eq!(fanout.publish(&packet), 1);
+    go.send(()).unwrap();
+    // A Stop and a Start with the same setup come while the packet is sent: the connection goes
+    // on sending, so the next try is not a first one.
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Sent);
+    d.restarted.store(true, Ordering::SeqCst);
+    go.send(()).unwrap();
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
+    assert!(!d.restarted.load(Ordering::SeqCst), "a restart that left the connection sending was kept");
+    assert_eq!(fanout.publish(&packet), 1);
+    go.send(()).unwrap();
+    // A Stop and a Start with a new setup come while the next packet is sent: that connection
+    // closes, so the next try is a first one, with its failed tries counted from none.
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Sent);
+    renewed(&d, &a, "k2");
+    drop((paused, go));
+    let (done, _rx) = sender.join().unwrap();
+    assert!(done, "sending ends for the new setup");
+    assert!(d.restarted.load(Ordering::SeqCst), "the restart with a new setup was cleared");
     let _ = out.stop();
 }
 
@@ -897,6 +944,24 @@ fn a_start_that_finds_its_thread_ending_takes_the_new_setup() {
     b.alive.store(true, Ordering::SeqCst);
     let applied = std::thread::scope(|s| {
         let start = s.spawn(|| out.start_destination_as(&setup("b", &c, "kc")));
+        // The start waits for the slot before it decides whether the thread sends. A start that
+        // decides without the slot ends while `b` still shows as running. GUARD only ends a test
+        // that would otherwise hang. The slot is let go before a failure, so the start can end.
+        let waited = Instant::now();
+        while b.waits.load(Ordering::SeqCst) == 0 {
+            let fault = if start.is_finished() {
+                Some("the start decided while the thread held its slot")
+            } else if waited.elapsed() >= GUARD {
+                Some("the start never waited for the thread's slot")
+            } else {
+                None
+            };
+            if let Some(fault) = fault {
+                drop(slot);
+                panic!("{fault}");
+            }
+            std::thread::yield_now();
+        }
         // The thread decides to end with its slot locked, as `ends` and `fail` do.
         b.alive.store(false, Ordering::SeqCst);
         drop(slot);
@@ -2200,7 +2265,7 @@ fn a_stopped_destination_that_gives_its_place_keeps_no_check() {
     let d1 = out.hub.find("d1").unwrap();
     assert!(set_up(&d1, Given { key: Some("k"), server: Some(("rtmp://check.example.test/live", None)), ..Given::default() }));
     check_after(&out.hub, &d1, &Failure::new(Cause::Refused, "refused"), &d1.setup());
-    looked.recv().unwrap();
+    looked.recv_timeout(GUARD).unwrap_or_else(|e| panic!("the check of d1 did not look up its server: {e}"));
     assert!(matches!(checks.state("Show", "d1"), Some(diagnose::CheckState::Running { .. })));
     // An added destination takes d1's place, and d1's check ends with it.
     out.hub.find_or_add("new", None, &out.hub.main).unwrap();
@@ -2819,8 +2884,11 @@ fn a_copy_whose_file_failed_leaves_its_place_to_a_destination() {
     let targets: Vec<Target> = (1..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
     let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
     let mut out = Streaming::start_copying(&job, targets, slow, "/videos/Stream.mkv".into(), open).unwrap();
-    // The copy's thread ends after its file fails to open, and its receiver goes with it.
+    // The copy's thread ends after its file fails to open, and its receiver goes with it. GUARD
+    // only ends a test that would otherwise hang.
+    let waited = Instant::now();
     while out.copy.as_ref().is_some_and(StreamCopy::subscribed) {
+        assert!(waited.elapsed() < GUARD, "the copy still holds its subscription after its file failed: {:?}", out.stream_copy());
         std::thread::yield_now();
     }
     assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("not opened")));
