@@ -389,6 +389,18 @@ impl ExportRing {
         self.detached_ready.fetch_max(value, Ordering::AcqRel);
     }
 
+    /// Read `counter` once and keep the value it gives as [`ExportRing::observe_ready`] does.
+    /// Returns that value, or `None` when it cannot be read now, so a caller compares the same
+    /// value the ring keeps.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn observe_counter(&self, counter: &dyn ReadyCounter) -> Option<u64> {
+        let reached = counter.reached();
+        if let Some(done) = reached {
+            self.observe_ready(done);
+        }
+        reached
+    }
+
     /// Keep the ready value the compositor's device reached (`None` when it could not be read)
     /// after the last copy, which signals `target`. When the value cannot be read or falls short
     /// of `target`, the frames after it never become ready, and [`Fallback::DeviceLost`] is

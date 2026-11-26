@@ -901,11 +901,10 @@ mod export {
             self.poll();
         }
 
-        /// Copy the value the queue has signaled on the semaphore to the ring, without waiting.
-        fn poll(&self) {
-            if let Some(done) = self.reached() {
-                self.ring.observe_ready(done);
-            }
+        /// Copy the value the queue has signaled on the semaphore to the ring, without waiting, and
+        /// return it (`None` when it cannot be read).
+        fn poll(&self) -> Option<u64> {
+            self.ring.observe_counter(self)
         }
     }
 
@@ -923,8 +922,9 @@ mod export {
             let unsubmitted = unsafe { self.queue.as_hal::<wgpu::hal::api::Vulkan>() }.is_some_and(|hal| hal.remove_signal_semaphore(self.semaphore));
             // The newest value a submission still signals.
             let target = if unsubmitted { self.submitted.load(Ordering::Acquire) } else { self.queued.load(Ordering::Acquire) };
-            self.poll();
-            if self.reached().is_some_and(|done| done >= target) {
+            // One read: the ring keeps the value the comparison uses, since it cannot read the
+            // semaphore once it is destroyed.
+            if self.poll().is_some_and(|done| done >= target) {
                 // SAFETY: no submission still signals the semaphore: the one not submitted was taken
                 // off the list, and the submitted ones have finished.
                 unsafe { self.device.destroy_semaphore(self.semaphore, None) };

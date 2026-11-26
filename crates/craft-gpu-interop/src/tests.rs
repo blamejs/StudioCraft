@@ -917,6 +917,29 @@ fn a_ring_reads_its_counter_while_it_exists_and_keeps_the_last_value() {
     assert_eq!(ring.ready(), 5, "the value stays once the compositor side is gone");
 }
 
+/// A counter whose value grows on every read, like a semaphore the queue signals between reads.
+struct Advancing(std::sync::atomic::AtomicU64);
+
+impl crate::export::ReadyCounter for Advancing {
+    fn reached(&self) -> Option<u64> {
+        Some(self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1)
+    }
+}
+
+/// The value a caller compares is the value the ring keeps: a counter read again after the ring
+/// took its value would leave the ring behind once the counter is gone.
+#[test]
+fn a_ring_keeps_the_counter_value_its_caller_compares() {
+    let ring = ExportRing::detached(64, 2);
+    let counter = Advancing(0.into());
+    let read = ring.observe_counter(&counter);
+    assert_eq!(read, Some(ring.ready()), "the ring keeps the value that was compared");
+    assert_eq!(read, Some(1), "the counter was read once");
+    let unreadable = Counter(9.into(), false.into());
+    assert_eq!(ring.observe_counter(&unreadable), None);
+    assert_eq!(ring.ready(), 1, "an unreadable counter leaves the value");
+}
+
 /// Only the compositor's device moves a Linux ring with DMA-BUFs to a new ready value.
 #[cfg(target_os = "linux")]
 #[test]
