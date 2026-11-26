@@ -680,7 +680,7 @@ hardware choice is available to a destination only through the stream's own enco
 
 The stream's encoder runs for as long as the stream does, and the copy of the stream holds what it
 makes. An encoder of a destination's own starts when the first destination that uses it starts, and
-runs until the stream stops. One that cannot start, or that stops while the stream runs, fails its
+runs until the stream stops or no destination uses it any more. One that cannot start, or that stops while the stream runs, fails its
 destinations with the encoder's error, and the stream and the other destinations go on. Starting
 such a destination again starts its encoder again. A destination started while the stream runs
 shares the stream's encoder only when it names the encoder and bitrate the stream started with,
@@ -689,6 +689,8 @@ added to a running stream only when the stream started with at least one destina
 encoder of its own, on or off; otherwise the stream has to be stopped and started again first. A
 stream runs at most 64 encoders for its destinations, besides its own; an encoder that stopped does
 not count ([Control protocol](control-protocol.md#viewstreaming-and-the-streamdestination-commands)).
+A destination that is stopped keeps its encoder. When it is started again with another encoder and
+no other destination uses its old one, the old encoder stops.
 
 ### Copy of the stream
 
