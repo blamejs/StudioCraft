@@ -338,6 +338,38 @@ fn encode_ready<C: Surfaces>(
     Ok(())
 }
 
+/// For a stream that ends: [`encode_ready`] with the encoder allowed to wait, until no frame of
+/// `shared` waits or `wait` has passed on `now` since the first try returned. A copy that finished
+/// after the last try is encoded on the next try at once; `pause` runs only while the oldest
+/// frame's copy is still running.
+#[allow(clippy::too_many_arguments)]
+fn encode_waiting<C: Surfaces>(
+    core: &mut C,
+    shared: &mut Shared,
+    name: &str,
+    buffer: impl Fn(&ExportRing, usize) -> Option<(i32, PrimeFrame)>,
+    out: &mut Vec<Packet>,
+    wait: std::time::Duration,
+    mut now: impl FnMut() -> std::time::Instant,
+    mut pause: impl FnMut(),
+) -> Result<(), PluginError> {
+    let mut until = None;
+    loop {
+        encode_ready(core, shared, name, &buffer, out, true)?;
+        if shared.feed.waiting() == 0 {
+            return Ok(());
+        }
+        // The first try may wait for earlier pictures; the copies get `wait` after it.
+        let t = now();
+        if t >= *until.get_or_insert(t + wait) {
+            return Ok(());
+        }
+        if shared.feed.copy_running() {
+            pause();
+        }
+    }
+}
+
 impl VaSession {
     /// The settings the session runs with.
     pub fn config(&self) -> &Config {
@@ -397,14 +429,11 @@ impl VideoSession for VaSession {
     }
 
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
-        // The stream ends here, so the encoder may wait for its earlier pictures.
-        self.encode_ready(out, true)?;
         // The last frames' copies are usually still running on the compositor's queue when the
         // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded.
-        let until = std::time::Instant::now() + FLUSH_WAIT;
-        while self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            self.encode_ready(out, true)?;
+        if let Some(shared) = &mut self.shared {
+            let pause = || std::thread::sleep(std::time::Duration::from_millis(1));
+            encode_waiting(&mut self.core, shared, self.name, ring_buffer, out, FLUSH_WAIT, std::time::Instant::now, pause)?;
         }
         let ps = match self.core.flush() {
             Ok(ps) => ps,
@@ -696,6 +725,41 @@ mod tests {
         s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 4).unwrap(), 3);
         encode_ready(&mut core, &mut s, "test", layout, &mut out, true).unwrap();
         assert_eq!(s.feed.waiting(), 0, "a flush takes the frame though the encoder is busy");
+    }
+
+    /// At the end of a stream, a frame whose copy finishes just after a try is encoded on the next
+    /// try without a pause, also when the first try took longer than the wait; one whose copy is
+    /// still running at the deadline stays waiting.
+    #[test]
+    fn a_flush_encodes_a_frame_whose_copy_finishes_after_a_try() {
+        let start = std::time::Instant::now();
+        let wait = std::time::Duration::from_millis(100);
+        let ring = ExportRing::detached(256, 144);
+        let (mut core, mut s, mut out) = (FakeCore::default(), shared(&ring), Vec::new());
+        ring.set_ready(1);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 1, 2).unwrap(), 1);
+        // The first try returns a second later, and the second frame's copy has just finished.
+        let now = || {
+            ring.set_ready(2);
+            start + std::time::Duration::from_secs(1)
+        };
+        let mut pauses = 0;
+        encode_waiting(&mut core, &mut s, "test", layout, &mut out, wait, now, || pauses += 1).unwrap();
+        assert_eq!((s.feed.waiting(), s.feed.reading(), pauses), (0, 2, 0), "both frames are taken without a pause");
+
+        let ring = ExportRing::detached(256, 144);
+        let (mut core, mut s) = (FakeCore::default(), shared(&ring));
+        s.feed.offer(ExportFrame::new(std::sync::Arc::clone(&ring), 0, 1).unwrap(), 0);
+        let mut clock = start;
+        let now = || {
+            clock += std::time::Duration::from_millis(60);
+            clock
+        };
+        let mut pauses = 0;
+        encode_waiting(&mut core, &mut s, "test", layout, &mut out, wait, now, || pauses += 1).unwrap();
+        // The wait starts at 60 ms: tries at 60 and 120 ms pause, and the one at 180 ms stops.
+        assert_eq!((s.feed.waiting(), pauses), (1, 2), "a copy still running at the deadline stays waiting");
     }
 
     /// An encoder that stops while a picture never finishes may still read the ring's buffers: none
