@@ -5,9 +5,9 @@
 //!   studio feeds that encoder's queues directly, so the split costs it nothing.
 //! - Otherwise one thread takes each frame from the stream's video queue and offers it to every
 //!   encoder's queue; a frame is shared, not copied. It takes each block of sound and copies it
-//!   for every encoder but the last, which gets the block itself. Each encoder's copies come from
-//!   a pool as large as its queue, so after the pools have warmed up a block is copied without
-//!   allocating, however far an encoder falls behind.
+//!   for every encoder, then returns the block to the pool it came from. Each encoder's copies
+//!   come from a pool as large as its queue, so after the pools have warmed up a block is copied
+//!   without allocating, and an encoder that falls behind never holds the blocks the mixer reuses.
 //! - The thread takes at most a queue's worth of frames, then of sound, before it turns to the
 //!   other, so a burst of one never starves the other.
 //! - An encoder added while the stream runs ([`Split::add`]) gets frames from the next one on. The
@@ -286,18 +286,17 @@ fn join(joins: &ArrayQueue<Fed>, outs: &mut Vec<Fed>) {
     }
 }
 
-/// A copy of `block` from its pool to every queue of `queues` but the last, and `block` to the
-/// last.
+/// A copy of `block` from its pool to every queue of `queues`. `block` goes back to the pool it
+/// came from as soon as it is copied, so an encoder that falls behind holds only blocks of its own
+/// pool, never those the mixer reuses.
 fn hand_on(block: PooledBlock, queues: &[(Arc<Fifo<PooledBlock>>, Arc<AudioPool>)]) {
-    let Some(((last, _), rest)) = queues.split_last() else { return };
-    for (q, pool) in rest {
+    for (q, pool) in queues {
         let mut copy = pool.take();
         copy.samples.clear();
         copy.samples.extend_from_slice(&block.samples);
         copy.pts = block.pts;
         q.push(copy);
     }
-    last.push(block);
 }
 
 #[cfg(test)]
@@ -498,11 +497,14 @@ mod tests {
             hand_on(block(&blocks, pts, 0.5), &queues);
         }
         assert!(inputs.iter().all(|i| i.audio.len() == i.audio.capacity()));
-        // The last encoder gets the blocks themselves; the others get copies from their own pools.
-        for f in &fed[..2] {
+        // Every encoder gets copies from its own pool, the last one included.
+        for f in &fed {
             assert!(f.pool.made() <= f.pool.capacity(), "{} blocks made", f.pool.made());
             assert_eq!(f.pool.capacity(), 8 + SPARE_BLOCKS);
         }
+        // The blocks handed on all went back to their pool, however far the encoders fell behind.
+        assert_eq!(blocks.made(), 1, "{} source blocks made", blocks.made());
+        assert_eq!(blocks.free(), 1);
     }
 
     #[test]
