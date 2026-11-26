@@ -776,6 +776,15 @@ impl Dest {
         self.alive.store(false, Ordering::SeqCst);
     }
 
+    /// A start of it could not start its encoder: it fails with `failure`, unless its thread still
+    /// runs, which then ends as it was asked to.
+    fn fail_start(&self, failure: Failure) {
+        let _slot = lock(&self.thread);
+        if !self.running() {
+            self.set(DestinationStatus::Failed(failure));
+        }
+    }
+
     /// The thread gives up because the encoder `ended.0` it ran for itself ended, with `ended.1`,
     /// unless it was started again since or given another encoder: then it goes on, and says so
     /// with `false`. Asked to stop since, or with the stream of `hub` stopping, it ends as stopped.
@@ -1643,10 +1652,12 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
-        // Cleared before the connect reads the setup, so a new setup given from here on closes
-        // this connection.
+        // Cleared before the connect reads the setup and the encoder, so a new setup or encoder
+        // given from here on closes this connection. A start gives the encoder before it sets
+        // `renew`, so the encoder read here is the one this connection's headers come from.
         d.renew.store(false, Ordering::SeqCst);
         let setup = d.setup();
+        let feed = d.feed();
         let connected = connect(hub, d, &setup);
         // Started again while it waited or connected: this try's answer is that of a first try, and
         // the tries after it are counted from none, and a later failure may be checked again.
@@ -1699,7 +1710,6 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             continue;
         }
         let started = Instant::now();
-        let feed = d.feed();
         let end = match feed.control.subscribe(feed.ring) {
             Ok(mut rx) => send_all(d, &feed.headers, &mut publisher, &mut rx),
             Err(e) => End::Failed(Failure::new(Cause::Other, format!("no room for the destination's packets: {e}"))),
@@ -1764,8 +1774,13 @@ fn lost(rx: &Receiver) -> u64 {
 }
 
 /// Send the headers, then every packet `rx` delivers, until the destination is stopped, the
-/// stream ends or the connection fails.
+/// stream ends or the connection fails. Stopped or given a new setup or encoder before the
+/// headers go out or before it is shown live, it sends nothing more and is not shown live.
 fn send_all(d: &Dest, h: &Headers, p: &mut Publisher, rx: &mut Receiver) -> End {
+    let changed = || d.stopping() || d.renew.load(Ordering::SeqCst);
+    if changed() {
+        return End::Done;
+    }
     let (bytes, dropped) = (d.bytes.load(Ordering::Relaxed), d.dropped.load(Ordering::Relaxed));
     let mut headers = || -> Result<(), craft_rtmp::Error> {
         let bad = |_| craft_rtmp::Error::BadInput("the encoder's configuration cannot be streamed");
@@ -1775,6 +1790,9 @@ fn send_all(d: &Dest, h: &Headers, p: &mut Publisher, rx: &mut Receiver) -> End 
     };
     if let Err(e) = headers() {
         return end_for(e);
+    }
+    if changed() {
+        return End::Done;
     }
     d.set(DestinationStatus::Live);
     let mut zero = None;
@@ -2199,7 +2217,7 @@ impl Streaming {
             let feed = match s.feed_for(d.target.encoder.as_ref()) {
                 Ok(feed) => feed,
                 Err(e) => {
-                    d.fail(Failure::new(Cause::Encoder, format!("its video encoder could not start: {e}")));
+                    d.fail(not_started(&e));
                     continue;
                 }
             };
@@ -2246,6 +2264,12 @@ impl Streaming {
         Ok(feed)
     }
 
+    /// The encoder for a start of `d` with `own`, as [`Streaming::feed_for`] finds it. When it
+    /// cannot start, `d` fails for it, as at the stream's start, and the start gets the error.
+    fn feed_to_start(&self, d: &Dest, own: Option<&OwnEncoder>) -> Result<Arc<EncoderFeed>, PluginError> {
+        self.feed_for(own).inspect_err(|e| d.fail_start(not_started(e)))
+    }
+
     /// Drops the encoders of `groups`, held from `own`, that ended. An encoder that ended is not
     /// used again. Once dropped, the split stops handing it input and it no longer counts toward
     /// the encoders the stream can run. A destination still holding its packets keeps them, and
@@ -2260,7 +2284,18 @@ impl Streaming {
             ended
         };
         self.set_taps(groups);
+        self.retire(&ended);
         drop(ended);
+    }
+
+    /// Stops the split handing input to the encoders of `gone` before they are dropped, so each
+    /// one drains its queues and ends while the encoders that still serve a destination go on.
+    fn retire(&self, gone: &[(Arc<EncoderFeed>, Native)]) {
+        if let Some(split) = &self.split {
+            for (_, native) in gone {
+                split.retire(&native.video());
+            }
+        }
     }
 
     /// Stops and drops the encoders of `groups`, held from `own`, that no destination holds: one a
@@ -2279,6 +2314,7 @@ impl Streaming {
             return;
         }
         self.set_taps(groups);
+        self.retire(&unused);
         drop(unused);
     }
 
@@ -2326,6 +2362,11 @@ impl Streaming {
             }
         }
     }
+}
+
+/// Why a destination fails when its own encoder, which `e` says why, cannot start.
+fn not_started(e: &PluginError) -> Failure {
+    Failure::new(Cause::Encoder, format!("its video encoder could not start: {e}"))
 }
 
 /// The first problem with `targets`: none, too many, an empty id, an id used twice, none enabled,
@@ -2515,7 +2556,7 @@ impl OutputInstance for Streaming {
         }
         // It sends with the encoder it was set up with, started again when that one ended.
         let own = lock(&d.own).clone();
-        let feed = self.feed_for(own.as_ref())?;
+        let feed = self.feed_to_start(&d, own.as_ref())?;
         spawn(&self.hub, &d, Given { key, feed: Some(&feed), ..Given::default() }).map(|_| ())
     }
 
@@ -2549,8 +2590,11 @@ impl OutputInstance for Streaming {
             d.release_feed(&self.hub.main);
         }
         // The encoder is found or started before the destination is added, so one that cannot
-        // start adds nothing.
-        let feed = self.feed_for(setup.encoder.as_ref())?;
+        // start adds nothing. One that was there fails, as at the stream's start.
+        let feed = match &found {
+            Some(d) => self.feed_to_start(d, setup.encoder.as_ref())?,
+            None => self.feed_for(setup.encoder.as_ref())?,
+        };
         let d = match found {
             Some(d) => d,
             None => self.hub.find_or_add(id, service, &feed)?,

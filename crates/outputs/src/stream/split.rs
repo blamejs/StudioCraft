@@ -15,7 +15,8 @@
 //! - Every queue drops its oldest item when full, so an encoder that falls behind costs itself
 //!   frames and never stalls the split, the other encoders or the compositor.
 //! - The split holds an encoder's queues weakly. Once the encoder is dropped, the split stops
-//!   handing it input and it no longer counts toward [`MAX_ENCODERS`].
+//!   handing it input and it no longer counts toward [`MAX_ENCODERS`]. An encoder about to stop
+//!   is retired first ([`Split::retire`]), so it drains its queues while the others go on.
 //! - The encoders' queues hold frames the stream's queue no longer does. [`Split::held`] counts
 //!   them, so the compositor keeps enough frames for every encoder's queue to fill.
 
@@ -55,17 +56,39 @@ struct Fed {
     audio: Weak<Fifo<PooledBlock>>,
     /// The blocks its copies of the sound are made in.
     pool: Arc<AudioPool>,
+    /// Set when the encoder is retired, shared with its [`Entry`].
+    retired: Arc<AtomicBool>,
 }
 
 impl Fed {
     fn of(input: &Input) -> Fed {
         let pool = Pool::new(input.audio.capacity() + SPARE_BLOCKS, silent_block);
-        Fed { video: Arc::downgrade(&input.video), audio: Arc::downgrade(&input.audio), pool }
+        let retired = Arc::new(AtomicBool::new(false));
+        Fed { video: Arc::downgrade(&input.video), audio: Arc::downgrade(&input.audio), pool, retired }
     }
 
-    /// Whether the encoder still holds its queues.
+    /// Whether the encoder still holds its queues and was not retired.
     fn alive(&self) -> bool {
-        self.video.strong_count() > 0
+        self.video.strong_count() > 0 && !self.retired.load(Ordering::Acquire)
+    }
+
+    /// The encoder as [`Split::fed`] lists it.
+    fn entry(&self) -> Entry {
+        Entry { video: Weak::clone(&self.video), retired: Arc::clone(&self.retired) }
+    }
+}
+
+/// An encoder the split feeds, as the split lists it for the count of those held and to retire
+/// it.
+struct Entry {
+    video: Weak<Fifo<Arc<PooledFrame>>>,
+    retired: Arc<AtomicBool>,
+}
+
+impl Entry {
+    /// Whether the encoder still holds its queues and was not retired.
+    fn fed(&self) -> bool {
+        self.video.strong_count() > 0 && !self.retired.load(Ordering::Acquire)
     }
 }
 
@@ -75,9 +98,9 @@ pub(crate) struct Split {
     audio: Arc<Fifo<PooledBlock>>,
     /// Encoders added while the stream runs, for the thread to pick up.
     joins: Arc<ArrayQueue<Fed>>,
-    /// The video queue of every encoder fed, the first one included, for the count of those
-    /// still held.
-    fed: Mutex<Vec<Weak<Fifo<Arc<PooledFrame>>>>>,
+    /// Every encoder fed, the first one included, for the count of those still held and to
+    /// retire one.
+    fed: Mutex<Vec<Entry>>,
     /// The frames the encoders of `fed` still held when the last one was added can hold.
     held: AtomicUsize,
     /// The presentation time of the newest frame handed on, as ticks; [`NO_FRAME`] before one.
@@ -86,10 +109,14 @@ pub(crate) struct Split {
     thread: Option<JoinHandle<()>>,
 }
 
+/// Frames an encoder holds beyond its queue: the one it is encoding, and the one before it, which
+/// it keeps to fill the frames it skips.
+const TAKEN_FRAMES: usize = 2;
+
 /// How many frames the encoders of `fed` still held can hold at once: each one's queue, and the
-/// frame it has taken.
-fn holds(fed: &[Weak<Fifo<Arc<PooledFrame>>>]) -> usize {
-    fed.iter().filter_map(Weak::upgrade).map(|v| v.capacity() + 1).sum()
+/// frames it has taken.
+fn holds(fed: &[Entry]) -> usize {
+    fed.iter().filter_map(|e| e.video.upgrade()).map(|v| v.capacity() + TAKEN_FRAMES).sum()
 }
 
 fn silent_block() -> AudioBlock {
@@ -106,10 +133,10 @@ impl Split {
         let newest = Arc::new(AtomicI64::new(NO_FRAME));
         let stop = Arc::new(AtomicBool::new(false));
         let (v, a, j, n, s) = (Arc::clone(&video), Arc::clone(&audio), Arc::clone(&joins), Arc::clone(&newest), Arc::clone(&stop));
-        let fed = vec![Arc::downgrade(&first.video)];
+        let first = Fed::of(first);
+        let fed = vec![first.entry()];
         let held = AtomicUsize::new(holds(&fed));
         let fed = Mutex::new(fed);
-        let first = Fed::of(first);
         let thread = std::thread::Builder::new()
             .name("stream split".into())
             .spawn(move || run(&v, &a, &j, &n, &s, first))
@@ -133,14 +160,17 @@ impl Split {
     pub(crate) fn add(&self, input: &Input) -> Result<(), PluginError> {
         let refused = || PluginError::Failed(format!("a stream can run at most {MAX_ENCODERS} video encoders"));
         let mut fed = self.fed.lock().unwrap_or_else(PoisonError::into_inner);
-        fed.retain(|v| v.strong_count() > 0);
-        if fed.len() >= MAX_ENCODERS {
+        // A retired encoder that still holds its queues stays listed for the frames it holds.
+        fed.retain(|e| e.video.strong_count() > 0);
+        if fed.iter().filter(|e| e.fed()).count() >= MAX_ENCODERS {
             return Err(refused());
         }
         // Full only while the thread has not yet picked up as many encoders as the count allows,
-        // dropped ones included. Those are taken out, so the encoders held always fit. Only `add`
-        // pushes, with `fed` held, so the room made stays free.
-        if let Err(back) = self.joins.push(Fed::of(input)) {
+        // dropped and retired ones included. Those are taken out, so the encoders held always
+        // fit. Only `add` pushes, with `fed` held, so the room made stays free.
+        let joining = Fed::of(input);
+        let entry = joining.entry();
+        if let Err(back) = self.joins.push(joining) {
             for _ in 0..self.joins.len() {
                 if let Some(waiting) = self.joins.pop().filter(Fed::alive) {
                     let _ = self.joins.push(waiting);
@@ -148,12 +178,23 @@ impl Split {
             }
             self.joins.push(back).map_err(|_| refused())?;
         }
-        fed.push(Arc::downgrade(&input.video));
+        fed.push(entry);
         self.held.store(holds(&fed), Ordering::Release);
         Ok(())
     }
 
-    /// How many frames the encoders fed can hold at once: each one's queue, and the frame it has
+    /// Stop handing input to the encoder whose video queue is `video`, from the next item on, so
+    /// it can drain its queues and end while the other encoders go on getting input. It no longer
+    /// counts toward [`MAX_ENCODERS`]. The frames it can hold count in [`Split::held`] until it
+    /// lets go of its queues and the next encoder is added.
+    pub(crate) fn retire(&self, video: &Arc<Fifo<Arc<PooledFrame>>>) {
+        let fed = self.fed.lock().unwrap_or_else(PoisonError::into_inner);
+        for e in fed.iter().filter(|e| std::ptr::eq(e.video.as_ptr(), Arc::as_ptr(video))) {
+            e.retired.store(true, Ordering::Release);
+        }
+    }
+
+    /// How many frames the encoders fed can hold at once: each one's queue, and the frames it has
     /// taken. They can all be frames the stream's queue no longer holds, when the encoders fall
     /// behind at different rates. Counted as each encoder is added, so an encoder dropped since
     /// the last was added still counts. Read without allocating.
@@ -226,11 +267,22 @@ fn run(video: &Fifo<Arc<PooledFrame>>, audio: &Fifo<PooledBlock>, joins: &ArrayQ
     }
 }
 
-/// Drops the encoders of `outs` that were dropped, and adds those waiting in `joins`.
+/// Drops the encoders of `outs` that were dropped or retired, and adds those waiting in `joins`
+/// that were not. `outs` never holds more than [`MAX_ENCODERS`], so it grows without allocating.
 fn join(joins: &ArrayQueue<Fed>, outs: &mut Vec<Fed>) {
     outs.retain(Fed::alive);
     while let Some(fed) = joins.pop() {
-        outs.push(fed);
+        if !fed.alive() {
+            continue;
+        }
+        // An encoder kept above may have been dropped since, for the one waiting to take its
+        // place.
+        if outs.len() >= MAX_ENCODERS {
+            outs.retain(Fed::alive);
+        }
+        if outs.len() < MAX_ENCODERS {
+            outs.push(fed);
+        }
     }
 }
 
@@ -356,17 +408,64 @@ mod tests {
     }
 
     #[test]
-    fn the_frames_held_count_every_encoders_queue_and_the_frame_it_took() {
+    fn the_frames_held_count_every_encoders_queue_and_the_frames_it_took() {
+        // Each encoder holds its queue, the frame it encodes and the one before it.
         let first = input_of(4);
         let split = Split::start(&first).unwrap();
-        assert_eq!(split.held(), 5);
+        assert_eq!(split.held(), 6);
         let (late, later) = (input_of(16), input_of(8));
         split.add(&late).unwrap();
-        assert_eq!(split.held(), 5 + 17, "an encoder added while the stream runs counts");
+        assert_eq!(split.held(), 6 + 18, "an encoder added while the stream runs counts");
         drop(late);
-        assert_eq!(split.held(), 22, "a dropped encoder counts until the next is added");
+        assert_eq!(split.held(), 24, "a dropped encoder counts until the next is added");
         split.add(&later).unwrap();
-        assert_eq!(split.held(), 5 + 9);
+        assert_eq!(split.held(), 6 + 10);
+    }
+
+    #[test]
+    fn the_encoders_handed_input_never_outgrow_their_room() {
+        // Every place is taken; two encoders are dropped, and of the four that wait to take
+        // their places, two were dropped before the thread picked them up.
+        let mut inputs: Vec<Input> = (0..MAX_ENCODERS).map(|_| input()).collect();
+        let mut outs: Vec<Fed> = Vec::with_capacity(MAX_ENCODERS);
+        outs.extend(inputs.iter().map(Fed::of));
+        let room = outs.capacity();
+        inputs.truncate(MAX_ENCODERS - 2);
+        let joins = ArrayQueue::new(MAX_ENCODERS);
+        let mut waiting: Vec<Input> = (0..4).map(|_| input()).collect();
+        for w in &waiting {
+            assert!(joins.push(Fed::of(w)).is_ok());
+        }
+        waiting.truncate(2);
+        join(&joins, &mut outs);
+        assert_eq!(outs.len(), MAX_ENCODERS);
+        assert_eq!(outs.capacity(), room, "the list grew");
+        assert!(joins.is_empty());
+    }
+
+    #[test]
+    fn a_retired_encoder_gets_nothing_more_while_the_others_go_on() {
+        let (a, b) = (input_of(32), input_of(32));
+        let (av, bv) = (Arc::clone(&a.video), Arc::clone(&b.video));
+        let mut split = Split::start(&a).unwrap();
+        split.add(&b).unwrap();
+        let frames: Arc<Pool<VideoFrame>> = Pool::new(8, VideoFrame::default);
+        split.video().push(frame(&frames, 1));
+        while split.newest().is_none() {
+            std::thread::yield_now();
+        }
+        // b still holds its queues while it drains them, but gets no more input.
+        split.retire(&b.video);
+        split.video().push(frame(&frames, 2));
+        split.stop();
+        assert_eq!(av.len(), 2, "the encoder that is not retired still gets every frame");
+        assert_eq!(bv.len(), 1, "the retired encoder got a frame after it was retired");
+        // It no longer counts toward the encoders a split can feed.
+        let more: Vec<Input> = (1..MAX_ENCODERS).map(|_| input()).collect();
+        for m in &more {
+            assert!(split.add(m).is_ok());
+        }
+        drop(b);
     }
 
     #[test]

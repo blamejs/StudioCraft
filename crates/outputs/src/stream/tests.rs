@@ -808,6 +808,25 @@ fn renewed(d: &Dest, server: &str, key: &str) {
 }
 
 #[test]
+fn a_connection_given_a_new_setup_before_it_sends_sends_nothing_and_is_not_live() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("x", &closed_url(), "k")], quick()).unwrap();
+    let main = Arc::clone(&out.hub.main);
+    let d = Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None, Arc::clone(&main));
+    let mut p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
+    assert_eq!(next(&seen_a), Seen::Publish("k".into()));
+    let (_fanout, mut rx, _) = copy_feed();
+    // A start gave it another setup or encoder after the connection was made.
+    d.renew.store(true, Ordering::SeqCst);
+    assert!(matches!(send_all(&d, &main.headers, &mut p, &mut rx), End::Done));
+    let _ = p.close();
+    assert_eq!(next(&seen_a), Seen::Closed, "headers went out on the old connection");
+    assert_eq!(d.status(), DestinationStatus::Stopped, "it was shown live");
+    let _ = out.stop();
+}
+
+#[test]
 fn a_packet_that_comes_after_a_new_setup_is_not_sent_with_the_old_one() {
     let (a, seen_a) = server(vec![Plan::Accept]);
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
@@ -3041,7 +3060,10 @@ fn a_stopped_destination_started_with_another_encoder_lets_go_of_its_own_first()
     let e = out.start_destination_as(&DestinationSetup { encoder: Some(missing_encoder()), ..setup("b", &closed_url(), "kb") }).unwrap_err();
     assert!(e.to_string().contains("none-such"), "{e}");
     assert!(!Arc::ptr_eq(&feed_of(&out, "b"), &old));
-    assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Stopped);
+    // It fails for its encoder, as a destination whose encoder cannot start at the stream's start.
+    let DestinationStatus::Failed(f) = until(&out, "b", |_| true).status else { unreachable_state() };
+    assert_eq!(f.cause, Cause::Encoder);
+    assert_eq!(f.detail, format!("its video encoder could not start: {e}"));
     // Started again as it was, it sends with the encoder it held, which still runs.
     out.start_destination("b", None).unwrap();
     assert!(Arc::ptr_eq(&feed_of(&out, "b"), &old));
@@ -3051,6 +3073,31 @@ fn a_stopped_destination_started_with_another_encoder_lets_go_of_its_own_first()
     out.stop().unwrap();
     until_closed(&seen_a);
     until_closed(&seen_b);
+}
+
+#[test]
+fn a_destination_started_again_whose_encoder_cannot_start_fails_for_it() {
+    let (a, seen) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let targets = vec![target("a", &a, "ka"), with_own("b", &closed_url(), "kb", missing_encoder())];
+    let mut out = Streaming::start_timed(&job, targets, quick()).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("ka".into()));
+    until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    out.stop_destination("b").unwrap();
+    assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Stopped);
+    // Started again by its id, its encoder still cannot start: it fails again, and the start
+    // says why.
+    let e = out.start_destination("b", None).unwrap_err();
+    let DestinationStatus::Failed(f) = until(&out, "b", |_| true).status else { unreachable_state() };
+    assert_eq!(f.cause, Cause::Encoder);
+    assert_eq!(f.detail, format!("its video encoder could not start: {e}"));
+    // The other destination goes on.
+    media(&seen, 10);
+    assert_eq!(until(&out, "a", |d| d.status == DestinationStatus::Live).status, DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }
 
 #[test]
