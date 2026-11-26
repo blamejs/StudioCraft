@@ -500,6 +500,20 @@ struct Dest {
     /// Times [`Dest::sending`] found `thread` locked and waited for it.
     #[cfg(test)]
     waits: AtomicU32,
+    /// Where [`send_all`] tells a test it reached a [`Pause`], then waits until the test lets it
+    /// go on; `None`, or a test that hung up, lets it go on at once.
+    #[cfg(test)]
+    pause: Mutex<Option<(std::sync::mpsc::Sender<Pause>, std::sync::mpsc::Receiver<()>)>>,
+}
+
+/// A point in [`send_all`] where a test can hold the sending thread.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pause {
+    /// Past the check for a stop or a new setup, before the wait for a packet.
+    Waiting,
+    /// A packet was sent or the connection was read without an error.
+    Sent,
 }
 
 impl Dest {
@@ -531,6 +545,20 @@ impl Dest {
             thread: Mutex::new(None),
             #[cfg(test)]
             waits: AtomicU32::new(0),
+            #[cfg(test)]
+            pause: Mutex::new(None),
+        }
+    }
+
+    /// Tells the test holding [`Dest::pause`] that the thread reached `at`, and waits until it
+    /// lets the thread go on.
+    #[cfg(test)]
+    fn pause_at(&self, at: Pause) {
+        let held = lock(&self.pause);
+        if let Some((tell, go)) = held.as_ref()
+            && tell.send(at).is_ok()
+        {
+            let _ = go.recv();
         }
     }
 
@@ -1633,6 +1661,8 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
         if d.stopping() || d.renew.load(Ordering::SeqCst) {
             return End::Done;
         }
+        #[cfg(test)]
+        d.pause_at(Pause::Waiting);
         let sent = match rx.recv_timeout(RECV_WAIT) {
             // Stopped or given a new setup during the wait: the packet is not sent with the old one.
             Ok(_) if d.stopping() || d.renew.load(Ordering::SeqCst) => return End::Done,
@@ -1646,9 +1676,16 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
         if let Err(e) = sent {
             return end_for(e);
         }
+        #[cfg(test)]
+        d.pause_at(Pause::Sent);
         // A stop and start this loop did not see left the connection sending, so it is not a
-        // restart for the next try; one that comes as the connection closes is kept.
+        // restart for the next try; one that comes as the connection closes is kept. One with a
+        // new setup closes this connection, so it stays a restart: `spawn` sets `renew` before
+        // `restarted`, so one that `restarted` was cleared after shows here as `renew`.
         d.restarted.store(false, Ordering::SeqCst);
+        if d.renew.load(Ordering::SeqCst) {
+            d.restarted.store(true, Ordering::SeqCst);
+        }
     }
 }
 

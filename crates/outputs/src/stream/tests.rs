@@ -787,33 +787,80 @@ fn a_packet_that_comes_after_a_new_setup_is_not_sent_with_the_old_one() {
     // The stream gives the headers; its own destination plays no part.
     let mut out = Streaming::start_timed(&job, vec![target("x", &closed_url(), "k")], quick()).unwrap();
     let d = Arc::new(Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None));
-    let mut p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
+    let p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
     assert_eq!(next(&seen_a), Seen::Publish("k".into()));
-    let (mut fanout, mut rx, _) = copy_feed();
-    let sender = {
-        let (hub, d) = (Arc::clone(&out.hub), Arc::clone(&d));
-        std::thread::spawn(move || {
-            let end = send_all(&hub, &d, &mut p, &mut rx);
-            let _ = p.close();
-            matches!(end, End::Done)
-        })
-    };
-    // Once its headers are out, the thread waits for a packet.
+    let (mut fanout, rx, _) = copy_feed();
+    let (paused, go) = held_sender(&d);
+    let sender = sending(&out, &d, p, rx);
+    // The thread is past its check for a new setup and about to wait for a packet.
     assert_eq!(media(&seen_a, 2).len(), 2, "the two sequence headers");
-    let mut changes = lock(&d.changes);
-    while d.status() != DestinationStatus::Live {
-        let (next, waited) = d.changed.wait_timeout(changes, GUARD).unwrap_or_else(PoisonError::into_inner);
-        changes = next;
-        assert!(!waited.timed_out(), "{:?}", d.status());
-    }
-    drop(changes);
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
     // A new setup, then a packet that ends the wait: the packet does not go out with the old one.
+    // The thread keeps its receiver until it is joined, so the packet reaches it.
     d.renew.store(true, Ordering::SeqCst);
     let mut pool = PacketPool::new(4, 0).unwrap();
     let packet = pool.share(&mut vec![0, 0, 0, 1, 0x65], Info::video(0, 0, true)).unwrap();
     assert_eq!(fanout.publish(&packet), 1);
-    assert!(sender.join().unwrap(), "sending ends for the new setup");
+    drop((paused, go));
+    let (done, _rx) = sender.join().unwrap();
+    assert!(done, "sending ends for the new setup");
     assert_eq!(next(&seen_a), Seen::Closed, "a packet went out with the old setup");
+    let _ = out.stop();
+}
+
+/// Holds the thread that sends for `d` at each [`Pause`]: the first receiver tells where it is,
+/// and a send on the second lets it go on. Dropping both lets it run freely.
+fn held_sender(d: &Dest) -> (mpsc::Receiver<Pause>, mpsc::Sender<()>) {
+    let (tell, paused) = mpsc::channel();
+    let (go, wait) = mpsc::channel();
+    *lock(&d.pause) = Some((tell, wait));
+    (paused, go)
+}
+
+/// Runs [`send_all`] for `d` on `p` and `rx` in a thread that closes `p` after it, and gives back
+/// whether sending ended as done, with `rx`, so `rx` stays subscribed until the thread is joined.
+fn sending(out: &Streaming, d: &Arc<Dest>, mut p: Publisher, mut rx: Receiver) -> std::thread::JoinHandle<(bool, Receiver)> {
+    let (hub, d) = (Arc::clone(&out.hub), Arc::clone(d));
+    std::thread::spawn(move || {
+        let end = send_all(&hub, &d, &mut p, &mut rx);
+        let _ = p.close();
+        (matches!(end, End::Done), rx)
+    })
+}
+
+#[test]
+fn a_new_setup_given_while_a_packet_is_sent_stays_a_restart() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("x", &closed_url(), "k")], quick()).unwrap();
+    let d = Arc::new(Dest::new(target("a", &a, "k"), Arc::new(Counts::default()), None));
+    let p = Publisher::connect_to(&d.config().unwrap(), &[addr(&a)]).unwrap();
+    assert_eq!(next(&seen_a), Seen::Publish("k".into()));
+    let (mut fanout, rx, _) = copy_feed();
+    let (paused, go) = held_sender(&d);
+    let sender = sending(&out, &d, p, rx);
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
+    let mut pool = PacketPool::new(4, 0).unwrap();
+    let packet = pool.share(&mut vec![0, 0, 0, 1, 0x65], Info::video(0, 0, true)).unwrap();
+    assert_eq!(fanout.publish(&packet), 1);
+    go.send(()).unwrap();
+    // A Stop and a Start with the same setup come while the packet is sent: the connection goes
+    // on sending, so the next try is not a first one.
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Sent);
+    d.restarted.store(true, Ordering::SeqCst);
+    go.send(()).unwrap();
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Waiting);
+    assert!(!d.restarted.load(Ordering::SeqCst), "a restart that left the connection sending was kept");
+    assert_eq!(fanout.publish(&packet), 1);
+    go.send(()).unwrap();
+    // A Stop and a Start with a new setup come while the next packet is sent: that connection
+    // closes, so the next try is a first one, with its failed tries counted from none.
+    assert_eq!(paused.recv_timeout(GUARD).unwrap(), Pause::Sent);
+    renewed(&d, &a, "k2");
+    drop((paused, go));
+    let (done, _rx) = sender.join().unwrap();
+    assert!(done, "sending ends for the new setup");
+    assert!(d.restarted.load(Ordering::SeqCst), "the restart with a new setup was cleared");
     let _ = out.stop();
 }
 
