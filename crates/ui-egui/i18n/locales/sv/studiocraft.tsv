@@ -137,6 +137,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (inbyggd)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (inbyggd)
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (inbyggd)
+	AMD AMF H.264 (built in)	AMD AMF H.264 (inbyggd)
+	AMD AMF HEVC (built in)	AMD AMF HEVC (inbyggd)
+	AMD AMF AV1 (built in)	AMD AMF AV1 (inbyggd)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (inbyggd)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (inbyggd)
 	VA-API H.264 (built in)	VA-API H.264 (inbyggd)
@@ -480,6 +483,12 @@
 menu	Transform	Transformera
 	Record as its own track	Spela in som eget spår
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ljudspår skriver den här källan till en egen WAV-fil (Inställningar › Utdata › Ljudspår)
+	Balance	Balans
+	Moves this source between the left and right channels; double-click to center it	Flyttar den här källan mellan vänster och höger kanal; dubbelklicka för att centrera den
+	{percent}% left	{percent} % vänster
+	{percent}% right	{percent} % höger
+	Downmix to mono	Mixa ned till mono
+	Plays the average of this source's left and right channels on both	Spelar medelvärdet av källans vänstra och högra kanal i båda
 	Audio tracks	Ljudspår
 	Write each recorded source and the program mix to its own WAV file	Skriv varje inspelad källa och programmixen till en egen WAV-fil
 	Write them while	Skriv dem medan

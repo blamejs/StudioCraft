@@ -745,7 +745,7 @@ mod export {
             let (w, h) = self.size;
             if (luma.width(), luma.height()) != (w, h)
                 || (chroma.width(), chroma.height()) != (w / 2, h / 2)
-                || !crate::export::nv12_plane_formats(luma.format(), chroma.format())
+                || !crate::export::plane_formats_fit(luma.format(), chroma.format())
             {
                 return Err(Fallback::ImportFailed);
             }

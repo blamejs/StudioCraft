@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::queue::Latest;
-use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
+use studiocraft_model::collection::{MAX_BALANCE, MAX_SYNC_OFFSET_MS};
 use studiocraft_model::{AudioState, FieldKind, FilterId, MonitorMode, PathMode, SettingsSchema, SourceId};
 use studiocraft_plugin::{FilterTarget, Registry, Settings};
 use studiocraft_studio::Studio;
@@ -598,8 +598,44 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState, latency_frames:
             actions.push(("source.set_record_track", json!({"source": source, "on": own})));
         }
         ui.end_row();
+        ui.label(tl!("Balance"));
+        let mut balance = if state.balance.is_finite() { state.balance.clamp(-MAX_BALANCE, MAX_BALANCE) } else { 0.0 };
+        ui.horizontal(|ui| {
+            // `Edits` leaves a saved value between the 0.01 steps as it is when the slider draws;
+            // a drag or a key press still rounds to a step and stays in range.
+            let slider =
+                egui::Slider::new(&mut balance, -MAX_BALANCE..=MAX_BALANCE).step_by(0.01).clamping(egui::SliderClamping::Edits).show_value(false);
+            let r = ui.add(slider).on_hover_text(tl!("Moves this source between the left and right channels; double-click to center it"));
+            if r.double_clicked() {
+                balance = 0.0;
+            }
+            ui.label(balance_text(balance));
+        });
+        if balance != state.balance {
+            actions.push(("source.balance", json!({"source": source, "balance": balance})));
+        }
+        ui.end_row();
+        ui.label("");
+        let mut mono = state.mono;
+        let r =
+            ui.checkbox(&mut mono, tl!("Downmix to mono")).on_hover_text(tl!("Plays the average of this source's left and right channels on both"));
+        if r.changed() {
+            actions.push(("source.mono", json!({"source": source, "on": mono})));
+        }
+        ui.end_row();
     });
     actions
+}
+
+/// A balance as the Properties window shows it: centered, or how far toward one side.
+fn balance_text(balance: f32) -> String {
+    let percent = (balance.abs().min(MAX_BALANCE) * 100.0).round();
+    if percent == 0.0 {
+        return tl!("Center").to_string();
+    }
+    let percent = format!("{percent:.0}");
+    let text = if balance < 0.0 { tl!("{percent}% left") } else { tl!("{percent}% right") };
+    craft_i18n::fmt(text, &[("percent", &percent)])
 }
 
 /// A filter delay of `frames` sample frames as the Properties window shows it, in milliseconds.
@@ -1069,6 +1105,32 @@ mod tests {
         }
         let labels: std::collections::HashSet<String> = MonitorMode::ALL.into_iter().map(monitor_label).collect();
         assert_eq!(labels.len(), 3);
+    }
+
+    #[test]
+    fn the_balance_and_mono_rows_draw_without_running_a_command() {
+        let ctx = egui::Context::default();
+        // A saved balance between the slider's 0.01 steps (0.347, -0.123) stays as it is.
+        for (balance, mono) in [(0.0, false), (-1.0, true), (0.35, false), (1.0, true), (0.347, false), (-0.123, true)] {
+            let state = AudioState { balance, mono, ..AudioState::default() };
+            let mut actions = vec![("x", json!(null))];
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                actions = audio_form(ui, SourceId(3), &state, 0);
+            });
+            out.textures_delta.clear();
+            assert!(actions.is_empty(), "{balance} {mono}: {actions:?}");
+        }
+    }
+
+    #[test]
+    fn the_balance_is_shown_as_a_side_and_a_percentage() {
+        // The words are translated; other tests may switch the language meanwhile.
+        for (balance, number) in [(-0.25, "25"), (0.5, "50"), (1.0, "100"), (-1.0, "100"), (0.004, ""), (-0.004, ""), (0.0, "")] {
+            let text = balance_text(balance);
+            assert_eq!(text.contains(number) && !number.is_empty(), !number.is_empty(), "{balance}: {text}");
+        }
+        assert_ne!(balance_text(-0.25), balance_text(0.25), "the two sides read differently");
+        assert_eq!(balance_text(0.0), balance_text(-0.0), "the center reads the same from either side");
     }
 
     #[test]

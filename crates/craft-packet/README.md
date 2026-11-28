@@ -94,7 +94,7 @@ let shared = pool.share(&mut packet.data, info)?;
 - `craft_video::h264::Packet`, from the built-in H.264 encoder (the `h264` feature): `pts` and
   `dts` are kept as the encoder gives them, so pictures reordered for B-frames keep their decoding
   order.
-- `craft_hwenc_native::Packet`, from the NVENC, Media Foundation, VideoToolbox and VA-API encoders
+- `craft_hwenc_native::Packet`, from the NVENC, Media Foundation, AMF, VideoToolbox and VA-API encoders
   (the `hwenc-native` feature): these encoders do not reorder pictures, so `dts` is the packet's
   `pts`.
 

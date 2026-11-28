@@ -7,8 +7,8 @@ name: Release
 # - A push to the `release` branch builds a release. On that branch the macOS and Windows builds
 #   stop unless their signing secrets are set in the repository's `release` environment. An alpha
 #   version (0.x.y-alpha.N) is then published as a prerelease by the publish job below.
-# - A manual run builds from the chosen branch and also makes a draft; there the builds that have
-#   no signing secrets are left unsigned. With `dry-run`, it builds and checks without a draft.
+# - A manual run on `release` also makes a draft. On any other branch, select `dry-run` to build
+#   and check without signing or creating a draft.
 # - Every night a dry run on main builds everything except macOS, signs nothing and makes no draft.
 on:
   schedule:
@@ -40,7 +40,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@9be49e51f35e41da06bba111aa0923abdccbc9c3
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@4ec2a14646b538253fd5ebe109bf463a3d31b061
 
   release:
     needs: credits
@@ -48,13 +48,13 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Pinned to craft-common-actions main at 2026-11-24T20:51Z; move the pin to take later changes.
+    # Pinned to craft-common-actions main at 2026-11-26T09:05Z; move the pin to take later changes.
     # Each build job runs actions/rust-channel, which installs the toolchain a rust-toolchain.toml
     # names. The repository has none, so the jobs install the stable toolchain. The pin covers the
     # workflow file only: the shared workflow calls its own actions (rust-channel,
     # import-signing-key, sign-rpms, draft-release and others) at @main. Its linux and flatpak jobs
     # import LINUX_SIGNING_KEY in the job that builds and packages the app.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@9be49e51f35e41da06bba111aa0923abdccbc9c3
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@4ec2a14646b538253fd5ebe109bf463a3d31b061
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
       app-name: studiocraft
@@ -144,7 +144,7 @@ jobs:
           cat SHA3-512SUMS.txt
       - name: Import the Linux signing key
         id: key
-        uses: storytold/craft-common-actions/actions/import-signing-key@9be49e51f35e41da06bba111aa0923abdccbc9c3
+        uses: storytold/craft-common-actions/actions/import-signing-key@4ec2a14646b538253fd5ebe109bf463a3d31b061
         with:
           key: ${{ github.ref == 'refs/heads/release' && secrets.LINUX_SIGNING_KEY || '' }}
       - name: Sign SHA3-512SUMS.txt

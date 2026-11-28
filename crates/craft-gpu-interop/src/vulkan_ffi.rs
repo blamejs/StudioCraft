@@ -640,7 +640,7 @@ impl Exported {
     pub(crate) fn copy(&self, planes: &[wgpu::Texture], slot: usize) -> Result<wgpu::CommandBuffer, Fallback> {
         let &dst = self.images.get(slot).ok_or(Fallback::ImportFailed)?;
         let (Some(luma), Some(chroma)) = (planes.first(), planes.get(1)) else { return Err(Fallback::ImportFailed) };
-        if !crate::export::nv12_plane_formats(luma.format(), chroma.format()) {
+        if !crate::export::plane_formats_fit(luma.format(), chroma.format()) {
             return Err(Fallback::ImportFailed);
         }
         // SAFETY: the guards are only used to read the image handles, which stay owned by wgpu.
@@ -663,7 +663,8 @@ impl Exported {
             // each plane image has the texel size of the NV12 plane it is copied into (checked
             // above), and each region lies inside both images: `Exporter::copy` refuses planes
             // unless the luma plane is the NV12 image's size and the chroma plane half of it. The barriers
-            // move `dst` from the encoder side to this queue and back around the copies.
+            // move `dst` from the encoder side to this queue and back around the copies. The ticket
+            // keeps the plane images alive until the queue has finished the copies.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,

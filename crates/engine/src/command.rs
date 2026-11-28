@@ -319,6 +319,12 @@ pub enum Command {
     /// The mix tracks the source's audio goes to, as track numbers 1 to 6.
     #[serde(rename = "source.mix_tracks")]
     SourceMixTracks { source: SourceRef, tracks: MixTracks },
+    /// Where the source's audio sits between the left (−1) and right (1) channels; 0 is centered.
+    #[serde(rename = "source.balance")]
+    SourceBalance { source: SourceRef, balance: f32 },
+    /// Whether the source's two channels are mixed into one, played on both.
+    #[serde(rename = "source.mono")]
+    SourceMono { source: SourceRef, on: bool },
     /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
     /// source, or of every one whose slot is not empty when `source` is absent.
     #[serde(rename = "present.window")]
@@ -738,6 +744,8 @@ impl Command {
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
             Command::SourceMixTracks { .. } => "source.mix_tracks",
+            Command::SourceBalance { .. } => "source.balance",
+            Command::SourceMono { .. } => "source.mono",
             Command::PresentWindow { .. } => "present.window",
             Command::PresentNext { .. } => "present.next",
             Command::PresentPrevious { .. } => "present.previous",
@@ -871,6 +879,8 @@ const SPECS: &[CommandSpec] = &[
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
     spec("source.mix_tracks", "Mix Tracks", "source: id or name, tracks: list of track numbers 1 to 6, [] for none", Undo::Undoable),
+    spec("source.balance", "Audio Balance", "source: id or name, balance: -1 (left) to 1 (right), 0 centered", Undo::Undoable),
+    spec("source.mono", "Downmix to Mono", "source: id or name, on: bool", Undo::Undoable),
     spec(
         "present.window",
         "Present Staged Window",

@@ -334,13 +334,16 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
         "mf_native_h264",
         "mf_native_hevc",
         "mf_native_av1",
+        "amf_native_h264",
+        "amf_native_hevc",
+        "amf_native_av1",
         "vt_native_h264",
         "vt_native_hevc",
         "vaapi_native_h264",
         "vaapi_native_hevc",
         "vaapi_native_av1",
     ];
-    assert_eq!(ids[ids.len().saturating_sub(13)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
+    assert_eq!(ids[ids.len().saturating_sub(built_in.len() + 1)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
     for id in built_in {
         assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
     }

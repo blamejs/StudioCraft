@@ -401,6 +401,54 @@ fn the_state_reports_how_long_each_source_s_audio_filters_delay_it() {
     assert_eq!([latency_ms(0), latency_ms(480), latency_ms(1)], [0.0, 10.0, 0.0]);
 }
 
+/// Changing a running audio filter's settings replaces that filter alone, and the source's filter
+/// delay and the filter's meter stay current through the change.
+#[test]
+fn new_audio_filter_settings_keep_the_source_s_delay_and_the_filter_s_meter() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    let add = |s: &mut Studio, kind: &str| {
+        let (out, _) = s.run("filter.add", &json!({"source": "Mic", "kind": kind})).unwrap();
+        out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"))
+    };
+    let (limiter, comp) = (add(&mut s, "limiter"), add(&mut s, "compressor"));
+    let set = |s: &mut Studio, filter: u64, settings: serde_json::Value| {
+        s.run("filter.settings", &json!({"source": "Mic", "filter": filter, "settings": settings})).unwrap();
+    };
+    set(&mut s, limiter, json!({"ceiling_db": -3.0}));
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 248, "the new limiter delays the audio as the old one did");
+    assert_eq!(s.state_json()["filter_latency"], json!({mic.to_string(): {"frames": 248, "ms": 5.2}}));
+    set(&mut s, comp, json!({"ratio": 4.0}));
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 248);
+    assert_eq!(s.run("filter.meter", &json!({"source": "Mic", "filter": comp})).unwrap().0, json!({"gain_reduction_db": 0.0}));
+}
+
+/// When the mixer's control queue drops a command, the studio sends a whole input list: on the
+/// next tick for a drop between refreshes, and in the same refresh for a drop its own commands
+/// cause. A mixer without a thread keeps its queue full, so each push drops one command.
+#[test]
+fn a_dropped_mixer_command_is_followed_by_a_whole_input_list() {
+    use studiocraft_engine::mixer::{Mixer, MixerCmd};
+    let mut s = headless();
+    s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let (out, _) = s.run("filter.add", &json!({"source": "Mic", "kind": "gain"})).unwrap();
+    let gain = out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.mixer = Mixer::detached();
+    while s.mixer.control_dropped() == 0 {
+        s.mixer.send(MixerCmd::SyncOffset { source: SourceId(u64::MAX), ms: 0 });
+    }
+    let dropped = s.mixer.control_dropped();
+    s.tick();
+    assert_eq!(s.mixer.control_dropped(), dropped + 1, "the tick sent an input list");
+    s.tick();
+    assert_eq!(s.mixer.control_dropped(), dropped + 1, "the input list brought the mixer in line");
+    s.run("filter.settings", &json!({"source": "Mic", "filter": gain, "settings": {"db": -6.0}})).unwrap();
+    assert_eq!(s.mixer.control_dropped(), dropped + 3, "the replacement, then an input list");
+    s.tick();
+    assert_eq!(s.mixer.control_dropped(), dropped + 3);
+}
+
 #[test]
 fn interface_commands_come_back_as_actions() {
     let mut s = headless();

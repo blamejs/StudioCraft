@@ -51,7 +51,7 @@ use studiocraft_sources::FfmpegSetting;
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use captions::{CaptionState, Loader as CaptionLoader, ModelFileFilter, default_models_dir};
 pub use files::FileError;
-pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, recording_folder, recording_path, replay_path};
+pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, has_built_in_twin, recording_folder, recording_path, replay_path};
 pub use pause::{countdown_text, media_extensions as pause_media_extensions, paused_text};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_outputs::stream::diagnose;
@@ -734,6 +734,9 @@ impl Studio {
         self.watch_gpu();
         if self.engine.revision() != self.seen_revision {
             self.refresh();
+        } else if self.wiring.mixer_dropped(self.mixer.control_dropped()) {
+            // A push since the last refresh dropped a command the mixer had not taken.
+            self.sync_mixer();
         }
         self.place_fit_later();
         if let Some(t) = &self.transition
@@ -754,7 +757,7 @@ impl Studio {
                 self.notices.push(Notice::plain(e.to_string(), true));
             }
         }
-        self.monitor.poll(&self.mixer, &mut self.notices);
+        self.monitor.poll(&mut self.mixer, &mut self.notices);
         self.finish_hardware_tests();
         // Before the poll, which drops a stream that failed.
         self.note_destinations();
@@ -902,14 +905,37 @@ impl Studio {
         if let Some(kind) = switched {
             self.note_event(kind);
         }
-        let mix = self.wiring.mixer_inputs(self.engine.collection(), self.engine.registry(), &self.sources, &mut self.levels, &mut self.notices);
-        if let Some(cmds) = mix {
-            for cmd in cmds {
-                self.mixer.send(cmd);
-            }
-        }
+        self.sync_mixer();
         self.sync_monitor();
         self.publish();
+    }
+
+    /// Send the mixer the commands that bring it in line with the collection. When these pushes
+    /// drop older commands the mixer has not taken, a whole input list follows them, unless they
+    /// were one. A full queue keeps its newest command, and an input list carries every change
+    /// the dropped commands of the wiring carried.
+    fn sync_mixer(&mut self) {
+        if !self.send_mixer_commands() && self.wiring.mixer_dropped(self.mixer.control_dropped()) {
+            self.send_mixer_commands();
+        }
+        self.wiring.mixer_caught_up(self.mixer.control_dropped());
+    }
+
+    /// `true` when the commands sent were a whole input list.
+    fn send_mixer_commands(&mut self) -> bool {
+        let mix = self.wiring.mixer_commands(
+            &self.mixer,
+            self.engine.collection(),
+            self.engine.registry(),
+            &self.sources,
+            &mut self.levels,
+            &mut self.notices,
+        );
+        let whole = matches!(mix.as_deref(), Some([MixerCmd::Inputs(_)]));
+        for cmd in mix.into_iter().flatten() {
+            self.mixer.send(cmd);
+        }
+        whole
     }
 
     /// Open the monitoring device while a source with audio is monitored, and close it when none
@@ -920,12 +946,12 @@ impl Studio {
         // Safe Mode opens no device, the monitoring device included.
         let wanted =
             !self.safe_mode && c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
-        self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &self.mixer, &mut self.notices);
+        self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &mut self.mixer, &mut self.notices);
     }
 
     /// Play monitored sources through `sink` instead of the system's output devices.
     pub fn set_audio_sink(&mut self, sink: Arc<dyn studiocraft_platform::audio::AudioSink>) {
-        self.monitor.set_sink(sink, &self.mixer);
+        self.monitor.set_sink(sink, &mut self.mixer);
         self.sync_monitor();
     }
 

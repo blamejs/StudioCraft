@@ -173,8 +173,10 @@ impl Exported {
         // SAFETY: the encoder belongs to `device` and records nothing but these commands. The
         // plane textures are textures of `device` in the copy-source state, `dst` is open on the
         // same device, and each region lies inside both textures: `Exporter::copy` refuses planes
-        // unless the luma plane is the NV12 texture's size and the chroma plane half of it. The
-        // unused texture state (`UNINITIALIZED`) is the common state on Direct3D 12.
+        // unless the luma plane is the NV12 texture's size and the chroma plane half of it, in
+        // formats of each NV12 plane's format family. The ticket keeps the plane textures alive
+        // until the queue has finished the copies. The unused texture state (`UNINITIALIZED`) is
+        // the common state on Direct3D 12.
         let recorded = unsafe {
             encoder.as_hal_mut::<wgpu::hal::api::Dx12, _, _>(|hal| {
                 let Some(hal) = hal else { return false };

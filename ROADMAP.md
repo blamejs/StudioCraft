@@ -13,6 +13,7 @@ description in [docs/features.md](docs/features.md).
 - The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties, and several sources can show one camera ([Camera](docs/features.md#camera)).
 - On Windows and Linux a camera source sees its camera unplugged or plugged in at once, from the system's device notices, and clears its picture or opens the camera ([Camera](docs/features.md#camera)).
+- A camera source's context menu adds the camera's own microphone to the scene, matched by device container on Windows, by USB serial on Linux and otherwise by name ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
 - Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
 - One application's audio is captured on Windows 11, Windows Server 2022 and Linux with PipeWire, chosen from the running applications that have audio and followed across restarts ([Application audio capture](docs/features.md#application-audio-capture)).
@@ -35,6 +36,7 @@ description in [docs/features.md](docs/features.md).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
 - Audio input and output capture stay in step with the mix when the device's clock runs a little fast or slow ([Audio](docs/features.md#audio)).
 - Each source is assigned to any of six mix tracks with `source.mix_tracks`, and a recording writes each track in its profile's `output.recording_tracks` as its own audio stream, in the built-in MKV writer and through `ffmpeg`; the window does not set either yet ([Audio](docs/features.md#audio), [Recording](docs/features.md#recording)).
+- Each source has a balance between the left and right channels and can be downmixed to mono, from its Properties window or with `source.balance` and `source.mono` ([Audio](docs/features.md#audio)).
 
 ### Recording
 
@@ -61,7 +63,7 @@ description in [docs/features.md](docs/features.md).
 - The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - `scene.thumbnails` names the scenes whose pictures are drawn, 2 times a second by default, and stops them with an empty list ([Control protocol](docs/control-protocol.md#scenethumbnails)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
-- NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in), and VA-API AV1 (built in), record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- NVIDIA NVENC, Windows Media Foundation, AMD AMF, Apple VideoToolbox and VA-API H.264 and HEVC (built in), and NVIDIA NVENC, Windows Media Foundation, AMD AMF and VA-API AV1 (built in), record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
 ### Interface
 
@@ -157,9 +159,9 @@ description in [docs/features.md](docs/features.md).
     output to a share of the canvas, and scenes are laid out again when the canvas size changes.
     The canvas then follows that display when its resolution or scaling changes
     ([Sources](docs/features.md#sources)).
-13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
-    Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
-    process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources
+13. **Intel encoders in StudioCraft's own process, and hardware decoding.** The Intel Quick Sync
+    encoders run only through `ffmpeg` today. They will run in StudioCraft's own process like the
+    NVENC, Media Foundation, AMF, VideoToolbox and VA-API encoders. Media file sources
     will decode video on the GPU, with software decoding as the fallback.
 14. **Interface refinements.** Scene and source lists will get compact rows with type icons, and
     show eye and lock buttons on hover. The icons will be redrawn on one grid, and the audio mixer

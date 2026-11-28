@@ -35,8 +35,8 @@ pub(crate) struct Params {
     pub gop: u32,
 }
 
-/// One sample an encoder MFT returned: Annex B (AV1: OBUs), and the sample time it carries when it
-/// has one.
+/// One sample an encoder MFT (or an AMF encoder) returned: Annex B (AV1: OBUs), and the sample
+/// time it carries when it has one.
 pub(crate) struct Output {
     pub data: Vec<u8>,
     pub time: Option<i64>,

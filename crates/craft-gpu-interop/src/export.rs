@@ -752,22 +752,21 @@ pub struct Exporter {
     scratch: Option<Vec<wgpu::Texture>>,
     /// The ready value of the newest ticket handed to [`Exporter::submitted`].
     signaled: u64,
-    /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device,
-    /// and the planes the copies read stay alive, until the last copy recorded into them has been
-    /// submitted.
+    /// The compositor's queue, which runs the copies.
+    queue: wgpu::Queue,
+    /// The planes of the last copy, shared with every [`Ticket`] of them. The copy reads them
+    /// outside wgpu's tracking, so they are kept until the queue has finished the last copy
+    /// recorded from them, and only planes that change make a new entry.
+    planes: Option<Arc<UntilDone<Vec<wgpu::Texture>>>>,
+    /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device
+    /// until the last copy recorded into them has been submitted.
     shared: Arc<Shared>,
 }
 
-/// The parts of an [`Exporter`] that each [`Ticket`] also holds. Once the last of them is dropped,
-/// the textures and planes go after the queue has finished the work submitted so far, without
-/// waiting.
+/// The ring's textures on the compositor's device, which an [`Exporter`] and each of its
+/// [`Ticket`]s hold.
 #[cfg(feature = "wgpu")]
 struct Shared {
-    /// The planes each texture of the ring was last copied from. The copy's commands name the
-    /// planes' images without wgpu tracking them, so the planes are kept until the texture is
-    /// written again, which happens only after the copy has finished. Only the exporter locks it.
-    held: std::sync::Mutex<Held<wgpu::Texture>>,
-    queue: wgpu::Queue,
     #[cfg(windows)]
     raw: Raw,
     #[cfg(target_os = "linux")]
@@ -776,25 +775,11 @@ struct Shared {
 
 #[cfg(feature = "wgpu")]
 impl Shared {
-    fn new(queue: &wgpu::Queue, #[cfg(windows)] raw: Raw, #[cfg(target_os = "linux")] raw: crate::dmabuf_ffi::Exported) -> Arc<Shared> {
+    fn new(#[cfg(windows)] raw: Raw, #[cfg(target_os = "linux")] raw: crate::dmabuf_ffi::Exported) -> Arc<Shared> {
         Arc::new(Shared {
-            held: std::sync::Mutex::new(Held::default()),
-            queue: queue.clone(),
             #[cfg(any(windows, target_os = "linux"))]
             raw,
         })
-    }
-}
-
-#[cfg(feature = "wgpu")]
-impl Drop for Shared {
-    fn drop(&mut self) {
-        // A copy from the planes may still run: they are dropped once the queue has finished the
-        // work submitted so far, without waiting here. The textures' own drop does the same.
-        let held = self.held.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        if !held.is_empty() {
-            self.queue.on_submitted_work_done(move || drop(held));
-        }
     }
 }
 
@@ -832,16 +817,62 @@ pub(crate) fn scratch_for(device: &wgpu::Device, planes: &[wgpu::Texture], kept:
         .collect()
 }
 
+/// `value`, dropped only once the queue has finished the work submitted to it before this is
+/// dropped, without waiting.
+#[cfg(feature = "wgpu")]
+pub(crate) struct UntilDone<T: Send + 'static> {
+    queue: wgpu::Queue,
+    /// `None` only while being dropped.
+    value: Option<T>,
+}
+
+#[cfg(feature = "wgpu")]
+impl<T: Send + 'static> UntilDone<T> {
+    pub(crate) fn new(queue: &wgpu::Queue, value: T) -> UntilDone<T> {
+        UntilDone { queue: queue.clone(), value: Some(value) }
+    }
+
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl<T: Send + 'static> Drop for UntilDone<T> {
+    fn drop(&mut self) {
+        let value = self.value.take();
+        self.queue.on_submitted_work_done(move || drop(value));
+    }
+}
+
 /// A copy recorded by [`Exporter::copy`], to hand to [`Exporter::submitted`] once its command
-/// buffer has been submitted. It keeps the ring's textures open on the compositor's device, and
-/// the planes the copy reads alive, even after the [`Exporter`] is dropped, so drop it only after
-/// the command buffer has been submitted or dropped.
+/// buffer has been submitted. It keeps the ring's textures open on the compositor's device, even
+/// after the [`Exporter`] is dropped, and the frame's plane textures alive until the queue has
+/// finished the copy, so drop it only after the command buffer has been submitted or dropped.
 #[cfg(feature = "wgpu")]
 #[must_use = "the frame is only handed to the encoder by `Exporter::submitted`"]
 pub struct Ticket {
     slot: usize,
     ready: u64,
     _shared: Arc<Shared>,
+    _planes: Arc<UntilDone<Vec<wgpu::Texture>>>,
+}
+
+/// The entry in `kept` that keeps `planes` alive for a copy from them. The entry of the same
+/// planes is shared; other planes replace it with a new one, and the old entry is handed to the
+/// queue once no ticket holds it.
+#[cfg(feature = "wgpu")]
+pub(crate) fn kept_planes(
+    kept: &mut Option<Arc<UntilDone<Vec<wgpu::Texture>>>>,
+    queue: &wgpu::Queue,
+    planes: &[wgpu::Texture],
+) -> Arc<UntilDone<Vec<wgpu::Texture>>> {
+    if let Some(entry) = kept
+        && entry.get().is_some_and(|kept| kept.as_slice() == planes)
+    {
+        return Arc::clone(entry);
+    }
+    Arc::clone(kept.insert(Arc::new(UntilDone::new(queue, planes.to_vec()))))
 }
 
 #[cfg(feature = "wgpu")]
@@ -858,59 +889,20 @@ pub(crate) fn planes_fit(width: u32, height: u32, luma: (u32, u32), chroma: (u32
     luma == (width, height) && chroma == (width / 2, height / 2)
 }
 
-/// Whether `luma` and `chroma` are formats a copy into an NV12 texture's planes can read: one
-/// byte per texel for the luma plane and two for the chroma plane, as the plane formats
-/// `R8_UNORM` and `R8G8_UNORM` have.
+/// Whether `luma` and `chroma`, the formats of a frame's planes, can be copied into an NV12
+/// texture's planes: an 8-bit one-channel luma plane and an 8-bit two-channel chroma plane.
 #[cfg(feature = "wgpu")]
-pub(crate) fn nv12_plane_formats(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
+pub(crate) fn plane_formats_fit(luma: wgpu::TextureFormat, chroma: wgpu::TextureFormat) -> bool {
     use wgpu::TextureFormat as F;
     matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
 }
 
 /// Whether `luma` and `chroma`, the size and format of each of a frame's planes, are planes
 /// [`Exporter::copy`] copies into a texture of a `width × height` ring: of the sizes
-/// [`planes_fit`] takes and the formats [`nv12_plane_formats`] takes.
+/// [`planes_fit`] takes and the formats [`plane_formats_fit`] takes.
 #[cfg(feature = "wgpu")]
 pub(crate) fn copy_planes_fit(width: u32, height: u32, luma: ((u32, u32), wgpu::TextureFormat), chroma: ((u32, u32), wgpu::TextureFormat)) -> bool {
-    planes_fit(width, height, luma.0, chroma.0) && nv12_plane_formats(luma.1, chroma.1)
-}
-
-/// The two planes a texture of a ring was last copied from, for each texture.
-#[derive(Debug)]
-#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
-pub(crate) struct Held<T> {
-    slots: [[Option<T>; 2]; SLOTS],
-}
-
-impl<T> Default for Held<T> {
-    fn default() -> Self {
-        Held { slots: std::array::from_fn(|_| [None, None]) }
-    }
-}
-
-#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
-impl<T: Clone + PartialEq> Held<T> {
-    /// Keep the first two of `planes` for texture `slot`, in place of the planes kept for it
-    /// before. A plane already kept is not cloned again. A slot outside the ring keeps nothing.
-    pub(crate) fn keep(&mut self, slot: usize, planes: &[T]) {
-        let Some(held) = self.slots.get_mut(slot) else { return };
-        for (i, kept) in held.iter_mut().enumerate() {
-            let plane = planes.get(i);
-            if kept.as_ref() != plane {
-                *kept = plane.cloned();
-            }
-        }
-    }
-
-    /// Every plane kept, which the caller drops once the copies from them have finished.
-    pub(crate) fn take(&mut self) -> Held<T> {
-        std::mem::take(self)
-    }
-
-    /// Whether any plane is kept.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.slots.iter().flatten().all(Option::is_none)
-    }
+    planes_fit(width, height, luma.0, chroma.0) && plane_formats_fit(luma.1, chroma.1)
 }
 
 /// Whether a ticket whose ready value is `ready` may be signaled after the newest one signaled,
@@ -969,7 +961,15 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, signaled: 0, shared: Shared::new(queue, raw) })
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                signaled: 0,
+                queue: queue.clone(),
+                planes: None,
+                shared: Shared::new(raw),
+            })
         }
         #[cfg(target_os = "linux")]
         {
@@ -978,7 +978,15 @@ impl Exporter {
             }
             crate::fallback::check_export(backend, compositor)?;
             let (ring, raw) = crate::dmabuf_ffi::export(device, queue, width, height)?;
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, signaled: 0, shared: Shared::new(queue, raw) })
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                signaled: 0,
+                queue: queue.clone(),
+                planes: None,
+                shared: Shared::new(raw),
+            })
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -988,7 +996,9 @@ impl Exporter {
                 slots: crate::ring::SlotTable::default(),
                 scratch: None,
                 signaled: 0,
-                shared: Shared::new(queue),
+                queue: queue.clone(),
+                planes: None,
+                shared: Shared::new(),
             })
         }
     }
@@ -998,11 +1008,12 @@ impl Exporter {
         &self.ring
     }
 
-    /// Make the one-texel textures that [`Exporter::prepare`] copies `planes` into, outside the
-    /// frame loop.
+    /// Make the one-texel textures that [`Exporter::prepare`] copies `planes` into, and the entry
+    /// that keeps `planes` alive for [`Exporter::copy`], outside the frame loop.
     pub fn reserve(&mut self, device: &wgpu::Device, planes: &[wgpu::Texture]) {
         let kept = self.scratch.take();
         self.scratch = Some(scratch_for(device, planes, kept));
+        drop(kept_planes(&mut self.planes, &self.queue, planes));
     }
 
     /// Record, as the last use of `planes` in `encoder`, a one-texel copy from each of them, which
@@ -1027,8 +1038,9 @@ impl Exporter {
     /// before the one returned. Returns the command buffer to submit and its ticket, or
     /// `None` when every texture is still being encoded (the frame is not exported). Returns the
     /// reason, also recorded on the ring, when the frames cannot stay on the GPU. Planes of other
-    /// sizes than the ring's luma and chroma planes, or of formats with another texel size, are
-    /// refused with [`Fallback::ImportFailed`].
+    /// sizes than the ring's luma and chroma planes, or of other formats than 8-bit one-channel
+    /// luma and 8-bit two-channel chroma, are refused with [`Fallback::ImportFailed`]. The ticket
+    /// keeps the planes alive until the queue has finished the copy.
     pub fn copy(
         &mut self,
         device: &wgpu::Device,
@@ -1070,8 +1082,7 @@ impl Exporter {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
-        self.shared.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).keep(slot, planes);
-        let ticket = Ticket { slot, ready, _shared: Arc::clone(&self.shared) };
+        let ticket = Ticket { slot, ready, _shared: Arc::clone(&self.shared), _planes: kept_planes(&mut self.planes, &self.queue, planes) };
         Ok(Some((commands, ticket)))
     }
 
