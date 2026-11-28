@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-encode"
-description = "The built-in encoders: H.264 video from NV12 frames, NVENC H.264 and HEVC through the NVIDIA driver, the Windows Media Foundation hardware H.264 and HEVC encoders, and AAC audio from the mixer's blocks"
+description = "The built-in encoders: H.264 video from NV12 frames, NVENC H.264 and HEVC through the NVIDIA driver (also from the compositor's frames on the GPU), the Windows Media Foundation hardware H.264 and HEVC encoders, and AAC audio from the mixer's blocks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,7 @@ studiocraft-plugin.workspace = true
 craft-video.workspace = true
 craft-audio.workspace = true
 craft-hwenc-native.workspace = true
+craft-gpu-interop.workspace = true
 
 [dev-dependencies]
 # Independent decoders read back what the encoders write.

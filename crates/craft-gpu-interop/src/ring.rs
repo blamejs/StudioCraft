@@ -40,6 +40,17 @@ impl AdapterId {
     pub fn from_parts(low: u32, high: i32) -> AdapterId {
         AdapterId((u64::from(high as u32) << 32) | u64::from(low))
     }
+
+    /// The low and high parts, as Windows takes them.
+    pub fn parts(self) -> (u32, i32) {
+        (self.0 as u32, (self.0 >> 32) as u32 as i32)
+    }
+
+    /// The identifier from the 8 bytes Vulkan reports as a device's `deviceLUID`: the low part
+    /// first, each part in little-endian order.
+    pub fn from_luid_bytes(bytes: [u8; 8]) -> AdapterId {
+        AdapterId(u64::from_le_bytes(bytes))
+    }
 }
 
 static NEXT_RING: AtomicU64 = AtomicU64::new(1);
@@ -52,6 +63,9 @@ pub struct SharedRing {
     width: u32,
     height: u32,
     adapter: AdapterId,
+    /// Whether the compositor keeps the pictures' alpha (a window's) instead of drawing them
+    /// opaque (a display's).
+    alpha: bool,
     /// 0 while the frames may stay on the GPU, else a [`Fallback`] code.
     fallback: AtomicU8,
     /// Each texture's claim, written by both sides (see [`HANDED`]).
@@ -69,6 +83,7 @@ impl std::fmt::Debug for SharedRing {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("adapter", &self.adapter)
+            .field("alpha", &self.alpha)
             .field("fallback", &self.fallback())
             .finish()
     }
@@ -76,12 +91,13 @@ impl std::fmt::Debug for SharedRing {
 
 impl SharedRing {
     #[cfg(windows)]
-    pub(crate) fn new(width: u32, height: u32, adapter: AdapterId, handles: crate::dxgi_ffi::Handles) -> SharedRing {
+    pub(crate) fn new(width: u32, height: u32, adapter: AdapterId, alpha: bool, handles: crate::dxgi_ffi::Handles) -> SharedRing {
         SharedRing {
             id: NEXT_RING.fetch_add(1, Ordering::Relaxed),
             width,
             height,
             adapter,
+            alpha,
             fallback: AtomicU8::new(0),
             claims: Default::default(),
             handles,
@@ -96,11 +112,22 @@ impl SharedRing {
             width,
             height,
             adapter: AdapterId(0),
+            alpha: false,
             fallback: AtomicU8::new(0),
             claims: Default::default(),
             #[cfg(windows)]
             handles: crate::dxgi_ffi::Handles::none(),
         })
+    }
+
+    /// A ring without textures whose frames come from `adapter`.
+    #[cfg(all(test, windows, feature = "wgpu"))]
+    pub(crate) fn detached_on(width: u32, height: u32, adapter: AdapterId) -> Arc<SharedRing> {
+        let mut ring = SharedRing::detached(width, height);
+        if let Some(r) = Arc::get_mut(&mut ring) {
+            r.adapter = adapter;
+        }
+        ring
     }
 
     /// Unique in the process; a capture opened again makes a new ring.
@@ -121,6 +148,12 @@ impl SharedRing {
         self.adapter
     }
 
+    /// Whether the pictures are drawn with their own alpha: true for a window's, false for a
+    /// display's, which are drawn opaque.
+    pub fn keeps_alpha(&self) -> bool {
+        self.alpha
+    }
+
     /// Why the compositor cannot take this ring's frames on the GPU, once it has said so.
     pub fn fallback(&self) -> Option<Fallback> {
         Fallback::from_code(self.fallback.load(Ordering::Acquire))
@@ -129,6 +162,18 @@ impl SharedRing {
     /// Record why the frames cannot stay on the GPU. The first reason is kept.
     pub fn refuse(&self, reason: Fallback) {
         let _ = self.fallback.compare_exchange(0, reason.code(), Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// `value`, the ready fence's completed value as Direct3D reports it on the compositor's side.
+    /// A removed device reports [`REMOVED`](crate::export::REMOVED): then
+    /// [`Fallback::DeviceRemoved`] is recorded and 0 returned, so no frame counts as ready.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn completed(&self, value: u64) -> u64 {
+        if value == crate::export::REMOVED {
+            self.refuse(Fallback::DeviceRemoved);
+            return 0;
+        }
+        value
     }
 
     /// Record that texture `slot` now holds the frame with value `ready`, handed to the
@@ -231,15 +276,30 @@ impl SlotTable {
         (0..SLOTS).filter(|&s| free(s)).min_by_key(|&s| self.ready[s])
     }
 
+    /// A texture to write, given the released fence's value: only a free one, the one written
+    /// longest ago, never one still being read however long ago it was handed out. `None` when
+    /// every texture is still being read.
+    pub fn pick_released(&self, released: u64) -> Option<usize> {
+        (0..SLOTS).filter(|&s| self.ready[s] <= released).min_by_key(|&s| self.ready[s])
+    }
+
     /// Record that texture `slot` of `ring` is written at `now` and handed to the compositor;
     /// returns its new ready value, or `None` for a slot outside the ring or when the values ran
     /// out.
     pub fn fill(&mut self, ring: &SharedRing, slot: usize, now: Instant) -> Option<u64> {
+        let next = self.fill_released(slot, now)?;
+        ring.hand_out(slot, next);
+        Some(next)
+    }
+
+    /// Record that texture `slot` is written at `now`, for a ring whose textures are picked with
+    /// [`SlotTable::pick_released`] and never taken back; returns its new ready value, or `None`
+    /// for a slot outside the ring or when the values ran out.
+    pub fn fill_released(&mut self, slot: usize, now: Instant) -> Option<u64> {
         let next = self.last.checked_add(1).filter(|&n| n <= MAX_READY)?;
         *self.ready.get_mut(slot)? = next;
         *self.written.get_mut(slot)? = Some(now);
         self.last = next;
-        ring.hand_out(slot, next);
         Some(next)
     }
 

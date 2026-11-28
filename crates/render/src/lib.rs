@@ -10,7 +10,10 @@
 //! Frames stay on the GPU from upload to the canvas. The interface shows the canvas textures
 //! directly. The encoders and the scopes read pixels back through a ring of buffers that never
 //! makes the compositor wait for the GPU. A still capture is read back into a buffer of its own and
-//! answered on a later frame, so it does not make the compositor wait either.
+//! answered on a later frame, so it does not make the compositor wait either. A hardware encoder on
+//! the compositor's adapter can take the program frames on the GPU instead
+//! ([`RenderShared::encode_gpu`], [`GpuFrame`]); when that cannot run,
+//! [`Compositor::export_fallback`] gives the reason and the read-back carries them.
 //!
 //! [`Gpu::open`] chooses the adapter with `craft-gpu-device` (re-exported as [`device`]): the
 //! user's adapter preference, fixes for drivers that crash and a software fallback. Every device
@@ -29,7 +32,7 @@ use craft_gpu_device::{Candidate, DeviceHealth, Fault};
 use craft_gpu_device::{Notice, OpenError, Preference, Request};
 
 pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, ThumbnailViews, View, unpremultiply};
-pub use nv12::EncodeTarget;
+pub use nv12::{EncodeTarget, GpuFrame};
 pub use plan::{
     ItemDesc, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SIDE, MAX_THUMBNAILS, MIN_THUMBNAIL_SIDE, Plan, SceneDesc, ThumbnailRequest, TransitionDesc,
 };
@@ -76,10 +79,16 @@ pub struct Gpu {
 }
 
 /// The device studiocraft opens: its own label, and the adapter's own limits, so an adapter with
-/// lower limits than wgpu's defaults (an older or software one) still opens.
+/// lower limits than wgpu's defaults (an older or software one) still opens. A Vulkan device on
+/// Windows also opens shared textures when the driver can, for a display capture that stays on the
+/// GPU.
 #[cfg(not(target_arch = "wasm32"))]
-const REQUEST: Request<'static> =
-    Request { label: Some("studiocraft"), required_features: wgpu::Features::empty(), optional_features: wgpu::Features::empty(), limits: None };
+const REQUEST: Request<'static> = Request {
+    label: Some("studiocraft"),
+    required_features: wgpu::Features::empty(),
+    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
+    limits: None,
+};
 
 impl Gpu {
     /// A device without a window (tests, benchmarks, the command-line tool), on the automatic

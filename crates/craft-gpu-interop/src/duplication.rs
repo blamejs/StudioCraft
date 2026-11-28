@@ -16,7 +16,7 @@ pub(crate) struct Duplication {
 impl Duplication {
     pub(crate) fn open(device_name: &str) -> Result<Duplication, CaptureError> {
         let (output, handles) = dxgi_ffi::open(device_name)?;
-        let ring = Arc::new(SharedRing::new(output.width, output.height, output.adapter, handles));
+        let ring = Arc::new(SharedRing::new(output.width, output.height, output.adapter, false, handles));
         Ok(Duplication { output, ring, slots: SlotTable::default() })
     }
 

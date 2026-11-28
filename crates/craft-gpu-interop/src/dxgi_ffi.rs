@@ -1,24 +1,26 @@
 //! DXGI desktop duplication on a Direct3D 11 device, and the shared textures and fences it copies
-//! into. Every system call of the capture side is here.
+//! into. Every system call of the capture side is here, and so is the encoder side of an export
+//! ring: NV12 textures and two fences on a Direct3D 11 device of the compositor's adapter.
 
-use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, HMODULE};
+use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_FENCE_FLAG_SHARED, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_FENCE_FLAG_SHARED, D3D11_RESOURCE_MISC_SHARED,
     D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device,
     ID3D11Device5, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_UNSUPPORTED, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
-    DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication,
-    IDXGIResource, IDXGIResource1,
+    DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory4, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource, IDXGIResource1,
 };
 use windows::core::{Interface, PCWSTR};
 
 use crate::CaptureError;
+use crate::export::ReleaseGate;
 use crate::fallback::Fallback;
 use crate::ring::{AdapterId, SLOTS};
 
@@ -114,12 +116,14 @@ fn find(name: &str) -> Result<(IDXGIAdapter1, IDXGIOutput, windows::Win32::Graph
     Err(CaptureError::Failed(format!("no display named {name}")))
 }
 
-/// Open desktop duplication of the display named `name`, with a ring of textures of its size.
-pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
-    let (adapter, output, desc) = find(name)?;
-    if desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
-        return Err(CaptureError::Fallback(Fallback::Rotated));
-    }
+/// The graphics adapter that drives the display named `name`.
+pub(crate) fn adapter_of(name: &str) -> Result<IDXGIAdapter1, CaptureError> {
+    find(name).map(|(adapter, _, _)| adapter)
+}
+
+/// A Direct3D 11 device with BGRA support on `adapter`, its immediate context, and the adapter's
+/// identifier.
+pub(crate) fn bgra_device(adapter: &IDXGIAdapter1) -> Result<(ID3D11Device, ID3D11DeviceContext4, AdapterId), CaptureError> {
     // SAFETY: `adapter` is valid; `GetDesc1` returns its description by value.
     let luid = unsafe { adapter.GetDesc1() }.map_err(|e| failed("reading the graphics adapter", e))?.AdapterLuid;
     let mut device: Option<ID3D11Device> = None;
@@ -128,7 +132,7 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     // type of UNKNOWN is required when an adapter is given.
     unsafe {
         D3D11CreateDevice(
-            &adapter,
+            adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
             HMODULE::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -143,26 +147,22 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     let (Some(device), Some(context)) = (device, context) else {
         return Err(CaptureError::Failed("creating a Direct3D 11 device gave no device".into()));
     };
+    let context: ID3D11DeviceContext4 = context.cast().map_err(|_| CaptureError::Fallback(Fallback::Unsupported))?;
+    Ok((device, context, AdapterId::from_parts(luid.LowPart, luid.HighPart)))
+}
+
+/// The textures and fences of a ring of shared BGRA textures, on the device that made them.
+pub(crate) struct BgraRing {
+    pub(crate) textures: [ID3D11Texture2D; SLOTS],
+    pub(crate) ready: ID3D11Fence,
+    pub(crate) released: ID3D11Fence,
+}
+
+/// `SLOTS` BGRA textures of `width × height` and the ready and released fences on `device`, all
+/// shared through NT handles.
+pub(crate) fn bgra_ring(device: &ID3D11Device, width: u32, height: u32) -> Result<(BgraRing, Handles), CaptureError> {
     let unsupported = |_| CaptureError::Fallback(Fallback::Unsupported);
     let device5: ID3D11Device5 = device.cast().map_err(unsupported)?;
-    let context: ID3D11DeviceContext4 = context.cast().map_err(unsupported)?;
-    let output1: IDXGIOutput1 = output.cast().map_err(unsupported)?;
-    // SAFETY: `output1` and `device` are valid, and `device` is on the adapter that owns the output.
-    let duplication = unsafe { output1.DuplicateOutput(&device) }.map_err(|e| {
-        if e.code() == DXGI_ERROR_UNSUPPORTED { CaptureError::Fallback(Fallback::Unsupported) } else { failed("starting desktop duplication", e) }
-    })?;
-    // SAFETY: `duplication` is valid; `GetDesc` returns its description by value.
-    let dd = unsafe { duplication.GetDesc() };
-    if dd.ModeDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
-        return Err(CaptureError::Fallback(Fallback::Format));
-    }
-    if dd.Rotation != DXGI_MODE_ROTATION_IDENTITY && dd.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
-        return Err(CaptureError::Fallback(Fallback::Rotated));
-    }
-    let (width, height) = (dd.ModeDesc.Width, dd.ModeDesc.Height);
-    if width == 0 || height == 0 {
-        return Err(CaptureError::Lost("the display reports no size".into()));
-    }
     let tex_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
@@ -206,19 +206,36 @@ pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
     let (released, released_handle) = fence()?;
     handles.released = released_handle;
     let textures: [ID3D11Texture2D; SLOTS] = made.try_into().map_err(|_| CaptureError::Failed("the shared textures could not be created".into()))?;
-    let output = Output {
-        _device: device,
-        context,
-        duplication,
-        textures,
-        ready,
-        released,
-        held: None,
-        first: true,
-        width,
-        height,
-        adapter: AdapterId::from_parts(luid.LowPart, luid.HighPart),
-    };
+    Ok((BgraRing { textures, ready, released }, handles))
+}
+
+/// Open desktop duplication of the display named `name`, with a ring of textures of its size.
+pub(crate) fn open(name: &str) -> Result<(Output, Handles), CaptureError> {
+    let (adapter, output, desc) = find(name)?;
+    if desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
+        return Err(CaptureError::Fallback(Fallback::Rotated));
+    }
+    let (device, context, adapter) = bgra_device(&adapter)?;
+    let unsupported = |_| CaptureError::Fallback(Fallback::Unsupported);
+    let output1: IDXGIOutput1 = output.cast().map_err(unsupported)?;
+    // SAFETY: `output1` and `device` are valid, and `device` is on the adapter that owns the output.
+    let duplication = unsafe { output1.DuplicateOutput(&device) }.map_err(|e| {
+        if e.code() == DXGI_ERROR_UNSUPPORTED { CaptureError::Fallback(Fallback::Unsupported) } else { failed("starting desktop duplication", e) }
+    })?;
+    // SAFETY: `duplication` is valid; `GetDesc` returns its description by value.
+    let dd = unsafe { duplication.GetDesc() };
+    if dd.ModeDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+        return Err(CaptureError::Fallback(Fallback::Format));
+    }
+    if dd.Rotation != DXGI_MODE_ROTATION_IDENTITY && dd.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
+        return Err(CaptureError::Fallback(Fallback::Rotated));
+    }
+    let (width, height) = (dd.ModeDesc.Width, dd.ModeDesc.Height);
+    if width == 0 || height == 0 {
+        return Err(CaptureError::Lost("the display reports no size".into()));
+    }
+    let (BgraRing { textures, ready, released }, handles) = bgra_ring(&device, width, height)?;
+    let output = Output { _device: device, context, duplication, textures, ready, released, held: None, first: true, width, height, adapter };
     Ok((output, handles))
 }
 
@@ -301,5 +318,150 @@ impl Drop for Output {
         if self.held.take().is_some() {
             self.release_frame();
         }
+    }
+}
+
+/// The encoder side of an export ring: NV12 textures shared through NT handles, the ready fence the
+/// compositor sets once a texture holds a frame, and the released fence the encoder sets once it
+/// has read one.
+pub(crate) struct Nv12Ring {
+    device: ID3D11Device,
+    /// Only [`Nv12Ring::release`] uses it, from the caller that holds `gate`, so one thread at a
+    /// time uses the immediate context.
+    context: ID3D11DeviceContext4,
+    textures: [ID3D11Texture2D; SLOTS],
+    ready: ID3D11Fence,
+    released: ID3D11Fence,
+    /// The values asked for and queued on `released`.
+    gate: ReleaseGate,
+    /// Only the exporter (the `wgpu` feature) opens them.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) handles: Handles,
+}
+
+// SAFETY: the Direct3D 11 device and its fences are free-threaded, the textures are only handed out
+// as new references, and the immediate context is used only by the caller that holds the gate.
+unsafe impl Send for Nv12Ring {}
+// SAFETY: as above; shared references read the fences and clone the COM pointers.
+unsafe impl Sync for Nv12Ring {}
+
+/// An NV12 ring of `width × height` on the adapter `adapter`. Both sides must be even and not zero.
+pub(crate) fn nv12_ring(adapter: AdapterId, width: u32, height: u32) -> Result<Nv12Ring, Fallback> {
+    if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        return Err(Fallback::ImportFailed);
+    }
+    let (low, high) = adapter.parts();
+    // SAFETY: creating a DXGI factory has no precondition.
+    let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.map_err(|_| Fallback::Unsupported)?;
+    // SAFETY: `factory` is a valid factory; looking up an adapter has no other effect.
+    let dxgi: IDXGIAdapter1 = unsafe { factory.EnumAdapterByLuid(LUID { LowPart: low, HighPart: high }) }.map_err(|_| Fallback::OtherAdapter)?;
+    let mut device: Option<ID3D11Device> = None;
+    let mut context: Option<ID3D11DeviceContext> = None;
+    // SAFETY: the out pointers point at the two locals above, which outlive the call; a driver
+    // type of UNKNOWN is required when an adapter is given.
+    unsafe {
+        D3D11CreateDevice(
+            &dxgi,
+            D3D_DRIVER_TYPE_UNKNOWN,
+            HMODULE::default(),
+            Default::default(),
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+    }
+    .map_err(|_| Fallback::ImportFailed)?;
+    let (Some(device), Some(context)) = (device, context) else { return Err(Fallback::ImportFailed) };
+    let device5: ID3D11Device5 = device.cast().map_err(|_| Fallback::Unsupported)?;
+    let context: ID3D11DeviceContext4 = context.cast().map_err(|_| Fallback::Unsupported)?;
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_NV12,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: (D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 | D3D11_RESOURCE_MISC_SHARED.0) as u32,
+    };
+    let mut handles = Handles::none();
+    let mut made: Vec<ID3D11Texture2D> = Vec::with_capacity(SLOTS);
+    for slot in 0..SLOTS {
+        let mut tex: Option<ID3D11Texture2D> = None;
+        // SAFETY: `desc` lives for the call and `tex` receives the texture.
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut tex)) }.map_err(|_| Fallback::Unsupported)?;
+        let tex = tex.ok_or(Fallback::Unsupported)?;
+        let resource: IDXGIResource1 = tex.cast().map_err(|_| Fallback::Unsupported)?;
+        // SAFETY: the texture was created with SHARED_NTHANDLE; no name and default security.
+        let handle = unsafe { resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0, PCWSTR::null()) }
+            .map_err(|_| Fallback::Unsupported)?;
+        if let Some(h) = handles.textures.get_mut(slot) {
+            *h = handle;
+        }
+        made.push(tex);
+    }
+    let fence = || -> Result<(ID3D11Fence, HANDLE), Fallback> {
+        let mut f: Option<ID3D11Fence> = None;
+        // SAFETY: `f` receives the fence; a shared fence needs Windows 10 version 1703, and an
+        // older system returns an error.
+        unsafe { device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut f) }.map_err(|_| Fallback::Unsupported)?;
+        let f = f.ok_or(Fallback::Unsupported)?;
+        // SAFETY: the fence was created shared; no name and default security.
+        let h = unsafe { f.CreateSharedHandle(None, GENERIC_ALL.0, PCWSTR::null()) }.map_err(|_| Fallback::Unsupported)?;
+        Ok((f, h))
+    };
+    let (ready, ready_handle) = fence()?;
+    handles.ready = ready_handle;
+    let (released, released_handle) = fence()?;
+    handles.released = released_handle;
+    let textures: [ID3D11Texture2D; SLOTS] = made.try_into().map_err(|_| Fallback::Unsupported)?;
+    Ok(Nv12Ring { device, context, textures, ready, released, gate: ReleaseGate::default(), handles })
+}
+
+impl Nv12Ring {
+    pub(crate) fn device(&self) -> &ID3D11Device {
+        &self.device
+    }
+
+    pub(crate) fn texture(&self, slot: usize) -> Option<&ID3D11Texture2D> {
+        self.textures.get(slot)
+    }
+
+    /// The ready fence's value: the newest frame whose copy into its texture has finished.
+    pub(crate) fn ready(&self) -> u64 {
+        // SAFETY: `ready` is a valid fence; reading its completed value does not wait.
+        unsafe { self.ready.GetCompletedValue() }
+    }
+
+    /// The released fence's value: the newest frame the encoder has finished reading.
+    pub(crate) fn released(&self) -> u64 {
+        // SAFETY: `released` is a valid fence; reading its completed value does not wait.
+        unsafe { self.released.GetCompletedValue() }
+    }
+
+    /// The highest value asked of [`Nv12Ring::release`], queued on the device or about to be.
+    pub(crate) fn queued(&self) -> u64 {
+        self.gate.asked()
+    }
+
+    /// Set the released fence to `value` once the work already queued on the device has run. The
+    /// encoder calls it after the packet of the frame has come out, when the texture has been
+    /// read. A value not above the highest one queued so far is not signaled, so the fence never
+    /// goes back; that counts as queued. It takes no lock: while another caller is signaling, the
+    /// value is left for that caller to signal. Returns whether the signals this call ran were
+    /// queued.
+    pub(crate) fn release(&self, value: u64) -> bool {
+        self.gate.release(value, |value| {
+            // SAFETY: `released` is a fence of this device; the signal runs on the GPU after the
+            // work queued so far, without waiting here. Only the gate's holder runs this.
+            let signaled = unsafe { self.context.Signal(&self.released, value) }.is_ok();
+            // SAFETY: the context is valid; flushing sends the signal to the GPU.
+            unsafe { self.context.Flush() };
+            signaled
+        })
     }
 }

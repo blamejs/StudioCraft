@@ -85,10 +85,15 @@ impl Grab for Display {
 
 impl Grab for Window {
     fn open(target: &str) -> Result<Self, PluginError> {
-        Window::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))
+        let mut w = Window::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))?;
+        w.share_on_gpu();
+        Ok(w)
     }
     fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
         Window::grab(self, frame).into()
+    }
+    fn grab_shared(&mut self) -> SharedGrab {
+        Window::grab_shared(self)
     }
 }
 
@@ -376,7 +381,7 @@ mod tests {
         assert_eq!(io.video.size(), Some((8, 4)));
         c.produce(&io).unwrap();
         assert!(io.video.take().is_none(), "an unchanged screen publishes nothing");
-        f.ring().refuse(craft_gpu_interop::Fallback::NotDx12);
+        f.ring().refuse(craft_gpu_interop::Fallback::UnsupportedBackend);
         c.produce(&io).unwrap();
         assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))), "the picture is copied through memory");
     }

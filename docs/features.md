@@ -806,13 +806,35 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+On Windows, the compositor can also copy each converted frame into NV12 textures shared with a
+Direct3D 11 device of its own graphics adapter, and NVIDIA NVENC (built in) can encode from those
+textures, so the frame is not read back into CPU memory. This needs a compositor on Direct3D 12, or
+on Vulkan with `VK_KHR_external_memory_win32` and Vulkan 1.2 timeline semaphores. The compositor
+reads the frames back through CPU memory instead when it draws with another backend, when its
+graphics driver does not report its adapter, when its Vulkan driver lacks either of those, when
+the shared textures cannot be opened or a copy fails, when NVENC cannot open a session on that
+adapter or fails on a frame, and when NVENC holds every shared texture without writing a packet.
+Recordings and streams do not use the shared textures yet; they read the frames back.
+
 On Windows, a Display capture source captures with desktop duplication into textures that the
-compositor opens on its Direct3D 12 device, so the picture is not copied through CPU memory. The
-source copies the picture through CPU memory instead when the compositor draws with another
-backend (Vulkan, or the software adapter), when the display belongs to another graphics adapter
-than the compositor's, when the compositor cannot open the textures, for a rotated display, and
-when desktop duplication does not give 8-bit BGRA pictures. Staged windows sources and window
-capture always copy through CPU memory.
+compositor opens on its Direct3D 12 or Vulkan device, so the picture is not copied through CPU
+memory. On Vulkan the graphics driver must support `VK_KHR_external_memory_win32` and Vulkan 1.2
+timeline semaphores. The source copies the picture through CPU memory instead when the compositor
+draws with another backend (OpenGL), when the display belongs to another graphics adapter than the
+compositor's (the software adapter included), when the compositor's Vulkan driver lacks either of
+those, when the compositor
+cannot open the textures, for a rotated display, and when desktop duplication does not give 8-bit
+BGRA pictures. Staged windows sources always copy through CPU memory.
+
+On Windows, a Window capture source captures the window with Windows.Graphics.Capture into
+textures that the compositor opens the same way, on a Direct3D 11 device of the graphics adapter
+that drives the display the window is on. When the window's size changes, the source takes the
+next picture at the new size. The pointer is not drawn into the picture, and while the window is
+minimized the last picture stays. The source copies the picture through CPU memory instead on a
+Windows without window capture into textures, when the system does not let the window be captured
+that way, and in the same cases as a Display capture source: another backend, another graphics
+adapter, a Vulkan driver without the extension or the semaphores, and textures the compositor
+cannot open.
 
 The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4

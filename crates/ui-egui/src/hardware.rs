@@ -67,8 +67,9 @@ pub fn record_loss(losses: &mut Vec<u64>, now: u64) {
 /// The window's wgpu setup: the instance over the backends `craft-gpu-device` uses (with
 /// `WGPU_BACKEND` still honored), the adapter `preference` asks for, and a device with that
 /// adapter's own limits, so an adapter below wgpu's default limits (an older or software one)
-/// opens. What the user should be told about the choice is put in `notices` when the window
-/// opens.
+/// opens. A Vulkan device on Windows also opens shared textures when the driver can, for a display
+/// capture that stays on the GPU. What the user should be told about the choice is put in
+/// `notices` when the window opens.
 pub fn wgpu_setup(preference: Preference, notices: Arc<OnceLock<Vec<Notice>>>) -> egui_wgpu::WgpuSetup {
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     let desc = device::native_descriptor();
@@ -82,6 +83,7 @@ pub fn wgpu_setup(preference: Preference, notices: Arc<OnceLock<Vec<Notice>>>) -
     }));
     setup.device_descriptor = Arc::new(|adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
         label: Some("studiocraft window"),
+        required_features: adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
         required_limits: adapter.limits(),
         ..Default::default()
     });
@@ -207,6 +209,8 @@ mod tests {
         // the device asks for the adapter's own limits, so an adapter below wgpu's defaults opens
         let descriptor = (setup.device_descriptor)(&adapters[0]);
         assert_eq!(descriptor.required_limits, adapters[0].limits());
+        // shared Windows textures are asked for only when the adapter has them
+        assert_eq!(descriptor.required_features, adapters[0].features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32);
         assert!(pollster::block_on(adapters[0].request_device(&descriptor)).is_ok());
     }
 }

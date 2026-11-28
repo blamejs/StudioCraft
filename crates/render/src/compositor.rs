@@ -15,7 +15,9 @@ use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Transform, Vec2};
 use studiocraft_plugin::{EffectImage, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
-use crate::nv12::{EncodeTarget, Nv12};
+use craft_gpu_interop::Fallback;
+
+use crate::nv12::{EncodeTarget, GpuFrame, Nv12};
 use crate::plan::{ItemDesc, MAX_THUMBNAILS, Plan, SceneDesc, ThumbnailRequest};
 use crate::{CANVAS_FORMAT, CANVAS_VIEW_FORMAT, Gpu, RenderError, shaders};
 
@@ -38,12 +40,17 @@ pub struct RenderShared {
     pub canvas: Latest<(u32, u32)>,
     /// Start, change or stop converting frames for encoders.
     pub encode: Latest<Option<EncodeTarget>>,
+    /// Start, change or stop handing the encoder's frames to this queue on the GPU. A queue for a
+    /// session of a new size is published after that size in [`RenderShared::encode`].
+    pub encode_gpu: Latest<Option<Arc<Fifo<GpuFrame>>>>,
     /// Start, change or stop the small NV12 copy of the program that the scopes read.
     pub scope: Latest<Option<EncodeTarget>>,
     /// New canvas textures for the interface, published after a resize.
     pub views: Latest<Arc<CanvasViews>>,
     /// Frames encoders never received because the read-back fell behind.
     pub readback_lost: AtomicU64,
+    /// Frames the encoder on the GPU never received because it held every texture of the ring.
+    pub export_lost: AtomicU64,
     /// Program copies the scopes never received because their read-back fell behind.
     pub scope_skipped: AtomicU64,
     /// Shader and device errors for the interface to show.
@@ -68,9 +75,11 @@ impl Default for RenderShared {
             plan: Latest::new(),
             canvas: Latest::new(),
             encode: Latest::new(),
+            encode_gpu: Latest::new(),
             scope: Latest::new(),
             views: Latest::new(),
             readback_lost: AtomicU64::new(0),
+            export_lost: AtomicU64::new(0),
             scope_skipped: AtomicU64::new(0),
             errors: Fifo::new(16),
             captures: ArrayQueue::new(CAPTURE_SLOTS),
@@ -380,6 +389,10 @@ pub struct Compositor {
     started: HashMap<u64, Option<Tick>>,
     plan: Arc<Plan>,
     nv12: Option<Nv12>,
+    /// The queue of the one encoder that takes the frames on the GPU.
+    export_sink: Option<Arc<Fifo<GpuFrame>>>,
+    /// Frames the encoder on the GPU did not get because it held every texture of the ring.
+    export_lost: AtomicU64,
     /// The scopes' copy of the program, converted like the encoders' at a smaller size.
     scope_nv12: Option<Nv12>,
     /// Frames the scopes did not get because their read-back fell behind.
@@ -458,6 +471,8 @@ impl Compositor {
             started: HashMap::new(),
             plan: Arc::new(Plan::default()),
             nv12: None,
+            export_sink: None,
+            export_lost: AtomicU64::new(0),
             scope_nv12: None,
             scope_skipped: AtomicU64::new(0),
             frame_no: 0,
@@ -639,9 +654,47 @@ impl Compositor {
         }
     }
 
-    /// Start, change or stop converting frames for encoders.
+    /// Start, change or stop converting frames for encoders. Stopping, or another size, also
+    /// drops the queue of [`Compositor::set_encode_gpu`]: its session reads the old ring, so the
+    /// encoder gives a new queue once it has reopened at the new size.
     pub fn set_encode(&mut self, target: Option<EncodeTarget>) {
+        let before = self.nv12.as_ref().map(|n| (n.width, n.height));
         self.nv12 = retarget(&self.gpu.device, &self.pipes.yuv, self.nv12.take(), target, &mut self.errors);
+        if before.is_some() && self.nv12.as_ref().map(|n| (n.width, n.height)) != before {
+            self.export_sink = None;
+        }
+        // A converter of a new size has no export ring yet.
+        self.apply_export();
+    }
+
+    /// Hand the frames to `sink`, the queue of one encoder session, on the GPU from now on, as
+    /// well as to the read-back queues of [`Compositor::set_encode`]. `None` stops it. When the
+    /// frames cannot stay on the GPU, the reason is in [`Compositor::export_fallback`] and the
+    /// queue gets nothing; a new queue tries again.
+    pub fn set_encode_gpu(&mut self, sink: Option<Arc<Fifo<GpuFrame>>>) {
+        self.export_sink = sink;
+        if let Some(n) = &mut self.nv12 {
+            n.fallback = None;
+        }
+        self.apply_export();
+    }
+
+    fn apply_export(&mut self) {
+        let Some(n) = &mut self.nv12 else { return };
+        if n.fallback.is_some() {
+            // The reason stays until the encoders change their queues.
+            return;
+        }
+        if let Err(reason) = n.set_export(&self.gpu.device, &self.gpu.queue, self.export_sink.clone()) {
+            log::info!("program frames go to the encoders through memory: {reason}");
+        }
+    }
+
+    /// Why the encoders' frames go through memory instead of staying on the GPU, once the export
+    /// has been asked for and could not run or stopped, including a reason the running export's
+    /// ring recorded after the last frame was drawn.
+    pub fn export_fallback(&self) -> Option<Fallback> {
+        self.nv12.as_ref().and_then(Nv12::export_fallback)
     }
 
     /// Start, change or stop the scopes' NV12 copy of the program.
@@ -652,6 +705,12 @@ impl Compositor {
     /// Frames the scopes' copy skipped because all its read-back buffers were in flight.
     pub fn scope_skipped(&self) -> u64 {
         self.scope_skipped.load(Ordering::Relaxed)
+    }
+
+    /// Frames the encoder on the GPU did not get because it held every texture of the ring. They
+    /// are not counted as read-back losses.
+    pub fn export_lost(&self) -> u64 {
+        self.export_lost.load(Ordering::Relaxed)
     }
 
     /// Apply what the app published, then draw a frame. On a lost device nothing is applied or
@@ -682,8 +741,14 @@ impl Compositor {
                 shared.views.publish(self.views());
             }
         }
+        // The queue is taken before the target: a queue published after a new size is then
+        // applied after that size, never to the converter of the size before.
+        let sink = shared.encode_gpu.take();
         if let Some(e) = shared.encode.take() {
             self.set_encode(e);
+        }
+        if let Some(sink) = sink {
+            self.set_encode_gpu(sink);
         }
         if let Some(s) = shared.scope.take() {
             self.set_scope(s);
@@ -708,6 +773,7 @@ impl Compositor {
         }
         self.frame(now, &shared.readback_lost);
         shared.scope_skipped.store(self.scope_skipped(), Ordering::Relaxed);
+        shared.export_lost.store(self.export_lost(), Ordering::Relaxed);
         if self.thumb_generation != thumb_generation
             && let Some(views) = self.thumbnail_views()
         {
@@ -876,11 +942,23 @@ impl Compositor {
             }
         }
 
-        let copied = self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, readback_lost));
-        let scope_copied = self.scope_nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, &self.scope_skipped));
+        let copied =
+            self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &device, &mut enc, program, now, readback_lost, &self.export_lost));
+        // The scopes' copy never goes to an export ring.
+        let scope_copied = self
+            .scope_nv12
+            .as_mut()
+            .is_some_and(|n| convert(n, &self.pipes.yuv, &device, &mut enc, program, now, &self.scope_skipped, &self.scope_skipped));
 
         self.uniforms.flush(&self.gpu.queue);
-        self.gpu.queue.submit([enc.finish()]);
+        // The copy into the export ring is a command buffer of its own (wgpu cannot write NV12
+        // textures), submitted right after the passes it copies from.
+        let export = self.nv12.as_mut().and_then(Nv12::export_commands);
+        self.gpu.queue.submit(std::iter::once(enc.finish()).chain(export));
+        if let Some(n) = &mut self.nv12 {
+            n.exported();
+            n.poll_export();
+        }
         self.views.program.publish(pi);
         if let Some(i) = qi {
             self.views.preview.publish(i);
@@ -937,6 +1015,9 @@ impl Compositor {
         }
         if st.shared.as_ref().is_some_and(|i| i.pending().is_some()) {
             Self::draw_shared(device, queue, &self.pipes, st);
+        } else if let Some(importer) = &st.shared {
+            // Shared textures whose draws have finished go back to the capture.
+            importer.poll();
         }
     }
 
@@ -1096,6 +1177,9 @@ impl Compositor {
         self.answer_captures(None);
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
+            // A Vulkan export copies the finished copies' value to the ready fence from here, so
+            // the encoder sees the last frame's copy as done.
+            n.poll_export();
         }
         if let Some(n) = &mut self.scope_nv12 {
             n.collect(&self.scope_skipped);
@@ -1136,14 +1220,38 @@ pub(crate) fn yuv_converter(device: &wgpu::Device) -> Converter {
     Converter::new(device, Conversion::new(Format::Nv12, Matrix::Bt709, Range::Limited))
 }
 
-/// Record `n`'s two conversion passes from `program` and its copy into a free read-back buffer;
-/// whether it was recorded. With every buffer in flight the frame is skipped and counted in `lost`.
-fn convert(n: &mut Nv12, converter: &Converter, enc: &mut wgpu::CommandEncoder, program: &Target, now: Tick, lost: &AtomicU64) -> bool {
-    if !n.has_room() {
+/// Record `n`'s two conversion passes from `program`, the copy into its export ring when it has
+/// one, and its copy into a free read-back buffer when the read-back runs; whether the read-back
+/// copy was recorded. With every buffer in flight the read-back skips the frame and counts it in
+/// `lost`; a frame for which every texture of the export ring is still being encoded is counted in
+/// `export_lost` instead.
+#[allow(clippy::too_many_arguments)]
+fn convert(
+    n: &mut Nv12,
+    converter: &Converter,
+    device: &wgpu::Device,
+    enc: &mut wgpu::CommandEncoder,
+    program: &Target,
+    now: Tick,
+    lost: &AtomicU64,
+    export_lost: &AtomicU64,
+) -> bool {
+    if !n.exporting() && !n.has_room() {
         lost.fetch_add(1, Ordering::Relaxed);
         return false;
     }
-    if converter.draw(enc, &program.yuv, &n.planes).is_err() || !n.copy(enc, now) {
+    if converter.draw(enc, &program.yuv, &n.planes).is_err() {
+        lost.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    if n.exporting() {
+        n.export(device, enc, now, export_lost);
+    }
+    // A failed export has stopped, and this frame is read back instead.
+    if !n.reads_back() {
+        return false;
+    }
+    if !n.has_room() || !n.copy(enc, now) {
         lost.fetch_add(1, Ordering::Relaxed);
         return false;
     }

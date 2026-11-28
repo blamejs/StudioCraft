@@ -132,6 +132,24 @@ pub trait VideoSession: Send {
     /// Encode `nv12`, a tightly packed NV12 frame of the opened size, shown at frame `pts`. The
     /// packets that are ready are appended to `out`.
     fn encode(&mut self, nv12: &[u8], pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError>;
+    /// Encode `frame`, an NV12 frame of the opened size in a texture of an export ring on the
+    /// GPU, shown at frame `pts`. The call does not wait for the GPU: a frame whose copy has not
+    /// finished is kept and encoded on a later call of this or [`VideoSession::poll_shared`]. The
+    /// packets that are ready are appended to `out`. A session that takes its frames from memory
+    /// refuses it.
+    fn encode_shared(&mut self, frame: craft_gpu_interop::ExportFrame, pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        let _ = (frame, pts, out);
+        Err(PluginError::Unavailable("this encoder takes its frames from memory".into()))
+    }
+    /// Encode the kept frames of [`VideoSession::encode_shared`] whose copies have finished,
+    /// without a new frame, and append the packets that are ready to `out`. The caller calls it
+    /// while no new frame arrives: the compositor writes a texture again only once its frame is
+    /// encoded. It does not wait for the GPU. A session that takes its frames from memory has
+    /// nothing to do.
+    fn poll_shared(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        let _ = out;
+        Ok(())
+    }
     /// Append the packets the encoder still holds to `out`. No frame can follow. An error means the
     /// last frames were lost.
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError>;
@@ -257,6 +275,30 @@ mod tests {
         assert!(!Availability::NotRunHere.can_start());
         assert_eq!(e.availability(&EncoderEnv { ffmpeg_encoders: None, builtin: true }), Availability::Ready);
         assert_eq!(External.availability(&EncoderEnv { ffmpeg_encoders: None, builtin: true }), Availability::Unknown);
+    }
+
+    struct Memory;
+
+    impl VideoSession for Memory {
+        fn codec_private(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn encode(&mut self, _: &[u8], _: i64, _: &mut Vec<Packet>) -> Result<(), PluginError> {
+            Ok(())
+        }
+        fn flush(&mut self, _: &mut Vec<Packet>) -> Result<(), PluginError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_session_that_takes_frames_from_memory_refuses_frames_on_the_gpu() {
+        let ring = craft_gpu_interop::ExportRing::detached(64, 2);
+        let frame = craft_gpu_interop::ExportFrame::new(ring, 0, 1).unwrap();
+        let mut out = Vec::new();
+        assert!(matches!(Memory.encode_shared(frame, 0, &mut out), Err(PluginError::Unavailable(_))));
+        assert!(Memory.poll_shared(&mut out).is_ok(), "nothing is kept to encode");
+        assert!(out.is_empty());
     }
 
     #[test]

@@ -1615,6 +1615,7 @@ dependencies = [
 name = "craft-gpu-interop"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "criterion",
  "pollster 0.4.0",
  "wgpu",
@@ -6522,6 +6523,7 @@ name = "studiocraft-encode"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
+ "craft-gpu-interop",
  "craft-hwenc-native",
  "craft-video",
  "studiocraft-media",

@@ -38,12 +38,12 @@ pub struct DisplayCapture {
     gpu: Option<Duplication>,
 }
 
-/// What [`DisplayCapture::grab_shared`] gave.
+/// What [`DisplayCapture::grab_shared`] or [`crate::window::WindowCapture::grab_shared`] gave.
 #[derive(Debug)]
 pub enum SharedGrab {
     /// A new picture in a texture shared with the compositor.
     Frame(SharedFrame),
-    /// The display has not changed since the last picture.
+    /// The display or window has not changed since the last picture.
     Unchanged,
     /// The capture does not run on the GPU (any more); [`DisplayCapture::grab`] copies the
     /// picture into memory.
@@ -52,15 +52,15 @@ pub enum SharedGrab {
 
 /// What the GPU capture does after one grab.
 #[derive(Debug)]
-enum Step {
+pub(crate) enum Step {
     Give(SharedGrab),
-    /// The desktop changed mode or was switched: open the duplication again.
+    /// The desktop changed mode or was switched, or the window was lost: open the capture again.
     Reopen,
     /// Stop the GPU capture and copy through memory from now on.
     Stop,
 }
 
-fn step(grab: Result<Grab, CaptureError>) -> Step {
+pub(crate) fn step(grab: Result<Grab, CaptureError>) -> Step {
     match grab {
         Ok(Grab::Frame(f)) => Step::Give(SharedGrab::Frame(f)),
         Ok(Grab::Unchanged) => Step::Give(SharedGrab::Unchanged),
@@ -291,7 +291,7 @@ mod tests {
         assert!(matches!(step(Ok(Grab::Frame(frame))), Step::Give(SharedGrab::Frame(f)) if f.ready() == 1));
         assert!(matches!(step(Ok(Grab::Unchanged)), Step::Give(SharedGrab::Unchanged)));
         assert!(matches!(step(Err(CaptureError::Lost("mode".into()))), Step::Reopen));
-        for e in [CaptureError::Fallback(craft_gpu_interop::Fallback::NotDx12), CaptureError::Failed("x".into())] {
+        for e in [CaptureError::Fallback(craft_gpu_interop::Fallback::UnsupportedBackend), CaptureError::Failed("x".into())] {
             assert!(matches!(step(Err(e)), Step::Stop));
         }
     }

@@ -1,13 +1,14 @@
 [package]
 name = "craft-gpu-interop"
-description = "Captured frames shared on the GPU: Windows desktop duplication into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 device, with the reasons a caller falls back to a CPU copy"
+description = "Captured frames shared on the GPU: Windows desktop duplication and window capture into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 or Vulkan device, program frames exported from that device to a hardware encoder in shared NV12 textures, with the reasons a caller falls back to a CPU copy"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
 # One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
-# `dxgi_ffi` and `d3d12_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
+# `dxgi_ffi`, `wgc_ffi`, `d3d12_ffi` and `vulkan_ffi` modules allow it, and every unsafe block carries a
+# SAFETY comment.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -26,15 +27,23 @@ undocumented_unsafe_blocks = "deny"
 
 [features]
 # The importer: shared textures into a wgpu device, and the opaque copy into the caller's texture.
-wgpu = ["dep:wgpu"]
+# The exporter: a wgpu device's program frames copied into an export ring.
+wgpu = ["dep:wgpu", "dep:ash"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
 
-# Windows: DXGI desktop duplication on a Direct3D 11 device, and the Direct3D 12 side of the
-# import. The version is the one wgpu-hal 30 uses, so its Direct3D 12 types are the same types.
+# Windows: DXGI desktop duplication and Windows.Graphics.Capture window capture on a Direct3D 11
+# device, and the Direct3D 12 and Vulkan sides of the import. The versions are the ones wgpu-hal 30
+# uses, so its Direct3D 12 and Vulkan types are the same types.
 [target.'cfg(windows)'.dependencies]
+ash = { version = "0.38", default-features = false, optional = true }
 windows = { version = "0.62", features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
@@ -43,6 +52,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
