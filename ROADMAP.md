@@ -48,10 +48,12 @@ description in [docs/features.md](docs/features.md).
 - Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 - One marker command marks the recording and the audio tracks at the same moment, and lists the session's markers ([Recording markers](docs/features.md#recording-markers)).
 - A session's marker is renamed in the recording's timeline and the take's session file, while they run and after they have ended ([Recording markers](docs/features.md#recording-markers)).
+- Markers also go to the copy a stream saves, and `<copy name>.otio` is written beside the copy when the stream stops ([Recording markers](docs/features.md#recording-markers)).
 
 ### Streaming
 
 - Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, the status bar and notices say when destinations lose their connection and reconnect, each try looks the server's name up again with a 10 s limit that a stop does not wait for, one refused right after a lost connection is tried again up to 3 times, with no network route a destination waits and tries as soon as the route returns, and a destination that waits shows its try number out of its tries and a countdown to its next try, which Try Now starts at once; Check Connection, and a check after a destination's third failed try or its giving up, test the route, the lookup, the connection to the server and its RTMP handshake (with no command or key) and name one cause, telling a port that takes the connection but does not answer as a stream server from one that cannot be reached ([Streaming](docs/features.md#streaming)).
+- A stream can also save a copy of what it sends to an MKV file in the recording folder, without another encoder, for posting as a video; the copy never holds back the stream, and a stream's take of audio tracks is listed as the copy's for editing ([Copy of the stream](docs/features.md#copy-of-the-stream)).
 - `golive.check` lists what would stop a stream or spoil it (destinations, the encoder, free space for recordings, sources and live captions), each item passing, a problem or unknown, and the window does not show it yet ([Streaming](docs/features.md#streaming)).
 - Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero. The Pause button after Go Live, with its menu of countdowns, and File › Pause Program start it; the button, a banner above the program with +1 min and Resume, and File › Resume Program end it ([Pause screen](docs/features.md#pause-screen)).
 
@@ -143,9 +145,9 @@ description in [docs/features.md](docs/features.md).
    kind of service adds what its public interface offers, such as a list of ingest servers, the
    title and category, stream health, the viewer count and chat.
 9. **Markers for editing (partly done).** File › Add Recording Marker, or its hotkey, marks the
-   running recording, and a timeline file written beside the recording opens in FilmCraft with
-   the markers on it ([Recording markers](docs/features.md#recording-markers)). Markers on the
-   stream are still to be built.
+   running recording and the stream's copy, and a timeline file written beside each opens in
+   FilmCraft with the markers on it ([Recording markers](docs/features.md#recording-markers)).
+   Markers on a stream that saves no copy are still to be built.
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.

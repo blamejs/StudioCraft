@@ -31,6 +31,9 @@ pub const SCAN_LIMIT: Duration = Duration::from_secs(5);
 /// The start of a saved replay's name ([`crate::replay_path`]).
 const REPLAY_PREFIX: &str = "Replay ";
 
+/// The start of the name of a stream's copy ([`crate::stream_copy_path`]).
+pub(crate) const STREAM_COPY_PREFIX: &str = "Stream ";
+
 /// What one scan of the recording folder found.
 #[derive(Debug)]
 pub(crate) struct Scan {
@@ -61,7 +64,16 @@ struct VideoFile {
     extension: String,
     bytes: u64,
     modified_unix_ms: Option<i64>,
-    replay: bool,
+    made_by: MadeBy,
+}
+
+/// Which output wrote a video file, by its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MadeBy {
+    Recording,
+    Replay,
+    /// The copy of a stream.
+    Stream,
 }
 
 impl Entry {
@@ -79,7 +91,8 @@ impl Entry {
 
     fn json(&self) -> Value {
         let kind = match &self.file {
-            Some(f) if f.replay => "replay",
+            Some(f) if f.made_by == MadeBy::Replay => "replay",
+            Some(f) if f.made_by == MadeBy::Stream => "stream_copy",
             Some(_) => "recording",
             None => "audio_tracks",
         };
@@ -135,9 +148,9 @@ impl Scan {
 }
 
 /// The milliseconds since 1970 of the local date and time a recording's or replay's name starts
-/// with (`2026-11-21 10-00-00`, after `Replay `), when it starts with one.
+/// with (`2026-11-21 10-00-00`, after `Replay ` or `Stream `), when it starts with one.
 fn stamp_unix_ms(name: &str) -> Option<i64> {
-    let stamp = name.strip_prefix(REPLAY_PREFIX).unwrap_or(name).get(..19)?;
+    let stamp = name.strip_prefix(REPLAY_PREFIX).or_else(|| name.strip_prefix(STREAM_COPY_PREFIX)).unwrap_or(name).get(..19)?;
     let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H-%M-%S").ok()?;
     chrono::Local.from_local_datetime(&naive).earliest().map(|t| t.timestamp_millis())
 }
@@ -292,8 +305,12 @@ pub(crate) fn scan(folder: &Path, deadline: Instant, now: &dyn Fn() -> Instant) 
                     timelines.push((stem.to_string(), path.clone(), modified_ms(&meta)));
                     continue;
                 }
-                let replay = ext == "mkv" && stem.starts_with(REPLAY_PREFIX);
-                let file = VideoFile { path: path.clone(), extension: ext, bytes: meta.len(), modified_unix_ms: modified_ms(&meta), replay };
+                let made_by = match ext.as_str() {
+                    "mkv" if stem.starts_with(REPLAY_PREFIX) => MadeBy::Replay,
+                    "mkv" if stem.starts_with(STREAM_COPY_PREFIX) => MadeBy::Stream,
+                    _ => MadeBy::Recording,
+                };
+                let file = VideoFile { path: path.clone(), extension: ext, bytes: meta.len(), modified_unix_ms: modified_ms(&meta), made_by };
                 videos.push((stem.to_string(), file));
             }
         }
@@ -308,9 +325,11 @@ pub(crate) fn scan(folder: &Path, deadline: Instant, now: &dyn Fn() -> Instant) 
     // A folder that cannot be read is reported once.
     let folder_reported = out.unreadable.iter().any(|(p, _)| p == folder);
     out.unreadable.extend(listing.unreadable.into_iter().filter(|(p, _)| p != folder || !folder_reported));
-    // Replays have no timeline or take. A timeline is written when its recording's file is
-    // finished, so it is nearest the file's last change; a take starts with its recording.
-    let recs: Vec<(usize, &str)> = videos.iter().enumerate().filter(|(_, (_, f))| !f.replay).map(|(i, (s, _))| (i, s.as_str())).collect();
+    // Replays have no timeline or take; the copy of a stream takes the stream's take, which has
+    // its name. A timeline is written when its recording's file is finished, so it is nearest the
+    // file's last change; a take starts with its recording.
+    let recs: Vec<(usize, &str)> =
+        videos.iter().enumerate().filter(|(_, (_, f))| f.made_by != MadeBy::Replay).map(|(i, (s, _))| (i, s.as_str())).collect();
     let starts: Vec<Option<i64>> = recs.iter().map(|(_, s)| stamp_unix_ms(s)).collect();
     let owners_for = |target: &dyn Fn(usize) -> Option<i64>| -> Vec<Owner<'_>> {
         recs.iter()
@@ -498,6 +517,35 @@ mod tests {
         assert_eq!((tracks["state"].clone(), tracks["markers"].clone(), tracks["seconds"].clone()), (json!("finished"), json!(1), json!(2.0)));
         assert_eq!((list[3]["kind"].clone(), list[3]["file"].clone()), (json!("audio_tracks"), Value::Null));
         assert_eq!(v["scanning"], json!(false));
+    }
+
+    #[test]
+    fn a_streams_copy_is_listed_with_its_start_and_the_streams_take() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path();
+        let name = "Stream 2025-11-19 08-00-00";
+        std::fs::write(f.join(format!("{name}.mkv")), b"copy").unwrap();
+        take(f, name, &[start(stamp_unix_ms("2025-11-19 08-00-00")), Line::End { frames: 48_000 }]);
+        // Only an MKV file is a stream's copy; another file of that name is a recording.
+        std::fs::write(f.join("Stream 2025-11-18 08-00-00.mp4"), b"rec").unwrap();
+        let s = scan(f, far(), &Instant::now);
+        let v = s.json(false);
+        let list = v["recordings"].as_array().unwrap();
+        assert_eq!(list.len(), 2, "the take is the copy's: {v}");
+        let copy = list.iter().find(|e| e["kind"] == json!("stream_copy")).unwrap();
+        assert_eq!(copy["started_unix_ms"], json!(stamp_unix_ms("2025-11-19 08-00-00")), "the start comes from the name");
+        assert_eq!((copy["timeline"].clone(), copy["format"].clone()), (Value::Null, json!("mkv")));
+        assert_eq!(copy["audio_tracks"]["state"], json!("finished"), "{v}");
+        assert!(list.iter().any(|e| e["kind"] == json!("recording") && e["format"] == json!("mp4")), "{v}");
+        // A replay keeps no take, even of its own name.
+        std::fs::remove_file(f.join(format!("{name}.mkv"))).unwrap();
+        std::fs::write(f.join(format!("Replay {}.mkv", &name["Stream ".len()..])), b"clip").unwrap();
+        take(f, &format!("Replay {}", &name["Stream ".len()..]), &[start(stamp_unix_ms("2025-11-19 08-00-00"))]);
+        let v = scan(f, far(), &Instant::now).json(false);
+        let list = v["recordings"].as_array().unwrap();
+        let replay = list.iter().find(|e| e["kind"] == json!("replay")).unwrap();
+        assert_eq!(replay["audio_tracks"], Value::Null, "{v}");
+        assert_eq!(list.iter().filter(|e| e["kind"] == json!("audio_tracks")).count(), 2, "{v}");
     }
 
     #[test]

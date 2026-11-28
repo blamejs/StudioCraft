@@ -456,31 +456,41 @@ in the take at the same moment are errors.
 
 ### `record.marker`
 
-`record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
-the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
-marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
-and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
-recording stops, `<recording name>.otio` is written beside it with each marker at its frame
+`record.marker` takes `{"name"}` and marks the running recording and the copy the running stream
+saves at this moment. `name` follows the rules of `audio_tracks.marker`; without it the marker is
+"Marker N", the output's own Nth marker. It returns `{"name", "seconds", "recording", "stream_copy"}`.
+`name` and `seconds` are the marker's in the recording, or in the copy when the recording does not
+keep it; `seconds` counts from the output's first frame and leaves out the time the output has
+skipped so far while the computer was suspended. For a stream's copy whose file starts after the
+stream's first frame, it counts from the file's first frame, and a marker from before then is at 0. `recording` and `stream_copy` are each
+`{"name", "seconds"}` when that output kept the marker, `{"error"}` when it runs and did not, or
+`null` when it does not run. Neither output running, and no output keeping the marker, as when each
+already holds 10,000 markers, are errors. When the recording stops, `<recording name>.otio` is
+written beside it with each marker at its frame, and when the stream stops and the copy's file is
+finished, `<copy name>.otio` is written beside the copy
 ([Recording markers](features.md#recording-markers)).
 
 ### `marker.add` and `marker.list`
 
-`marker.add` takes `{"name"}` and marks the running recording and the running take of audio
-tracks at this moment with one marker, as `record.marker` and `audio_tracks.marker` do. A session
-lasts from the start of the first of those two outputs until both have stopped. `name` follows the
-rules of `audio_tracks.marker`; without it both outputs name the marker "Marker N", the session's
-Nth marker. It returns `{"index", "name", "seconds", "recording", "audio_tracks"}`: `index` is the
-marker's number in the session from 1, and `seconds` counts from the session's start (the
-recording's start, or the moment StudioCraft saw a take that started alone). `recording` and
-`audio_tracks` are each `{"seconds"}`, the marker's time in that output as `record.marker` and
-`audio_tracks.marker` return it, `{"error"}` when the output runs and did not keep the marker, or
-`null` when the output does not run. When one output does not keep the marker, the other keeps it.
-No running recording or take, no output keeping the marker, and a session that already holds
+`marker.add` takes `{"name"}` and marks the running recording, the running stream's copy and the
+running take of audio tracks at this moment with one marker, as `record.marker` and
+`audio_tracks.marker` do. A session lasts from the start of the first of those outputs until all
+have stopped. `name` follows the rules of `audio_tracks.marker`; without it every output names the
+marker "Marker N", the session's Nth marker. It returns
+`{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}`: `index` is the marker's
+number in the session from 1, and `seconds` counts from the session's start (the start of the
+recording or the stream's copy, whichever started first, or the moment StudioCraft saw a take that
+started alone). `recording`, `stream_copy` and `audio_tracks` are each `{"seconds"}`, the marker's
+time in that output, `{"error"}` when the output runs and did not keep the marker, or `null` when
+the output does not run. When one output does not keep the marker, the others keep it. No running
+recording, stream copy or take, no output keeping the marker, and a session that already holds
 10,000 markers (StudioCraft's own limit) are errors, and an error keeps no marker in the session.
 
 `marker.list` takes no params and returns `{"running", "markers"}`. `markers` lists the session's
-markers oldest first, each `{"index", "name", "seconds", "recording", "audio_tracks"}` with
-`recording` and `audio_tracks` each `{"seconds"}` or `null` for an output that did not keep it.
+markers oldest first, each `{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}`
+with `recording`, `stream_copy` and `audio_tracks` each `{"seconds"}` or `null` for an output that
+did not keep it. A marker set before the stream's copy got its first packet lists the time in the
+copy's file once the file's start is known.
 `running` is `false` after the session has ended; the list then holds that session's markers until
 the next session starts.
 
@@ -494,6 +504,8 @@ is required. The outputs are renamed this way:
   name in the timeline that is written when the file is finished. Once `<recording name>.otio` is
   written, that file is written again with the new name through a temporary file and a rename.
   While the timeline file is still being written, the rename is an error for the recording.
+- The stream's copy: the same as the recording, with `<copy name>.otio`, which is written once the
+  stream has stopped and the copy's file is finished.
 - The take of audio tracks: while the take runs, the rename goes to the take's journal, so the
   session file the take writes at its end, and the one repair writes after a crash, have the new
   name. Once the take has ended, its session file is written again with the new name through a
@@ -501,10 +513,10 @@ is required. The outputs are renamed this way:
   renames are waiting to be written, and while another marker is being added to or renamed in the
   take at the same moment, the rename is an error for the take.
 
-It returns `{"index", "name", "seconds", "recording", "audio_tracks"}` as `marker.list` lists the
-marker, with `recording` and `audio_tracks` each `{"seconds"}` when that output has the new name,
-`{"error"}` when it does not, or `null` when the output did not keep the marker. When one output
-does not take the new name, the other keeps it. A file that no longer has a marker with the old name
+It returns `{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}` as
+`marker.list` lists the marker, with `recording`, `stream_copy` and `audio_tracks` each
+`{"seconds"}` when that output has the new name, `{"error"}` when it does not, or `null` when the
+output did not keep the marker. When one output does not take the new name, the others keep it. A file that no longer has a marker with the old name
 at the marker's place, as after it was edited in another app, is not written, and that output
 reports an error. In the take's session file, that marker must also be the one the take set there,
 not another marker with the same name that was moved into its place. A file that another app saves
@@ -516,8 +528,8 @@ the new name are errors; the marker then keeps its name.
 
 `recordings.list` takes no params and lists what the recording folder holds, newest first: each
 `.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
-replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
-such as a stream's take. The folder is scanned on a background thread. The command returns at once
+replay (`Replay <date and time>.mkv`), each copy of a stream (`Stream <date and time>.mkv`), and
+each take of audio tracks that has no recording file, such as a stream's take. The folder is scanned on a background thread. The command returns at once
 with the last finished scan and starts a new scan when none runs, so the first call returns an
 empty list with `scanning` true, and a later call returns that scan. It returns
 `{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
@@ -533,11 +545,13 @@ empty list with `scanning` true, and a later call returns that scan. It returns
 | `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
 
 Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
-`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
-`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`kind` (`recording`, `replay`, `stream_copy` or `audio_tracks` for a take without a recording
+file), `started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
 `timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
 and time in the file's name read as local time, else the take's start. The list is sorted by it, or
-by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+by `modified_unix_ms` when it is `null`. A replay has no `timeline` or `audio_tracks`. A stream's
+copy is matched to a take as a recording is, so the take of the stream it was made from, which has
+its name, is its `audio_tracks`. A recording's `timeline` is `<name>.otio` beside it, and
 its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
 named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
 recording takes the take that started nearest its start, and the timeline last changed nearest its
@@ -723,8 +737,13 @@ or add an undo step. A parameter is an error.
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max",
-"reconnect", "check_service"}`, and `running_reconnect` while a stream of this profile runs.
-`check_service` is the profile's setting of `stream.check_service_set`. `reconnect` holds the
+"reconnect", "check_service", "save_copy", "copy"}`, and `running_reconnect` while a stream of this
+profile runs. `check_service` is the profile's setting of `stream.check_service_set` and
+`save_copy` its setting of `stream.save_copy_set`. `copy` is the copy of the running stream, or
+else of the last stream that ended, `{"file", "bytes", "lost_packets", "finished", "error"}`, or
+`null` when that stream saved none. `lost_packets` counts the packets the copy left out while the
+disk fell behind, `finished` is whether the file was finished after the stream ended, and `error`
+is why the copy stopped, or `null`. `document.inspect`'s `streaming` entry has the same `copy`. `reconnect` holds the
 profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
 with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
 `max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
@@ -844,6 +863,12 @@ a destination fails also fetches the service's list of ingest servers and status
 connects to two of its other ingest servers. It returns `{"changed", "check_service"}`, and a call
 that changes nothing does not save the profile. It is off by default. A missing `enabled`, or one
 that is not a boolean, is an error.
+
+`stream.save_copy_set` takes `{"enabled"}` and sets whether the next stream also writes what it
+sends to `Stream <date and time>.mkv` in the recording folder ([Copy of the
+stream](features.md#copy-of-the-stream)). It returns `{"changed", "save_copy"}`, and a call that
+changes nothing does not save the profile. A running stream keeps the setting it started with. It
+is off by default. A missing `enabled`, or one that is not a boolean, is an error.
 
 `stream.ingest_servers` takes `{"service", "retry"?}`, the id of a streaming service that publishes
 a list of its ingest servers, and starts fetching that list, as List Servers in the Streaming

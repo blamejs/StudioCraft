@@ -85,7 +85,8 @@ pub enum RuntimeAction {
     StartRecording,
     StopRecording,
     ToggleRecording,
-    /// Mark the running recording now, named `name` or numbered when it is `None`.
+    /// Mark the running recording and the running stream's copy now, named `name` or numbered
+    /// when it is `None`.
     RecordingMarker {
         name: Option<String>,
     },
@@ -145,15 +146,15 @@ pub enum RuntimeAction {
     AudioTracksMarker {
         name: Option<String>,
     },
-    /// Mark the running recording and the running take of audio tracks now with one marker,
-    /// named `name` or numbered when it is `None`.
+    /// Mark the running recording, the running stream's copy and the running take of audio
+    /// tracks now with one marker, named `name` or numbered when it is `None`.
     MarkerAdd {
         name: Option<String>,
     },
     /// The markers of the running session, or of the last one.
     MarkerList,
-    /// Rename the session's marker `index` (from 1) to `name` in the recording and the take of
-    /// audio tracks that hold it.
+    /// Rename the session's marker `index` (from 1) to `name` in the recording, the stream's copy
+    /// and the take of audio tracks that hold it.
     MarkerRename {
         index: usize,
         name: String,
@@ -451,8 +452,8 @@ pub enum Command {
     RecordStop {},
     #[serde(rename = "record.toggle")]
     RecordToggle {},
-    /// Mark the running recording at this moment, named `name` or numbered; the timeline file
-    /// written beside the recording lists the marker.
+    /// Mark the running recording and the running stream's copy at this moment, named `name` or
+    /// numbered; the timeline file written beside the recording or the copy lists the marker.
     #[serde(rename = "record.marker")]
     RecordMarker {
         /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
@@ -553,8 +554,8 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
-    /// Mark the running recording and the running take of audio tracks at this moment with one
-    /// marker, named `name` or numbered in the session.
+    /// Mark the running recording, the running stream's copy and the running take of audio tracks
+    /// at this moment with one marker, named `name` or numbered in the session.
     #[serde(rename = "marker.add")]
     MarkerAdd {
         /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
@@ -564,8 +565,9 @@ pub enum Command {
     /// The markers `marker.add` set in the running session, or in the last one.
     #[serde(rename = "marker.list")]
     MarkerList {},
-    /// Rename the session's marker `index` (from 1, as `marker.list` numbers it) in the recording
-    /// and the take of audio tracks that hold it, while they run or after they ended.
+    /// Rename the session's marker `index` (from 1, as `marker.list` numbers it) in the recording,
+    /// the stream's copy and the take of audio tracks that hold it, while they run or after they
+    /// ended.
     #[serde(rename = "marker.rename")]
     MarkerRename { index: usize, name: String },
     /// Forget the hardware encoders' test results, in the session and in the file that keeps

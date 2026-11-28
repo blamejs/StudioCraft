@@ -474,9 +474,9 @@ fn recording_needs_the_graphics_device() {
     assert!(s.output(OutputKind::Recording).is_none());
     assert_eq!(s.state_json()["recording"]["active"], json!(false));
     let e = s.run("record.marker", &json!({"name": "Goal"})).unwrap_err();
-    assert_eq!(e.to_string(), "no recording is running");
+    assert_eq!(e.to_string(), "neither a recording nor a stream's copy is running");
     let e = s.run("marker.add", &json!({"name": "Goal"})).unwrap_err();
-    assert_eq!(e.to_string(), "neither a recording nor a take of audio tracks is running");
+    assert_eq!(e.to_string(), "no recording, stream copy or take of audio tracks is running");
     let (v, _) = s.run("marker.list", &json!({})).unwrap();
     assert_eq!(v, json!({"running": false, "markers": []}));
     let e = s.run("marker.rename", &json!({"index": 1, "name": "Goal"})).unwrap_err();
@@ -2052,6 +2052,127 @@ mod audio_tracks {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The running take's `Audio Files` folder, once its disk thread has made it.
+    fn take_files(s: &mut Studio) -> std::path::PathBuf {
+        let mut spins = 0u64;
+        loop {
+            if let Some(files) = s.audio_tracks_take().and_then(|t| t.dir()) {
+                return files.to_path_buf();
+            }
+            spins += 1;
+            assert!(spins < 50_000_000, "the take never made its folder");
+            s.tick();
+            std::thread::yield_now();
+        }
+    }
+
+    /// Tick until the stream has finished stopping.
+    fn stream_stopped(s: &mut Studio) {
+        let mut spins = 0u64;
+        while s.output(OutputKind::Streaming).is_some() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the stream never finished stopping");
+            s.tick();
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_streams_take_is_named_after_its_copy() {
+        a_streams_take_is_named_after_its_copy_when(true);
+    }
+
+    #[test]
+    fn a_take_started_during_a_stream_is_named_after_its_copy() {
+        a_streams_take_is_named_after_its_copy_when(false);
+    }
+
+    #[test]
+    fn a_stream_whose_keyframes_are_too_far_apart_starts_without_a_copy() {
+        use studiocraft_model::{Destination, KeyRef};
+        // Only a broken build waits this long for a connection that should come at once.
+        const GUARD: Duration = Duration::from_secs(60);
+        let temp = tempfile::tempdir().unwrap();
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        let incoming = connections(l);
+        let mut p = small_profile();
+        p.output.folder = temp.path().to_string_lossy().into_owned();
+        p.stream.key = "profile-key".into();
+        p.stream.save_copy = true;
+        p.stream.keyframe_interval_s = studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1;
+        p.stream.destinations = vec![Destination { id: "a".into(), server: url, key: KeyRef::Profile, ..Destination::default() }];
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+        s.take_notices();
+        s.start_output(OutputKind::Streaming).unwrap();
+        let conn = incoming.recv_timeout(GUARD).expect("the stream connects");
+        assert!(s.outputs.stream_copy().is_none(), "the stream has no copy");
+        let notices = s.take_notices();
+        assert!(
+            notices.iter().any(|n| n.error && n.template.starts_with("The stream starts without a copy: a copy needs a keyframe")),
+            "{:?}",
+            notices.iter().map(|n| n.template).collect::<Vec<_>>()
+        );
+        let files: Vec<_> = std::fs::read_dir(temp.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(files.is_empty(), "no file was reserved for the copy: {files:?}");
+        drop(conn);
+        s.stop_output(OutputKind::Streaming);
+        stream_stopped(&mut s);
+        drop(s);
+    }
+
+    /// A stream with a copy runs, with audio tracks on from its start (`at_start`) or turned on
+    /// while it runs: the take is named after the copy.
+    fn a_streams_take_is_named_after_its_copy_when(at_start: bool) {
+        use studiocraft_model::{Destination, KeyRef};
+        // Only a broken build waits this long for a connection that should come at once.
+        const GUARD: Duration = Duration::from_secs(60);
+        // Declared before the studio, so the folder is removed after the studio stops, and also when
+        // an assertion fails.
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
+        // The names of the next two minutes are taken, so the copy's name has a number.
+        let now = chrono::Local::now();
+        for s in 0..120 {
+            let stamp = (now + chrono::TimeDelta::seconds(s)).format("%Y-%m-%d %H-%M-%S");
+            std::fs::write(dir.join(format!("Stream {stamp}.mkv")), b"older").unwrap();
+        }
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        let incoming = connections(l);
+        let mut p = small_profile();
+        p.output.folder = dir.to_string_lossy().into_owned();
+        p.audio_tracks.enabled = at_start;
+        p.audio_tracks.when = AudioTracksWhen::Streaming;
+        p.audio_tracks.buffer_mib = 16;
+        p.stream.key = "profile-key".into();
+        p.stream.save_copy = true;
+        p.stream.destinations = vec![Destination { id: "a".into(), server: url, key: KeyRef::Profile, ..Destination::default() }];
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+        s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+        s.run("source.add", &json!({"kind": "audio_output", "name": "Desk"})).unwrap();
+        s.start_output(OutputKind::Streaming).unwrap();
+        let conn = incoming.recv_timeout(GUARD).expect("the stream connects");
+        let copy = s.outputs.stream_copy().expect("the stream has a copy").path;
+        let stem = copy.file_stem().unwrap().to_string_lossy().into_owned();
+        assert!(stem.starts_with("Stream ") && stem.ends_with(" (2)"), "{stem}");
+        if !at_start {
+            assert!(s.audio_tracks_take().is_none());
+            let mut p = s.profile().clone();
+            p.audio_tracks.enabled = true;
+            s.set_profile(p).unwrap();
+            s.tick();
+        }
+        armed(&mut s);
+        // The take's disk thread makes its folder after the take is ready.
+        assert_eq!(take_files(&mut s), dir.join(format!("{stem} Audio")).join("Audio Files"), "the take has the copy's name");
+        drop(conn);
+        s.stop_output(OutputKind::Streaming);
+        stream_stopped(&mut s);
+        s.finish_audio_tracks_blocking();
+        drop(s);
+    }
+
     #[test]
     fn a_take_handed_to_an_output_that_fails_opens_when_nothing_follows_it() {
         let (mut s, dir) = studio("handoff-fails", true);
@@ -2212,7 +2333,7 @@ mod audio_tracks {
         assert_eq!(list["running"], json!(false));
         assert_eq!(list["markers"].as_array().unwrap().len(), 2);
         let e = s.run("marker.add", &json!({})).unwrap_err().to_string();
-        assert_eq!(e, "neither a recording nor a take of audio tracks is running");
+        assert_eq!(e, "no recording, stream copy or take of audio tracks is running");
         s.test_streaming = true;
         s.tick();
         armed(&mut s);

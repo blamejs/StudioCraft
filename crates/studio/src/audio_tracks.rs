@@ -178,7 +178,8 @@ impl Studio {
     }
 
     /// `kind` is about to start at `start` on the studio clock: start the take that follows it
-    /// now, before its first sample, so the take's first sample is the output's.
+    /// now, before its first sample, so the take's first sample is the output's. The take is
+    /// named after `recording`: the recording's file, or the stream's copy.
     pub(crate) fn audio_tracks_output_starting(&mut self, kind: OutputKind, start: Tick, recording: Option<&Path>) {
         let (enabled, when) = (self.profile.audio_tracks.enabled, self.profile.audio_tracks.when);
         if !enabled || self.audio_tracks.reported {
@@ -304,6 +305,8 @@ impl Studio {
     fn start_audio_tracks(&mut self, anchor: (OutputKind, Tick), origin: Tick) {
         let recording = match anchor.0 {
             OutputKind::Recording => self.output(OutputKind::Recording).map(|r| PathBuf::from(r.target)),
+            // A take that starts while the stream runs is named after the stream's copy too.
+            OutputKind::Streaming if self.output(OutputKind::Streaming).is_some() => self.outputs.stream_copy().map(|c| c.path),
             OutputKind::Streaming | OutputKind::Replay => None,
         };
         self.start_audio_tracks_for(anchor, origin, recording);

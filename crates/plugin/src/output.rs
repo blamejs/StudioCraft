@@ -123,6 +123,37 @@ pub trait OutputInstance: Send {
     fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
+    /// The file a stream writes a copy of what it sends to, when it was started with one; `None`
+    /// for other outputs.
+    fn stream_copy(&self) -> Option<StreamCopyState> {
+        None
+    }
+}
+
+/// The copy of a stream written to a file: the same encoded video and sound the destinations get.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamCopyState {
+    /// The file.
+    pub path: PathBuf,
+    /// Bytes the copy has written so far, as a recording counts them: up to 1 MiB of them can
+    /// still be in the copy's buffer and not yet in the file.
+    pub bytes: u64,
+    /// Packets the file did not get because the disk fell behind: the copy then waits for the next
+    /// keyframe.
+    pub lost_packets: u64,
+    /// Nanoseconds of the stream before the file's start. The file's times count from the first
+    /// packet the copy got, so this is above 0 when the disk fell behind before the copy got the
+    /// stream's first packets.
+    pub start_ns: u64,
+    /// Nanoseconds from the stream's first frame to the presentation time of the latest video
+    /// frame the file holds, counted as [`StreamCopyState::start_ns`] is; `None` until the file
+    /// holds a video frame. A copy that lost the stream's last packets ends before the stream's
+    /// last frame.
+    pub last_video_ns: Option<u64>,
+    /// Whether the file was finished after the stream ended.
+    pub finished: bool,
+    /// Why the copy stopped, when it did; the stream goes on without it.
+    pub failure: Option<String>,
 }
 
 /// How many destinations of a stream are live and how many wait to try again.

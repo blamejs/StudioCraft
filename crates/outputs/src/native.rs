@@ -283,10 +283,17 @@ impl Drop for Writing<'_> {
 }
 
 /// A file writer that counts the bytes in the file into [`EncoderStats::bytes`].
-struct Counted<W> {
+pub(crate) struct Counted<W> {
     inner: W,
     pos: u64,
     stats: Arc<EncoderStats>,
+}
+
+impl<W> Counted<W> {
+    /// `inner`, counting into `stats` from its start.
+    pub(crate) fn new(inner: W, stats: Arc<EncoderStats>) -> Self {
+        Counted { inner, pos: 0, stats }
+    }
 }
 
 impl<W: Write> Write for Counted<W> {

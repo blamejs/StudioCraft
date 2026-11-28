@@ -1,0 +1,283 @@
+//! A copy of a stream written to a Matroska file while the stream runs: the same encoded video and
+//! sound the destinations get, for posting the stream as a video afterwards.
+//!
+//! - The copy takes the stream's packets as a destination does, from a ring of its own of the
+//!   same size ([`super::RING_SECONDS`] seconds). It subscribes before the encoders start, so the
+//!   file starts at the stream's first keyframe.
+//! - A thread of its own creates the file and writes each packet in the order the destinations
+//!   get them, with times counted from the first packet's decoding time, as a destination counts
+//!   its timestamps. The file has the stream's video and sound tracks. The sound declares no
+//!   encoder delay, since the copy's first sound packet comes after its first keyframe.
+//! - A disk that falls more than the ring's length behind loses packets up to the next keyframe,
+//!   as a destination does; [`StreamCopyState::lost_packets`] counts them. The encoders, the
+//!   destinations and the other subscribers never wait for the copy. When the disk falls behind
+//!   before the copy gets its first packet, the file starts at a later keyframe, and
+//!   [`StreamCopyState::start_ns`] says how much of the stream comes before the file's start.
+//!   When it falls behind near the stream's end, the file ends before the stream's last frame,
+//!   and [`StreamCopyState::last_video_ns`] says where.
+//! - A file that cannot be created or written stops the copy and keeps what was written. A file
+//!   that already holds data when the copy opens it is not written to, nor is a link put in
+//!   place of the file. The stream goes on.
+//! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
+//!   waits up to its limit for that, then leaves the file unfinished, and it may not play. A file
+//!   that opens after that gets nothing written to it. The copy then counts as not finished, even
+//!   when a write that was waiting finishes the file later.
+
+use std::fs::OpenOptions;
+use std::io::{BufWriter, Seek, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use craft_media::matroska::{MkvWriter, MuxOptions, TrackSpec};
+use craft_packet::{Kind, Monitor, Receiver, RecvError, Stats};
+use studiocraft_media::stats::EncoderStats;
+use studiocraft_plugin::StreamCopyState;
+
+use super::RECV_WAIT;
+use crate::native::{Counted, Track, writing_app};
+
+/// A file the copy can be written to.
+pub(crate) trait CopyFile: Write + Seek + Send {}
+
+impl<T: Write + Seek + Send> CopyFile for T {}
+
+/// Opens the copy's file, on the copy's own thread.
+pub(crate) type Open = Box<dyn FnOnce() -> std::io::Result<Box<dyn CopyFile>> + Send>;
+
+/// How often a stop looks again whether the copy is finished.
+const FINISH_POLL: Duration = Duration::from_millis(10);
+
+/// The packets a subscription with the counters `s` lost: those dropped when its ring was full,
+/// skipped as stale, or released without being written.
+fn lost(s: &Stats) -> u64 {
+    s.dropped_packets.saturating_add(s.skipped_packets).saturating_add(s.discarded_packets)
+}
+
+/// The file at `path`, written through a 1 MiB buffer: the empty file reserved for the copy, or a
+/// new one when none is there. A file that already holds data is left as it is, and the copy fails.
+/// A link in the last name of the path is not followed: on Unix it is refused, and on Windows the
+/// reparse point itself is opened and refused unless it is a file.
+pub(crate) fn create(path: &Path) -> Open {
+    let path = path.to_path_buf();
+    Box::new(move || {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_FLAG_OPEN_REPARSE_POINT: the link itself is opened, and refused below.
+            options.custom_flags(0x0020_0000);
+        }
+        let file = options.open(&path)?;
+        let meta = file.metadata()?;
+        // std reports a name-surrogate reparse point as a link, not a file.
+        if !meta.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{} is not a file", path.display())));
+        }
+        if meta.len() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already holds data", path.display())));
+        }
+        Ok(Box::new(BufWriter::with_capacity(1 << 20, file)) as Box<dyn CopyFile>)
+    })
+}
+
+/// The copy's state, as [`Shared::state`] holds it.
+const WRITING: u8 = 0;
+const FINISHED: u8 = 1;
+/// The stream gave up on the copy: the thread ends without finishing the file.
+const ABANDONED: u8 = 2;
+
+/// The message for a copy that a stop left unfinished after waiting `secs` seconds.
+fn not_finished_in(secs: u64) -> String {
+    format!("the copy was not finished in {secs} seconds; the file may not play")
+}
+
+/// What the copy's thread and the stream share, without a lock: the state in atomics, and the
+/// failure's text in a [`OnceLock`], whose `get` does not wait.
+#[derive(Default)]
+struct Shared {
+    /// Bytes written, counting those still in the file's buffer.
+    stats: Arc<EncoderStats>,
+    /// [`StreamCopyState::start_ns`], once the copy got its first packet.
+    start_ns: AtomicU64,
+    /// [`StreamCopyState::last_video_ns`] plus 1, or 0 before the file holds a video frame.
+    last_video: AtomicU64,
+    /// [`WRITING`], then [`FINISHED`] or [`ABANDONED`], whichever comes first.
+    state: AtomicU8,
+    /// How long the stop that abandoned the copy waited, in seconds.
+    waited_secs: AtomicU64,
+    failure: OnceLock<String>,
+}
+
+impl Shared {
+    /// Record `message` unless an earlier failure is recorded.
+    fn fail(&self, message: String) {
+        let _ = self.failure.set(message);
+    }
+
+    fn abandoned(&self) -> bool {
+        self.state.load(Ordering::Acquire) == ABANDONED
+    }
+
+    /// Move from [`WRITING`] to `to`. False when the copy already finished or was abandoned.
+    fn settle(&self, to: u8) -> bool {
+        self.state.compare_exchange(WRITING, to, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+}
+
+/// The running copy of a stream.
+pub(crate) struct StreamCopy {
+    path: PathBuf,
+    shared: Arc<Shared>,
+    /// The copy's subscription, whose counters the ring keeps while a write waits or after it
+    /// fails. `None` for a copy that could not start.
+    monitor: Option<Monitor>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl StreamCopy {
+    /// Start writing the packets `rx` delivers to the file `open` makes, shown as `path`, with
+    /// the stream's `tracks`. A thread that cannot be started is a failure of the copy only.
+    pub(crate) fn start(path: PathBuf, open: Open, mut tracks: Vec<TrackSpec>, rx: Receiver) -> StreamCopy {
+        if let Some(audio) = tracks.get_mut(Track::Audio as usize) {
+            audio.codec_delay_ns = 0;
+        }
+        let shared = Arc::new(Shared::default());
+        let monitor = Some(rx.monitor());
+        let (sh, shown) = (Arc::clone(&shared), path.display().to_string());
+        let thread = std::thread::Builder::new().name("stream copy".into()).spawn(move || write(open, tracks, rx, &sh, &shown));
+        let thread = match thread {
+            Ok(t) => Some(t),
+            Err(e) => {
+                shared.fail(format!("the copy of the stream could not be started: {e}"));
+                None
+            }
+        };
+        StreamCopy { path, shared, monitor, thread }
+    }
+
+    /// A copy to `path` that could not start, for `message`.
+    pub(crate) fn failed(path: PathBuf, message: String) -> StreamCopy {
+        let shared = Arc::new(Shared::default());
+        shared.fail(message);
+        StreamCopy { path, shared, monitor: None, thread: None }
+    }
+
+    pub(crate) fn state(&self) -> StreamCopyState {
+        StreamCopyState {
+            path: self.path.clone(),
+            bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
+            lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
+            start_ns: self.shared.start_ns.load(Ordering::SeqCst),
+            last_video_ns: self.shared.last_video.load(Ordering::SeqCst).checked_sub(1),
+            finished: self.shared.state.load(Ordering::Acquire) == FINISHED,
+            failure: self.shared.failure.get().cloned().or_else(|| {
+                // A stop abandoned the copy and is about to record why.
+                self.shared.abandoned().then(|| not_finished_in(self.shared.waited_secs.load(Ordering::Acquire)))
+            }),
+        }
+    }
+
+    /// Wait up to `wait` for the copy to write what its ring holds and finish the file, once the
+    /// stream's packets have ended; then leave a file that is not finished as it is. A thread that
+    /// panicked is a failure of the copy.
+    pub(crate) fn finish(&mut self, wait: Duration) {
+        let Some(t) = self.thread.take() else { return };
+        let deadline = Instant::now() + wait;
+        while !t.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(FINISH_POLL);
+        }
+        if t.is_finished() {
+            if t.join().is_err() {
+                self.shared.fail("the copy of the stream stopped unexpectedly; the file may not play".into());
+            }
+            return;
+        }
+        // The copy is either finished or abandoned, whichever its state reaches first.
+        self.shared.waited_secs.store(wait.as_secs(), Ordering::Release);
+        if self.shared.settle(ABANDONED) {
+            self.shared.fail(not_finished_in(wait.as_secs()));
+        }
+    }
+}
+
+impl Drop for StreamCopy {
+    fn drop(&mut self) {
+        // A thread still running ends at its next packet, or when its write returns.
+        self.shared.settle(ABANDONED);
+    }
+}
+
+/// The copy's thread: create the file, write every packet `rx` delivers, and finish the file when
+/// the stream's packets end.
+fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, shown: &str) {
+    let could_not = |e: &dyn std::fmt::Display| format!("the copy of the stream could not be written to {shown}: {e}");
+    let file = match open() {
+        Ok(f) => f,
+        Err(e) => return shared.fail(could_not(&e)),
+    };
+    if shared.abandoned() {
+        // The stop gave up on the copy while the file was opening: nothing is written to it.
+        return;
+    }
+    let opts = MuxOptions { writing_app: writing_app(), ..MuxOptions::default() };
+    let mut mux = match MkvWriter::new(Counted::new(file, Arc::clone(&shared.stats)), tracks, opts) {
+        Ok(m) => m,
+        Err(e) => return shared.fail(could_not(&e)),
+    };
+    let mut zero = None;
+    loop {
+        if shared.abandoned() {
+            // Dropping the writer writes out what it has buffered, without finishing the file.
+            return;
+        }
+        let packet = match rx.recv_timeout(RECV_WAIT) {
+            Ok(p) => p,
+            Err(RecvError::Closed) => break,
+            Err(RecvError::Timeout | RecvError::Empty) => continue,
+        };
+        let (track, keyframe) = match packet.kind() {
+            Kind::Video => (Track::Video, packet.keyframe()),
+            Kind::Audio => (Track::Audio, true),
+            Kind::Data => continue,
+        };
+        // A time before the first packet is written at 0, as a destination sends it.
+        let zero = *zero.get_or_insert_with(|| {
+            // The encoders count the stream's times from its first frame, at 0.
+            shared.start_ns.store(u64::try_from(packet.dts()).unwrap_or(0), Ordering::SeqCst);
+            packet.dts()
+        });
+        let pts = packet.pts().saturating_sub(zero).max(0);
+        if let Err(e) = mux.write_frame(track as usize, pts, keyframe, packet.data(), None) {
+            return shared.fail(could_not(&e));
+        }
+        if track == Track::Video {
+            let at = u64::try_from(packet.pts()).unwrap_or(0).saturating_add(1);
+            shared.last_video.fetch_max(at, Ordering::SeqCst);
+        }
+    }
+    let not_finished = |e: &dyn std::fmt::Display| format!("the copy of the stream at {shown} could not be finished: {e}");
+    let mut w = match mux.finish() {
+        Ok(w) => w,
+        Err(e) => return shared.fail(not_finished(&e)),
+    };
+    match w.flush() {
+        Ok(()) if shared.last_video.load(Ordering::SeqCst) == 0 => {
+            // A file with no picture has no clip for a timeline to describe.
+            shared.fail(format!("the copy of the stream at {shown} holds no video frame"));
+        }
+        Ok(()) => {
+            // A stop that gave up on the copy has reported it as not finished, and it stays so.
+            shared.settle(FINISHED);
+        }
+        Err(e) => shared.fail(not_finished(&e)),
+    }
+}

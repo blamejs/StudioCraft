@@ -1093,6 +1093,7 @@ impl StudioApp {
                     | "stream.reconnect_set"
                     | "stream.diagnose"
                     | "stream.check_service_set"
+                    | "stream.save_copy_set"
                     | "stream.ingest_servers"
                     | "stream.retry_now"
             ) || id.starts_with("stream.destination") =>

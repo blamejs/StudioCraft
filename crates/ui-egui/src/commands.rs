@@ -46,6 +46,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("stream.reconnect_set", "Change Automatic Reconnect"),
     ("stream.diagnose", "Check Stream Destination Connection"),
     ("stream.check_service_set", "Change Connection Checks After a Failure"),
+    ("stream.save_copy_set", "Change Saving a Copy of the Stream"),
     ("stream.ingest_servers", "List a Service's Ingest Servers"),
     ("dock.scenes", "Scenes"),
     ("dock.sources", "Sources"),
@@ -116,6 +117,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "stream.check_service_set" => {
             "enabled: boolean (whether the check after a failure also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers)"
         }
+        "stream.save_copy_set" => "enabled: boolean (whether the next stream also writes what it sends to an MKV file in the recording folder)",
         "stream.ingest_servers" => {
             "service: string (the id of a streaming service that publishes a list of its ingest servers), retry?: boolean (fetch a list that could not be read again; default false)"
         }

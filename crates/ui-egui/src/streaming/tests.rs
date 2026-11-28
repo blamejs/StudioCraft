@@ -1021,6 +1021,29 @@ fn check_connection_runs_a_check_and_the_service_setting_is_changed() {
     assert!(crate::commands::ui_params("stream.check_service_set").starts_with("enabled: boolean"));
 }
 
+#[test]
+fn saving_a_copy_of_the_stream_is_set_by_command_and_listed() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert_eq!((listed["save_copy"].clone(), listed["copy"].clone()), (json!(false), Value::Null), "off, and no stream has saved one");
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.save_copy_set", json!({"enabled": true})).unwrap();
+    assert_eq!(r, json!({"changed": true, "save_copy": true}));
+    assert!(a.studio.profile().stream.save_copy);
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.save_copy), Some(true), "an open Settings window follows");
+    assert_eq!(run(&mut a, &ctx, "stream.save_copy_set", json!({"enabled": true})).unwrap()["changed"], json!(false));
+    for bad in [json!({}), json!({"enabled": "yes"}), json!({"enabled": 1}), json!({"enabled": null})] {
+        assert!(run(&mut a, &ctx, "stream.save_copy_set", bad.clone()).is_err(), "{bad}");
+        assert!(a.studio.profile().stream.save_copy, "{bad} changed nothing");
+    }
+    assert_eq!(run(&mut a, &ctx, "stream.destinations", json!({})).unwrap()["save_copy"], json!(true));
+    assert!(crate::commands::ui_params("stream.save_copy_set").starts_with("enabled: boolean"));
+    assert_eq!(a.studio.state_json()["streaming"]["copy"], Value::Null);
+    let r = run(&mut a, &ctx, "stream.save_copy_set", json!({"enabled": false})).unwrap();
+    assert_eq!(r, json!({"changed": true, "save_copy": false}));
+}
+
 fn server(name: &str, server: &str) -> IngestServer {
     IngestServer { name: name.into(), server: server.into() }
 }

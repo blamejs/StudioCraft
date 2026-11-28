@@ -1077,6 +1077,27 @@ impl StudioApp {
         Ok(true)
     }
 
+    /// Turns the profile's `save_copy` setting on or off and saves the profile; whether it
+    /// changed. A call that changes nothing does not save the profile. An open Settings window
+    /// takes the same change in its draft. A running stream keeps the setting it started with.
+    fn change_save_copy(&mut self, on: bool) -> Result<bool, Msg> {
+        let previous = self.studio.profile().clone();
+        if previous.stream.save_copy == on {
+            return Ok(false);
+        }
+        let mut p = previous.clone();
+        p.stream.save_copy = on;
+        self.studio.set_profile(p).map_err(|e| e.to_string())?;
+        if let Err(e) = self.store.save_profile(self.studio.profile()) {
+            let _ = self.studio.restore_profile(previous);
+            return Err(tmsg!("The profile could not be saved: {error}", error = e));
+        }
+        if let Some(w) = &mut self.settings {
+            w.draft.stream.save_copy = on;
+        }
+        Ok(true)
+    }
+
     /// The connection checks of the profile's destinations that have had one in this session.
     fn destination_checks(&self) -> Vec<(String, CheckState)> {
         let s = &self.studio.profile().stream;
@@ -1129,6 +1150,8 @@ impl StudioApp {
                     "max": MAX_DESTINATIONS,
                     "reconnect": listed_reconnect(&s.reconnect),
                     "check_service": s.check_service,
+                    "save_copy": s.save_copy,
+                    "copy": self.studio.stream_copy_json(),
                 });
                 // Only a stream of this profile runs with this profile's settings.
                 let own = self.studio.stream_profile() == Some(self.studio.profile().name.as_str());
@@ -1154,6 +1177,11 @@ impl StudioApp {
                 let on = opt_bool(cmd, "enabled")?.ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = "enabled"))?;
                 let changed = self.change_check_service(on)?;
                 Ok(json!({"changed": changed, "check_service": self.studio.profile().stream.check_service}))
+            }
+            "stream.save_copy_set" => {
+                let on = opt_bool(cmd, "enabled")?.ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = "enabled"))?;
+                let changed = self.change_save_copy(on)?;
+                Ok(json!({"changed": changed, "save_copy": self.studio.profile().stream.save_copy}))
             }
             "stream.diagnose" => {
                 let id = param_id(cmd)?.to_string();

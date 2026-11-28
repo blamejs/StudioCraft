@@ -266,10 +266,13 @@ impl Headless {
         self.studio.output(kind).is_some_and(|s| s.active || s.stopping)
     }
 
-    /// Whether a stream starts audio tracks with the current settings.
-    fn tracks_follow_stream(&self) -> bool {
-        let t = &self.studio.profile().audio_tracks;
-        t.enabled && matches!(t.when, studiocraft_model::AudioTracksWhen::Streaming | studiocraft_model::AudioTracksWhen::Either)
+    /// Whether a stream writes to the recording folder with the current settings: its audio tracks
+    /// or its copy.
+    fn stream_writes_files(&self) -> bool {
+        let p = self.studio.profile();
+        let t = &p.audio_tracks;
+        studiocraft_studio::stream_saves_copy(p)
+            || (t.enabled && matches!(t.when, studiocraft_model::AudioTracksWhen::Streaming | studiocraft_model::AudioTracksWhen::Either))
     }
 
     /// Refuse a command that would stream without permission or reach a file outside the roots,
@@ -297,8 +300,8 @@ impl Headless {
             }
             // A saved replay goes to the recording folder too.
             Command::ReplaySave {} => held.recording = Some(self.checked_recording_folder(roots)?),
-            // Audio tracks of a stream go to the recording folder.
-            Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.tracks_follow_stream() => {
+            // Audio tracks and the copy of a stream go to the recording folder.
+            Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.stream_writes_files() => {
                 held.recording = Some(self.checked_recording_folder(roots)?);
             }
             // A speech model is downloaded into the models folder.

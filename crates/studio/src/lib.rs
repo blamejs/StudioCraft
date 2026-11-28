@@ -51,7 +51,10 @@ use studiocraft_sources::FfmpegSetting;
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use captions::{CaptionState, Loader as CaptionLoader, ModelFileFilter, default_models_dir};
 pub use files::FileError;
-pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, has_built_in_twin, recording_folder, recording_path, replay_path};
+pub use outputs::{
+    HARDWARE_TESTS_FILE, OutputKind, OutputState, has_built_in_twin, recording_folder, recording_path, replay_path, stream_copy_path,
+    stream_saves_copy,
+};
 pub use pause::{countdown_text, media_extensions as pause_media_extensions, paused_text};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_outputs::stream::diagnose;
@@ -1734,6 +1737,16 @@ impl Studio {
         self.profile.video.sanitized()
     }
 
+    /// The copy of the running stream, or else of the last stream that ended, as the state shows
+    /// it; `null` when that stream saved no copy.
+    pub fn stream_copy_json(&self) -> Value {
+        self.outputs.stream_copy().map_or(Value::Null, |c| {
+            json!({
+                "file": c.path.display().to_string(), "bytes": c.bytes, "lost_packets": c.lost_packets, "finished": c.finished, "error": c.failure,
+            })
+        })
+    }
+
     /// The state scripts and the control channel read: the collection, the studio mode, and
     /// what is running.
     pub fn state_json(&self) -> Value {
@@ -1747,7 +1760,11 @@ impl Studio {
         let stats = self.stats();
         if let Some(o) = v.as_object_mut() {
             o.insert("recording".into(), output(OutputKind::Recording));
-            o.insert("streaming".into(), output(OutputKind::Streaming));
+            let mut streaming = output(OutputKind::Streaming);
+            if let Some(s) = streaming.as_object_mut() {
+                s.insert("copy".into(), self.stream_copy_json());
+            }
+            o.insert("streaming".into(), streaming);
             let mut replay = output(OutputKind::Replay);
             if let Some(r) = replay.as_object_mut() {
                 r.insert("saving".into(), json!(self.outputs.saving()));

@@ -325,6 +325,9 @@ pub struct StreamSettings {
     /// the service's other hosts: its list of ingest servers, two other ingest servers and its
     /// status summary. Off by default; Check Connection always contacts them.
     pub check_service: bool,
+    /// Whether the stream also writes what it sends to an MKV file in the recording folder,
+    /// `Stream <date and time>.mkv`. Off by default.
+    pub save_copy: bool,
 }
 
 impl Default for StreamSettings {
@@ -339,6 +342,7 @@ impl Default for StreamSettings {
             keyframe_interval_s: 2,
             reconnect: ReconnectSettings::default(),
             check_service: false,
+            save_copy: false,
         }
     }
 }

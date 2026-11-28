@@ -175,7 +175,7 @@ fn collection_v7_to_v8(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 14,
+    version: 15,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -190,6 +190,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v11_to_v12,
         profile_v12_to_v13,
         profile_v13_to_v14,
+        profile_v14_to_v15,
     ],
 };
 
@@ -368,6 +369,17 @@ fn profile_v13_to_v14(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 14 to 15: whether the stream also writes a copy of what it sends to a file
+/// (`stream.save_copy`), off.
+fn profile_v14_to_v15(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let stream = data.entry("stream").or_insert_with(|| json!({}));
+    if let Value::Object(s) = stream {
+        s.entry("save_copy").or_insert(Value::Bool(false));
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -495,6 +507,7 @@ mod tests {
         (12, include_str!("../fixtures/profile-v12.json")),
         (13, include_str!("../fixtures/profile-v13.json")),
         (14, include_str!("../fixtures/profile-v14.json")),
+        (15, include_str!("../fixtures/profile-v15.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -951,6 +964,22 @@ mod tests {
         let text = v14.replace("\"recording_tracks\": [1, 2, 4]", "\"recording_tracks\": [9]");
         assert_ne!(text, v14);
         assert!(read_profile(&text).is_err(), "a track that does not exist refuses the file");
+    }
+
+    #[test]
+    fn a_v14_profile_saves_no_copy_of_the_stream() {
+        for (v, text) in &PROFILE_FIXTURES[..14] {
+            assert!(!read_profile(text).unwrap().stream.save_copy, "version {v} saves no copy");
+        }
+        assert!(!crate::StreamSettings::default().save_copy);
+        let (_, v15) = PROFILE_FIXTURES[14];
+        let p = read_profile(v15).unwrap();
+        assert!(p.stream.save_copy && p.stream.check_service, "the rest of the stream settings is kept");
+        assert_eq!(p.output.recording_tracks.numbers().collect::<Vec<_>>(), [1, 2, 4], "the output settings are kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let text = v15.replace("\"save_copy\": true", "\"save_copy\": \"yes\"");
+        assert_ne!(text, v15);
+        assert!(read_profile(&text).is_err(), "a value that is not true or false refuses the file");
     }
 
     #[test]

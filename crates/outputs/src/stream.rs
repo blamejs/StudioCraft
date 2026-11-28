@@ -46,11 +46,15 @@
 //!   starts ([`DestinationState::next_try`]), and Try Now ([`OutputInstance::retry_destination`])
 //!   starts that try at once, without a route too. Unlike a stop and start, the try counts toward
 //!   the failed tries in a row.
+//! - A stream started with a copy also writes the packets the destinations get to a Matroska
+//!   file ([`copy`]). The copy takes one of the [`MAX_SUBSCRIBERS`] subscriptions, and its
+//!   failure stops neither the destinations nor the encoders.
 //!
 //! No log line, error or status of this module holds a stream key: the keys go to
 //! [`craft_rtmp::Config`] and nowhere else, and that crate keeps them out of its errors.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -64,6 +68,7 @@ use craft_packet::{
     Control, Fanout, Info, Kind, MAX_RING_BYTES, MAX_SUBSCRIBERS, PacketPool, Receiver, RecvError, RingConfig, SharedPacket, StreamRates,
 };
 use craft_rtmp::{Config, Publisher};
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
@@ -73,11 +78,14 @@ use studiocraft_model::services::Service;
 use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
     AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
-    PluginError, RateControl,
+    PluginError, RateControl, StreamCopyState,
 };
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
+use crate::writer::FINISH_TIMEOUT;
+use copy::StreamCopy;
 
+pub mod copy;
 pub mod diagnose;
 pub mod ingests;
 
@@ -1480,16 +1488,29 @@ pub struct Streaming {
     hub: Arc<Hub>,
     stats: Arc<EncoderStats>,
     refused: Arc<AtomicU64>,
+    /// The copy written to a file, when the stream was started with one.
+    copy: Option<StreamCopy>,
     stopped: bool,
 }
 
 impl Streaming {
     /// Open the encoders for `job` and start sending to each enabled destination of `targets`.
     /// Starts the stream to `targets`, each trying again as `reconnect` says, with the automatic
-    /// connection checks of `checks` in the process's [`diagnose::checks`].
-    pub fn start(job: &OutputJob, targets: Vec<Target>, reconnect: ReconnectSettings, checks: AutoCheck) -> Result<Streaming, PluginError> {
+    /// connection checks of `checks` in the process's [`diagnose::checks`]. With `copy`, the
+    /// stream also writes what it sends to that Matroska file ([`copy`]).
+    pub fn start(
+        job: &OutputJob,
+        targets: Vec<Target>,
+        reconnect: ReconnectSettings,
+        checks: AutoCheck,
+        copy: Option<PathBuf>,
+    ) -> Result<Streaming, PluginError> {
         reconnect.check().map_err(PluginError::Failed)?;
-        Self::start_full(job, targets, Timing::from(reconnect), Seams::default(), Some((diagnose::checks(), checks)))
+        let copy = copy.map(|path| {
+            let open = copy::create(&path);
+            (path, open)
+        });
+        Self::start_all(job, targets, Timing::from(reconnect), Seams::default(), Some((diagnose::checks(), checks)), copy)
     }
 
     #[cfg(test)]
@@ -1502,6 +1523,19 @@ impl Streaming {
         Self::start_full(job, targets, timing, seams, None)
     }
 
+    /// [`Streaming::start_timed`] with a copy shown as `path`, written to the file `open` makes.
+    #[cfg(test)]
+    pub(crate) fn start_copying(
+        job: &OutputJob,
+        targets: Vec<Target>,
+        timing: Timing,
+        path: PathBuf,
+        open: copy::Open,
+    ) -> Result<Streaming, PluginError> {
+        Self::start_all(job, targets, timing, Seams::default(), None, Some((path, open)))
+    }
+
+    #[cfg(test)]
     pub(crate) fn start_full(
         job: &OutputJob,
         targets: Vec<Target>,
@@ -1509,7 +1543,18 @@ impl Streaming {
         seams: Seams,
         auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
     ) -> Result<Streaming, PluginError> {
-        let RateControl::Bitrate { kbps, .. } = job.rate else {
+        Self::start_all(job, targets, timing, seams, auto, None)
+    }
+
+    fn start_all(
+        job: &OutputJob,
+        targets: Vec<Target>,
+        timing: Timing,
+        seams: Seams,
+        auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
+        copy: Option<(PathBuf, copy::Open)>,
+    ) -> Result<Streaming, PluginError> {
+        let RateControl::Bitrate { kbps, keyframe_s } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
         let encoder = &job.video_encoder;
@@ -1523,6 +1568,22 @@ impl Streaming {
             )));
         }
         check_targets(&targets)?;
+        // The copy's writer holds each cluster in memory until the next keyframe, so the copy takes
+        // the keyframe interval a recording takes; with a longer one only the copy is refused.
+        let copy_refused = (copy.is_some() && keyframe_s > RECORDING_KEYFRAME_S).then(|| {
+            format!(
+                "the copy of the stream needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}; set the keyframe interval in Settings › Stream"
+            )
+        });
+        let wants_copy = copy.is_some() && copy_refused.is_none();
+        // Only the destinations that are on take a subscription.
+        let on = targets.iter().filter(|t| t.enabled).count();
+        if wants_copy && on >= MAX_SUBSCRIBERS {
+            return Err(PluginError::Failed(format!(
+                "a stream that saves a copy can have at most {} destinations turned on, not {on}",
+                MAX_SUBSCRIBERS - 1
+            )));
+        }
         let v = job.video;
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let rates = StreamRates {
@@ -1540,6 +1601,8 @@ impl Streaming {
         let control = fanout.control();
         let refused = Arc::new(AtomicU64::new(0));
         let mut headers = None;
+        // The copy subscribes before the encoders start, so it gets the first keyframe.
+        let mut copy_feed: Option<(Vec<TrackSpec>, Result<Receiver, String>)> = None;
         let sink_refused = Arc::clone(&refused);
         let captions = match &job.captions {
             Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
@@ -1547,16 +1610,27 @@ impl Streaming {
         };
         let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
             headers = Some(Headers::new(job, kbps, &tracks)?);
+            if wants_copy {
+                let rx = fanout.subscribe(ring).map_err(|e| format!("the copy of the stream could not be started: {e}"));
+                copy_feed = Some((tracks, rx));
+            }
             Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false, captions }))
         };
         let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
+        let copy = match (copy, copy_feed, copy_refused) {
+            (Some((path, _)), _, Some(e)) => Some(StreamCopy::failed(path, e)),
+            (Some((path, open)), Some((tracks, Ok(rx))), None) => Some(StreamCopy::start(path, open, tracks, rx)),
+            (Some((path, _)), Some((_, Err(e))), None) => Some(StreamCopy::failed(path, e)),
+            (Some((path, _)), None, None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
+            (None, _, _) => None,
+        };
         let counts = Arc::new(Counts::default());
         let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
         let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default(), auto });
-        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
+        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {
                 let _ = s.stop();
@@ -1686,6 +1760,11 @@ impl OutputInstance for Streaming {
         // The encoders finish, and the last packets go to the rings; then the fan-out ends.
         let r = self.native.stop();
         self.close_destinations();
+        // The copy writes what its ring holds and finishes its file; its failure is in its state,
+        // not in the stream's result.
+        if let Some(c) = &mut self.copy {
+            c.finish(FINISH_TIMEOUT);
+        }
         // The check of a destination that failed for good outlives the stream; the others end.
         // A thread asked to stop starts no check, so one started while the stream stopped is
         // canceled here too.
@@ -1700,6 +1779,10 @@ impl OutputInstance for Streaming {
 
     fn destinations(&self) -> Vec<DestinationState> {
         self.hub.dests.iter().map(|d| d.state(&self.hub)).collect()
+    }
+
+    fn stream_copy(&self) -> Option<StreamCopyState> {
+        self.copy.as_ref().map(StreamCopy::state)
     }
 
     fn reconnects(&self) -> u64 {

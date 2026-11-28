@@ -79,7 +79,7 @@ impl StudioApp {
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
             "vcam.toggle" => on(self.studio.virtual_camera().is_some()),
-            "record.marker" => ItemState { enabled: self.studio.output(OutputKind::Recording).is_some_and(|s| s.active), checked: None },
+            "record.marker" => ItemState { enabled: self.studio.can_add_recording_marker(), checked: None },
             "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
             "pause.toggle" => on(self.studio.paused().is_some()),
             "pause.start" => ItemState { enabled: self.studio.paused().is_none(), checked: None },

@@ -23,7 +23,7 @@ pub mod stream;
 pub mod virtual_camera;
 pub mod writer;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use studiocraft_media::audio::PooledBlock;
@@ -209,7 +209,8 @@ impl Output for Recording {
 /// A live stream to one or more RTMP or RTMPS servers, through the built-in encoders ([`stream`]).
 ///
 /// The settings hold `destinations`, a list of `{id, server, key, enabled}` objects. Without that
-/// list, `server` and `key` give one destination with the id `main`.
+/// list, `server` and `key` give one destination with the id `main`. With `copy`, an `.mkv` path,
+/// the stream also writes what it sends to that file ([`stream::copy`]).
 pub struct Stream;
 
 impl Plugin for Stream {
@@ -317,12 +318,28 @@ pub fn stream_checks(settings: &Settings) -> Result<AutoCheck, PluginError> {
     Ok(AutoCheck { profile, services, service_hosts })
 }
 
+/// The Matroska file a stream writes a copy of what it sends to: the `copy` path in its settings,
+/// none when absent or empty. A path that is not text, or does not end in `.mkv`, is an error.
+pub fn stream_copy(settings: &Settings) -> Result<Option<PathBuf>, PluginError> {
+    let path = match settings.get("copy") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(s)) if s.is_empty() => return Ok(None),
+        Some(serde_json::Value::String(s)) => PathBuf::from(s),
+        Some(_) => return Err(PluginError::Failed("the stream's copy setting is not a file name".into())),
+    };
+    if container_for(&path)? != "matroska" {
+        return Err(PluginError::Failed(format!("the copy of a stream is an MKV file, and {} is not one", path.display())));
+    }
+    Ok(Some(path))
+}
+
 impl Output for Stream {
     fn start(&self, settings: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
         let targets = stream_targets(settings)?;
         let reconnect = stream_reconnect(settings)?;
         let checks = stream_checks(settings)?;
-        Ok(Box::new(Streaming::start(&job, targets, reconnect, checks)?))
+        let copy = stream_copy(settings)?;
+        Ok(Box::new(Streaming::start(&job, targets, reconnect, checks, copy)?))
     }
 }
 
