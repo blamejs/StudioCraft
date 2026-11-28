@@ -967,6 +967,17 @@ fn a_connection_never_pairs_the_key_of_one_setup_with_the_server_of_another() {
 }
 
 #[test]
+fn a_try_connects_with_the_setup_it_read_not_the_one_given_since() {
+    let d = Dest::new(target("b", "rtmp://127.0.0.1:1935/live", "key-one"), Arc::new(Counts::default()), None);
+    let read = d.setup();
+    assert!(set_up(&d, Some("key-two"), Some(("rtmp://127.0.0.2:1935/live", None))));
+    let c = connect_config(&d, &read).unwrap();
+    assert_eq!((c.endpoint.host(), c.key.expose()), ("127.0.0.1", "key-one"));
+    let now = connect_config(&d, &d.setup()).unwrap();
+    assert_eq!((now.endpoint.host(), now.key.expose()), ("127.0.0.2", "key-two"));
+}
+
+#[test]
 fn an_added_destination_takes_the_place_of_one_that_ended_when_the_list_is_full() {
     let (a, seen_a) = server(vec![Plan::Accept]);
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
@@ -977,7 +988,7 @@ fn an_added_destination_takes_the_place_of_one_that_ended_when_the_list_is_full(
     // connection, makes it again and is stopped. The refusals come from this test's own server,
     // so a port another test frees and binds again takes none of these connections.
     let (refusing, _refused) = server(vec![Plan::RefuseConnect; 2 * MAX_SUBSCRIBERS]);
-    let (five, seen_five) = server(vec![Plan::DropAfter(2), Plan::Accept, Plan::Accept]);
+    let (five, seen_five) = server(vec![Plan::DropAfter(2), Plan::Accept]);
     for i in 1..MAX_SUBSCRIBERS {
         let id = format!("d{i}");
         if i == 5 {
@@ -994,6 +1005,7 @@ fn an_added_destination_takes_the_place_of_one_that_ended_when_the_list_is_full(
     }
     assert_eq!(out.destinations().len(), MAX_SUBSCRIBERS);
     let bytes = out.destinations().into_iter().find(|d| d.id == "d5").map(|d| d.bytes).unwrap();
+    assert!(bytes > 0, "d5 sent over its connections");
     assert_eq!(out.reconnects(), 1);
     // The one stopped by request gives its place before the failed ones, and the stream's sums
     // keep its counts.
@@ -1004,17 +1016,22 @@ fn an_added_destination_takes_the_place_of_one_that_ended_when_the_list_is_full(
     assert_eq!(out.reconnects(), 1);
     until(&out, "new", |d| matches!(d.status, DestinationStatus::Failed(_)));
     until_ended(&out, "new");
-    // Then the first that failed. Added again under its id, d5 goes on from its counts.
-    out.start_destination_as(&setup("d5", &five, "k")).unwrap();
+    // Then the first that failed. Added again under its id, d5 goes on from its counts. Its
+    // server holds the new connection before anything is sent, so the count is the old one.
+    let (back, accepted, go, seen_back) = held_server();
+    out.start_destination_as(&setup("d5", &back, "k")).unwrap();
     let ids: Vec<String> = out.destinations().into_iter().map(|d| d.id).collect();
     assert_eq!(ids.get(1).map(String::as_str), Some("d5"), "{ids:?}");
     assert!(ids.iter().any(|i| i == "a"), "a destination that sends keeps its place");
+    accepted.recv_timeout(GUARD).unwrap();
+    let held = out.destinations().into_iter().find(|d| d.id == "d5").unwrap();
+    assert_eq!(held.bytes, bytes, "{held:?}");
+    go.send(true).unwrap();
     let d = until(&out, "d5", |d| d.status == DestinationStatus::Live);
     assert_eq!(d.reconnects, 1, "{d:?}");
-    assert!(d.bytes >= bytes, "{d:?}");
     assert_eq!(out.reconnects(), 1, "each connection made again is counted once");
     media(&seen_a, 3);
-    drop(seen_five);
+    drop((seen_five, seen_back));
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen_a);
@@ -1553,6 +1570,32 @@ fn no_more_than_two_lookups_are_outstanding() {
     drop((release_one, release_two));
     until_no_lookups(&out, "a");
     assert!(out.stop().is_err());
+}
+
+#[test]
+fn hung_lookups_of_old_names_do_not_hold_back_a_new_name() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (release_one, hold_one) = mpsc::channel::<()>();
+    let (release_two, hold_two) = mpsc::channel::<()>();
+    let closed = addr(&closed_url());
+    let answers = vec![Answer::After(hold_one, vec![closed]), Answer::After(hold_two, vec![closed]), Answer::Now(Ok(vec![addr(&live)]))];
+    let (resolve, asked) = scripted(answers);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route: routed() };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(heard(&asked), "asked");
+    // Each new name ends the try that waits on the old one, whose lookup stays outstanding.
+    renewed(&out.hub.find("a").unwrap(), "rtmp://second.example.test/live", "k2");
+    assert_eq!(heard(&asked), "asked");
+    renewed(&out.hub.find("a").unwrap(), "rtmp://third.example.test/live", "k3");
+    assert_eq!(next(&seen), Seen::Publish("k3".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    drop((release_one, release_two));
+    until_no_lookups(&out, "a");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }
 
 #[test]

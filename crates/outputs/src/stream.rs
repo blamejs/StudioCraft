@@ -28,7 +28,8 @@
 //! - Each try looks the server's name up again, on a thread of its own, and waits at most
 //!   [`LOOKUP_WAIT`] for the answer; a stop does not wait for it. A lookup the system never answers
 //!   keeps its thread until the system returns, so each destination keeps at most [`MAX_LOOKUPS`]
-//!   lookups outstanding and the process at most [`MAX_ALL_LOOKUPS`], and an answer that comes
+//!   lookups of one name outstanding and the process at most [`MAX_ALL_LOOKUPS`] of any name, and
+//!   lookups of a name the destination no longer uses do not hold back its new name. An answer that comes
 //!   after its try gave up is not used.
 //! - Before a try, a destination asks the system whether it has a network route to the server's
 //!   last known addresses ([`studiocraft_platform::net::route_to`], which sends nothing), or, when
@@ -112,8 +113,8 @@ pub const REFUSED_RETRIES: u32 = 3;
 pub const REFUSED_WAIT: Duration = Duration::from_secs(5);
 /// How long a try waits for the server's name to be looked up.
 pub const LOOKUP_WAIT: Duration = Duration::from_secs(10);
-/// The most lookups of one destination that may be outstanding: the one of the current try, and
-/// one an earlier try gave up on that the system has not answered yet.
+/// The most lookups of one name by one destination that may be outstanding: the one of the
+/// current try, and one an earlier try gave up on that the system has not answered yet.
 pub const MAX_LOOKUPS: u32 = 2;
 /// The most lookups that may be outstanding in the process, across every stream started and
 /// stopped: a lookup the system never answers outlives its stream.
@@ -469,6 +470,8 @@ struct Dest {
     renew: AtomicBool,
     /// Lookups of the server's name whose threads have not ended.
     lookups: AtomicU32,
+    /// The name of each lookup counted in `lookups`, one entry per lookup.
+    looking_up: Mutex<Vec<String>>,
     /// The server's addresses from the last lookup that answered; empty before one.
     addrs: Mutex<Vec<std::net::SocketAddr>>,
     /// The server is given as an IP address, so a lookup cannot give it another address.
@@ -531,6 +534,7 @@ impl Dest {
             restarted: AtomicBool::new(false),
             renew: AtomicBool::new(false),
             lookups: AtomicU32::new(0),
+            looking_up: Mutex::new(Vec::new()),
             addrs: Mutex::new(Vec::new()),
             fixed: AtomicBool::new(false),
             net_up: AtomicBool::new(false),
@@ -1362,7 +1366,7 @@ enum Missed {
 
 /// Connects with `setup`, the setup the try read.
 fn connect(hub: &Hub, d: &Arc<Dest>, setup: &Setup) -> Result<Publisher, Missed> {
-    let mut c = d.with(&setup.server, &setup.key).config().map_err(Missed::Rtmp)?;
+    let mut c = connect_config(d, setup).map_err(Missed::Rtmp)?;
     c.connect_timeout = hub.timing.connect;
     c.setup_timeout = hub.timing.setup;
     c.stall_timeout = hub.timing.stall;
@@ -1385,6 +1389,11 @@ fn connect(hub: &Hub, d: &Arc<Dest>, setup: &Setup) -> Result<Publisher, Missed>
     Publisher::connect_to(&c, &addrs).map_err(Missed::Rtmp)
 }
 
+/// The connection settings of `d` with the server and key of `setup`, whatever setup `d` holds now.
+fn connect_config(d: &Dest, setup: &Setup) -> Result<Config, craft_rtmp::Error> {
+    d.with(&setup.server, &setup.key).config()
+}
+
 /// Looks `host` up on a thread of its own and waits for the answer until the lookup time runs
 /// out, the destination is stopped or given a new setup, or the stream ends. The thread ends when
 /// the resolver returns, whether or not the try still waits; an answer nobody waits for is
@@ -1396,8 +1405,10 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
         return Ok(vec![std::net::SocketAddr::new(ip, port)]);
     }
     // Only this destination's thread adds lookups, so the count cannot pass the limit between the
-    // check and the add.
-    if d.lookups.load(Ordering::SeqCst) >= MAX_LOOKUPS {
+    // check and the add. Lookups of other names, such as a server given before a stop and start,
+    // count only toward the process's limit.
+    let pending = lock(&d.looking_up).iter().filter(|n| n.as_str() == host).count();
+    if pending >= MAX_LOOKUPS as usize {
         return Err(Missed::Lookup(Failure::new(Cause::LookupsPending, "an earlier lookup of the server's name has not finished")));
     }
     if !reserve(&ALL_LOOKUPS, MAX_ALL_LOOKUPS) {
@@ -1408,6 +1419,7 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
     let waiter = std::thread::current();
     let (resolve, owner, name) = (Arc::clone(&hub.seams.resolve), Arc::clone(d), host.to_string());
     let clock = Arc::clone(&hub.seams.clock);
+    lock(&d.looking_up).push(host.to_string());
     d.lookups.fetch_add(1, Ordering::SeqCst);
     let spawned = std::thread::Builder::new().name("stream lookup".into()).spawn(move || {
         let answer = resolve(&name, port);
@@ -1415,12 +1427,14 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
         // Fails when the try stopped waiting, which drops the answer.
         let _ = tx.send((answer, clock.now()));
         ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        unlist(&owner.looking_up, &name);
         owner.lookups.fetch_sub(1, Ordering::SeqCst);
         owner.touch();
         waiter.unpark();
     });
     if let Err(e) = spawned {
         ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        unlist(&d.looking_up, host);
         d.lookups.fetch_sub(1, Ordering::SeqCst);
         return Err(Missed::Lookup(Failure::new(Cause::Other, format!("no thread for the lookup: {e}"))));
     }
@@ -1451,6 +1465,14 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
             return rx.try_recv().map_or_else(|_| Err(late()), take);
         }
         std::thread::park_timeout((wait - waited).min(LOOKUP_POLL));
+    }
+}
+
+/// Removes one entry of `name` from `names`.
+fn unlist(names: &Mutex<Vec<String>>, name: &str) {
+    let mut names = lock(names);
+    if let Some(i) = names.iter().position(|n| n == name) {
+        names.swap_remove(i);
     }
 }
 
