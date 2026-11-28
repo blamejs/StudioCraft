@@ -32,7 +32,7 @@ use craft_gpu_device::{Candidate, DeviceHealth, Fault};
 use craft_gpu_device::{Notice, OpenError, Preference, Request};
 
 pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, ThumbnailViews, View, unpremultiply};
-pub use nv12::{EncodeTarget, GpuFrame};
+pub use nv12::{EncodeTarget, GpuFrame, GpuSink};
 pub use plan::{
     ItemDesc, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SIDE, MAX_THUMBNAILS, MIN_THUMBNAIL_SIDE, Plan, SceneDesc, ThumbnailRequest, TransitionDesc,
 };
@@ -80,13 +80,13 @@ pub struct Gpu {
 
 /// The device studiocraft opens: its own label, and the adapter's own limits, so an adapter with
 /// lower limits than wgpu's defaults (an older or software one) still opens. A Vulkan device on
-/// Windows also opens shared textures when the driver can, for a display capture that stays on the
-/// GPU.
+/// Windows also opens shared textures when the driver can, and one on Linux DMA-BUF buffers, for a
+/// display capture that stays on the GPU.
 #[cfg(not(target_arch = "wasm32"))]
 const REQUEST: Request<'static> = Request {
     label: Some("studiocraft"),
     required_features: wgpu::Features::empty(),
-    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
+    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32.union(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF),
     limits: None,
 };
 
@@ -113,6 +113,7 @@ impl Gpu {
             OpenError::NoAdapter => RenderError::NoAdapter(e.to_string()),
             _ => RenderError::NoDevice(e.to_string()),
         })?;
+        craft_gpu_interop::publish_import_caps(&opened.device);
         let gpu = Gpu {
             device: opened.device,
             queue: opened.queue,
@@ -127,6 +128,7 @@ impl Gpu {
     /// errors are recorded instead of ending the process.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Gpu {
         let health = DeviceHealth::watch(&device);
+        craft_gpu_interop::publish_import_caps(&device);
         Gpu {
             device,
             queue,
@@ -281,5 +283,22 @@ mod tests {
         assert!(!named.is_lost());
         named.health().mark(Fault::Error("validation".into()));
         assert_eq!(named.lost().as_deref(), Some("validation"));
+    }
+
+    /// The compositor hands on an export's frame only when its submission reported no error, so a
+    /// rejected submission must be counted before `submit` returns.
+    #[test]
+    fn a_rejected_submission_is_counted_before_submit_returns() {
+        let (gpu, _) = Gpu::open_on(noop(), &Preference::Software).unwrap();
+        let buffer = |usage| gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
+        let (src, dst) = (buffer(wgpu::BufferUsages::COPY_SRC), buffer(wgpu::BufferUsages::COPY_DST));
+        let errors = gpu.health().errors();
+        gpu.queue.submit([gpu.device.create_command_encoder(&Default::default()).finish()]);
+        assert_eq!(gpu.health().errors(), errors, "a valid submission");
+        let mut bad = gpu.device.create_command_encoder(&Default::default());
+        // A copy whose size is not a multiple of 4 bytes is invalid.
+        bad.copy_buffer_to_buffer(&src, 0, &dst, 0, 3u64);
+        gpu.queue.submit([bad.finish()]);
+        assert!(gpu.health().errors() > errors, "the rejected submission is counted at once");
     }
 }

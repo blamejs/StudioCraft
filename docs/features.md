@@ -66,6 +66,18 @@ stopped, changing any of the source's properties opens the picker again. The lis
 for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
 picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
 
+A Display capture source on Linux keeps the picture on the GPU when the compositor draws with
+Vulkan and its driver supports `VK_EXT_external_memory_dma_buf` and
+`VK_EXT_image_drm_format_modifier`. The source offers the screen-cast stream DMA-BUF buffers in
+the formats and DRM format modifiers the compositor's device can read, ahead of buffers in memory,
+and the compositor opens each buffer as a texture. A buffer is drawn once the desktop has finished
+writing it, and goes back to the desktop once the GPU has finished drawing it. The source copies the picture through CPU memory instead when the compositor draws
+with another backend, when the driver lacks either extension, when the compositor's device is not
+the one the stream was negotiated for, when the desktop picks a format or modifier the device
+cannot read, when the stream has fewer than two buffers, when the desktop sends a buffer in memory,
+and when the compositor cannot open a buffer, even while the screen is still. Window capture sources and Staged
+windows sources on Linux always copy through CPU memory.
+
 ### Staged windows
 
 A Staged windows source holds up to six windows or displays, chosen in its Properties as Window 1
@@ -815,6 +827,18 @@ graphics driver does not report its adapter, when its Vulkan driver lacks either
 the shared textures cannot be opened or a copy fails, when NVENC cannot open a session on that
 adapter or fails on a frame, and when NVENC holds every shared texture without writing a packet.
 Recordings and streams do not use the shared textures yet; they read the frames back.
+
+On Linux, the compositor can copy each converted frame into NV12 images on its Vulkan device whose
+memory it exports as DMA-BUFs, and VA-API H.264, HEVC and AV1 (built in) can import those buffers
+as input surfaces on the same GPU's render node and encode from them, so the frame is not read back
+into CPU memory. This needs a compositor on Vulkan with `VK_KHR_external_memory_fd`,
+`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier` and Vulkan 1.2 timeline
+semaphores. The compositor reads the frames back through CPU memory instead when it draws with
+another backend, when its Vulkan driver lacks any of those, when the driver has no memory layout in
+which it can export an NV12 image of the output size, when VA-API cannot open an encoder on the
+render node of the compositor's GPU, when the VA-API driver cannot import a buffer, when the
+encoder fails on a frame, and when the encoder stops while a picture it took is not finished. Recordings and streams do not use these buffers yet; they read the frames
+back.
 
 On Windows, a Display capture source captures with desktop duplication into textures that the
 compositor opens on its Direct3D 12 or Vulkan device, so the picture is not copied through CPU

@@ -2,13 +2,20 @@
 //! NV12 textures, the frames that name one of them, and the encoder side's queue of frames.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 use crate::fallback::Fallback;
 use crate::ring::{AdapterId, SLOTS};
 
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
+
+/// The compositor's count of finished copies, which a ring without a shared ready fence reads
+/// without waiting: on Linux, a timeline semaphore of the compositor's device.
+pub(crate) trait ReadyCounter: Send + Sync {
+    /// The newest frame value whose copy has finished, or `None` when it cannot be read now.
+    fn reached(&self) -> Option<u64>;
+}
 
 /// The completed value `GetCompletedValue` returns for a fence whose device has been removed.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -17,18 +24,24 @@ pub(crate) const REMOVED: u64 = u64::MAX;
 /// Raise a fence through `raise` to `reached`, the value a timeline semaphore was read at once the
 /// queue had finished the work submitted before it (`None` when it could not be read), and never
 /// to `target`, the newest value that work signals: a lost device also finishes the work, without
-/// signaling it. Returns whether the semaphore reached `target`.
+/// signaling it. `raise` returns whether the fence holds the value afterward. Returns `None` when
+/// the fence reached `target`, [`Fallback::DeviceRemoved`] when the semaphore fell short of it or
+/// could not be read, and [`Fallback::ImportFailed`] when the semaphore reached it but the fence
+/// could not be raised.
 #[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
-pub(crate) fn settle(reached: Option<u64>, target: u64, raise: impl FnOnce(u64)) -> bool {
-    if let Some(done) = reached {
-        raise(done);
+pub(crate) fn settle(reached: Option<u64>, target: u64, raise: impl FnOnce(u64) -> bool) -> Option<Fallback> {
+    let raised = reached.map(raise);
+    match reached {
+        Some(done) if done >= target => (raised != Some(true)).then_some(Fallback::ImportFailed),
+        _ => Some(Fallback::DeviceRemoved),
     }
-    reached.is_some_and(|done| done >= target)
 }
 
 /// The NV12 textures and fences one encoder reads the compositor's program frames from. On
 /// Windows they live on a Direct3D 11 device of the compositor's adapter, the device a hardware
 /// encoder opens its session on, and are shared through NT handles with the compositor's device.
+/// On Linux they are NV12 images of the compositor's Vulkan device, shared as DMA-BUFs
+/// ([`ExportRing::buffer`]).
 pub struct ExportRing {
     id: u64,
     width: u32,
@@ -36,19 +49,166 @@ pub struct ExportRing {
     adapter: AdapterId,
     /// 0 while the frames may stay on the GPU, else a [`Fallback`] code.
     fallback: AtomicU8,
-    /// A detached ring's fence values, which [`ExportRing::set_ready`] sets.
+    /// A detached ring's fence values, which [`ExportRing::set_ready`] sets. A Linux ring keeps
+    /// the newest value its counter has reached here, and the released value set by the encoder.
     detached_ready: AtomicU64,
     detached_released: AtomicU64,
+    /// The counter [`ExportRing::ready`] reads, while the compositor side that owns it exists.
+    counter: OnceLock<Weak<dyn ReadyCounter>>,
     /// The highest value a detached ring was asked to release.
     detached_queued: AtomicU64,
     /// Set in tests while a detached ring's releases stay queued instead of completing.
     #[cfg(test)]
     pub(crate) hold_releases: AtomicBool,
+    /// Run once by [`ExportRing::handed_back`] between its reads, in tests of work another thread
+    /// does at that moment.
+    #[cfg(test)]
+    pub(crate) between_reads: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// The newest frame of an encoder that stopped while its copy was still running, whose texture
     /// goes back once that copy has finished; 0 when there is none.
     abandoned: AtomicU64,
     #[cfg(windows)]
     pub(crate) nv12: Option<crate::dxgi_ffi::Nv12Ring>,
+    #[cfg(target_os = "linux")]
+    pub(crate) dmabuf: Option<DmabufBuffers>,
+}
+
+/// The DMA-BUF buffers of a Linux export ring, one per slot, and the DRM render node of the device
+/// that made them.
+#[cfg(target_os = "linux")]
+pub(crate) struct DmabufBuffers {
+    pub(crate) buffers: Vec<ExportBuffer>,
+    pub(crate) render_node: Option<u64>,
+}
+
+/// One NV12 picture of a Linux export ring, shared as a DMA-BUF: a single memory object of `size`
+/// bytes in the memory layout `modifier`, its luma plane at `offsets[0]` with rows `pitches[0]`
+/// bytes apart, and its interleaved chroma plane at `offsets[1]` with rows `pitches[1]` apart.
+/// The image is [`ExportRing::padded_size`], the ring's size rounded up to whole 16 x 16 blocks,
+/// so an encoder that codes such blocks reads every row and column of them from the buffer. The
+/// picture is at its top left, and each copy fills the padding with the picture's last column and
+/// row.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct ExportBuffer {
+    fd: std::os::fd::OwnedFd,
+    size: u64,
+    modifier: u64,
+    offsets: [u32; 2],
+    pitches: [u32; 2],
+    plane_sizes: [u64; 2],
+    image: (u32, u32),
+}
+
+#[cfg(target_os = "linux")]
+impl ExportBuffer {
+    /// A buffer of the DMA-BUF `fd` holding a `width` x `height` NV12 image, or `None` when its two
+    /// planes, `plane_sizes` bytes long as the driver reports them, do not hold such an image
+    /// inside `size` bytes ([`nv12_planes_fit`]).
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn new(
+        fd: std::os::fd::OwnedFd,
+        size: u64,
+        modifier: u64,
+        offsets: [u32; 2],
+        pitches: [u32; 2],
+        plane_sizes: [u64; 2],
+        (width, height): (u32, u32),
+    ) -> Option<ExportBuffer> {
+        nv12_planes_fit(width, height, size, offsets, pitches, plane_sizes, modifier == crate::dmabuf::MOD_LINEAR).then_some(ExportBuffer {
+            fd,
+            size,
+            modifier,
+            offsets,
+            pitches,
+            plane_sizes,
+            image: (width, height),
+        })
+    }
+
+    /// The width and height of the NV12 image in the buffer: [`ExportRing::padded_size`] of the
+    /// ring's size.
+    pub fn image_size(&self) -> (u32, u32) {
+        self.image
+    }
+
+    /// The DMA-BUF's descriptor, which stays the ring's. An encoder that imports the buffer takes
+    /// its own reference through it.
+    pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
+        self.fd.as_fd()
+    }
+
+    /// The size of the memory object in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The DRM format modifier of the picture's memory layout.
+    pub fn modifier(&self) -> u64 {
+        self.modifier
+    }
+
+    /// Where the luma and chroma planes start, in bytes.
+    pub fn offsets(&self) -> [u32; 2] {
+        self.offsets
+    }
+
+    /// The distance between two rows of the luma and chroma planes, in bytes.
+    pub fn pitches(&self) -> [u32; 2] {
+        self.pitches
+    }
+
+    /// The bytes of the luma and chroma planes, as the driver reports them.
+    pub fn plane_sizes(&self) -> [u64; 2] {
+        self.plane_sizes
+    }
+}
+
+/// The Linux device number (`dev_t`, as `st_rdev` reports it) of the device `major`:`minor`, in
+/// glibc's and musl's encoding: the low 8 bits of the minor number, the low 12 bits of the major
+/// number, then the rest of the minor number and the rest of the major number.
+#[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+pub(crate) fn dev_number(major: u32, minor: u32) -> u64 {
+    let (major, minor) = (u64::from(major), u64::from(minor));
+    ((major & 0xffff_f000) << 32) | ((major & 0x0fff) << 8) | ((minor & 0xffff_ff00) << 12) | (minor & 0xff)
+}
+
+/// Whether a `width` x `height` NV12 picture fits `size` bytes with its luma plane at `offsets[0]`
+/// and its chroma plane (half as many rows of the same width) at `offsets[1]`, rows `pitches`
+/// bytes apart and `plane_sizes` bytes long as the driver reports them, without the sizes
+/// overflowing. Each plane's reported bytes must lie inside `size`. In a linear layout (`linear`)
+/// each luma row must also hold the picture's width, each chroma row its whole interleaved pairs
+/// (two bytes for every two pixels, an odd last pixel included), and every row must lie inside its
+/// plane's reported bytes, the last one without a whole pitch after it; in a tiled one the driver lays the rows out, and
+/// its plane sizes are the planes' extent.
+pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], plane_sizes: [u64; 2], linear: bool) -> bool {
+    let chroma_row = 2 * u64::from(width.div_ceil(2));
+    if width == 0
+        || height == 0
+        || pitches.contains(&0)
+        || plane_sizes.contains(&0)
+        || (linear && (pitches[0] < width || u64::from(pitches[1]) < chroma_row))
+    {
+        return false;
+    }
+    let reported = |plane: usize| u64::from(offsets[plane]).checked_add(plane_sizes[plane]).is_some_and(|end| end <= size);
+    if !reported(0) || !reported(1) {
+        return false;
+    }
+    if !linear {
+        return true;
+    }
+    // Each plane's rows end inside its reported bytes, which end inside `size` (checked above): the
+    // last row needs only its own bytes, not a whole pitch.
+    let rows = [(height, u64::from(width)), (height.div_ceil(2), chroma_row)];
+    (0..2).all(|plane| linear_rows_fit(pitches[plane], rows[plane].0, rows[plane].1, plane_sizes[plane]))
+}
+
+/// Whether `rows` linear rows `pitch` bytes apart, the last one `row_bytes` long, lie inside a
+/// plane of `plane_size` bytes.
+fn linear_rows_fit(pitch: u32, rows: u32, row_bytes: u64, plane_size: u64) -> bool {
+    u64::from(pitch).checked_mul(u64::from(rows.saturating_sub(1))).and_then(|n| n.checked_add(row_bytes)).is_some_and(|end| end <= plane_size)
 }
 
 impl std::fmt::Debug for ExportRing {
@@ -94,13 +254,50 @@ impl ExportRing {
             fallback: AtomicU8::new(0),
             detached_ready: AtomicU64::new(0),
             detached_released: AtomicU64::new(0),
+            counter: OnceLock::new(),
             detached_queued: AtomicU64::new(0),
             #[cfg(test)]
             hold_releases: AtomicBool::new(false),
+            #[cfg(test)]
+            between_reads: std::sync::Mutex::new(None),
             abandoned: AtomicU64::new(0),
             #[cfg(windows)]
             nv12: None,
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
         }
+    }
+
+    /// A Linux ring of the DMA-BUF `buffers`, one per slot, made on `adapter`, whose device has the
+    /// DRM render node `render_node`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn of_dmabufs(adapter: AdapterId, width: u32, height: u32, buffers: Vec<ExportBuffer>, render_node: Option<u64>) -> ExportRing {
+        let mut ring = ExportRing::new(width, height, adapter);
+        ring.dmabuf = Some(DmabufBuffers { buffers, render_node });
+        ring
+    }
+
+    /// Read the ready value from `counter` while it exists. A ring takes one counter; a later one
+    /// is ignored.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn count_ready_with(&self, counter: Weak<dyn ReadyCounter>) {
+        let _ = self.counter.set(counter);
+    }
+
+    /// The DMA-BUF of `slot` on Linux. `None` for a ring of another kind, a detached ring, or a
+    /// slot outside the ring.
+    #[cfg(target_os = "linux")]
+    pub fn buffer(&self, slot: usize) -> Option<&ExportBuffer> {
+        self.dmabuf.as_ref()?.buffers.get(slot)
+    }
+
+    /// On Linux, the device number (`st_rdev`) of the DRM render node of the device that made the
+    /// ring's DMA-BUFs, for an encoder to open the same GPU. `None` when the driver does not report
+    /// it, or for a ring without DMA-BUFs.
+    #[cfg(target_os = "linux")]
+    pub fn render_node(&self) -> Option<u64> {
+        self.dmabuf.as_ref()?.render_node
     }
 
     /// A ring without textures, which no device opens and no encoder reads: its fences are two
@@ -111,6 +308,12 @@ impl ExportRing {
     }
 
     /// Unique in the process; a ring opened again is a new ring.
+    /// The size of a Linux export ring's images: the ring's size rounded up to multiples of 16,
+    /// or `None` when that does not fit in a `u32`.
+    pub fn padded_size(width: u32, height: u32) -> Option<(u32, u32)> {
+        Some((width.checked_next_multiple_of(16)?, height.checked_next_multiple_of(16)?))
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -147,6 +350,9 @@ impl ExportRing {
         if let Some(nv12) = &self.nv12 {
             return self.completed(nv12.ready());
         }
+        if let Some(reached) = self.counter.get().and_then(Weak::upgrade).and_then(|c| c.reached()) {
+            return self.detached_ready.fetch_max(reached, Ordering::AcqRel).max(reached);
+        }
         self.detached_ready.load(Ordering::Acquire)
     }
 
@@ -169,7 +375,44 @@ impl ExportRing {
         if self.nv12.is_some() {
             return;
         }
+        #[cfg(target_os = "linux")]
+        if self.dmabuf.is_some() {
+            return;
+        }
+        self.observe_ready(value);
+    }
+
+    /// Keep `value`, a ready value read from the compositor's device, for [`ExportRing::ready`]
+    /// to return once the ring's counter is gone. Values only grow.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn observe_ready(&self, value: u64) {
         self.detached_ready.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// Read `counter` once and keep the value it gives as [`ExportRing::observe_ready`] does.
+    /// Returns that value, or `None` when it cannot be read now, so a caller compares the same
+    /// value the ring keeps.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn observe_counter(&self, counter: &dyn ReadyCounter) -> Option<u64> {
+        let reached = counter.reached();
+        if let Some(done) = reached {
+            self.observe_ready(done);
+        }
+        reached
+    }
+
+    /// Keep the ready value the compositor's device reached (`None` when it could not be read)
+    /// after the last copy, which signals `target`. When the value cannot be read or falls short
+    /// of `target`, the frames after it never become ready, and [`Fallback::DeviceLost`] is
+    /// recorded.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn settle_ready(&self, reached: Option<u64>, target: u64) {
+        if let Some(done) = reached {
+            self.observe_ready(done);
+        }
+        if reached.is_none_or(|done| done < target) {
+            self.refuse(Fallback::DeviceLost);
+        }
     }
 
     /// The released fence's value now, without waiting: the newest frame the encoder has read.
@@ -214,6 +457,14 @@ impl ExportRing {
     /// stopped during its copy. An encoder session must not take a frame at or below it, since the
     /// compositor may write its texture again.
     pub fn handed_back(&self) -> u64 {
+        // `abandoned` is read first: [`ExportRing::reclaim`] queues the release of that frame
+        // before it clears `abandoned`, so a cleared value read here means the release counters
+        // read next already hold the frame.
+        let abandoned = self.abandoned.load(Ordering::Acquire);
+        #[cfg(test)]
+        if let Some(between) = self.between_reads.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            between();
+        }
         #[cfg(windows)]
         let queued = match &self.nv12 {
             Some(nv12) => nv12.queued(),
@@ -221,7 +472,7 @@ impl ExportRing {
         };
         #[cfg(not(windows))]
         let queued = self.detached_queued.load(Ordering::Acquire);
-        self.released().max(queued).max(self.abandoned.load(Ordering::Acquire))
+        self.released().max(queued).max(abandoned)
     }
 
     /// Record that an encoder stopped while the copy of the frame with value `value` was still
@@ -382,8 +633,13 @@ impl Feed {
     /// it is refused. A session on a ring read before also counts the releases that session
     /// queued and has not finished ([`ExportRing::handed_back`]).
     pub fn accepts(&self, frame: &ExportFrame) -> bool {
-        let handed = if self.handed == 0 { frame.ring.handed_back() } else { self.handed };
-        frame.ready > self.offered.max(handed)
+        frame.ready > self.offered.max(self.handed_for(frame))
+    }
+
+    /// The newest ready value handed back, for `frame`: on a session's first frame, the ring's
+    /// [`ExportRing::handed_back`], read once.
+    fn handed_for(&self, frame: &ExportFrame) -> u64 {
+        if self.handed == 0 { frame.ring.handed_back() } else { self.handed }
     }
 
     /// Add `frame`, shown at `pts`, after the frames already waiting. A frame that
@@ -393,13 +649,13 @@ impl Feed {
     /// would also hand back the older frames still being encoded; the next frame handed back
     /// covers it.
     pub fn offer(&mut self, frame: ExportFrame, pts: i64) -> Option<ExportFrame> {
-        if !self.accepts(&frame) {
+        // One reading decides whether the frame is taken and where this session's releases start:
+        // on a ring another session read before, its frames up to there went back already.
+        let handed = self.handed_for(&frame);
+        if frame.ready <= self.offered.max(handed) {
             return Some(frame);
         }
-        if self.handed == 0 {
-            // A ring another session read before: its frames up to here went back already.
-            self.handed = frame.ring.handed_back();
-        }
+        self.handed = handed;
         self.offered = frame.ready;
         self.waiting.push_back((frame, pts));
         if self.waiting.len() > SLOTS {
@@ -494,6 +750,8 @@ pub struct Exporter {
     slots: crate::ring::SlotTable,
     /// One-texel textures of the planes' formats that [`Exporter::prepare`] copies into.
     scratch: Option<Vec<wgpu::Texture>>,
+    /// The ready value of the newest ticket handed to [`Exporter::submitted`].
+    signaled: u64,
     /// The compositor's queue, which runs the copies.
     queue: wgpu::Queue,
     /// The planes of the last copy, shared with every [`Ticket`] of them. The copy reads them
@@ -502,8 +760,27 @@ pub struct Exporter {
     planes: Option<Arc<UntilDone<Vec<wgpu::Texture>>>>,
     /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device
     /// until the last copy recorded into them has been submitted.
+    shared: Arc<Shared>,
+}
+
+/// The ring's textures on the compositor's device, which an [`Exporter`] and each of its
+/// [`Ticket`]s hold.
+#[cfg(feature = "wgpu")]
+struct Shared {
     #[cfg(windows)]
-    raw: Arc<Raw>,
+    raw: Raw,
+    #[cfg(target_os = "linux")]
+    raw: crate::dmabuf_ffi::Exported,
+}
+
+#[cfg(feature = "wgpu")]
+impl Shared {
+    fn new(#[cfg(windows)] raw: Raw, #[cfg(target_os = "linux")] raw: crate::dmabuf_ffi::Exported) -> Arc<Shared> {
+        Arc::new(Shared {
+            #[cfg(any(windows, target_os = "linux"))]
+            raw,
+        })
+    }
 }
 
 #[cfg(all(feature = "wgpu", windows))]
@@ -577,8 +854,7 @@ impl<T: Send + 'static> Drop for UntilDone<T> {
 pub struct Ticket {
     slot: usize,
     ready: u64,
-    #[cfg(windows)]
-    _textures: Arc<Raw>,
+    _shared: Arc<Shared>,
     _planes: Arc<UntilDone<Vec<wgpu::Texture>>>,
 }
 
@@ -621,6 +897,28 @@ pub(crate) fn plane_formats_fit(luma: wgpu::TextureFormat, chroma: wgpu::Texture
     matches!(luma, F::R8Unorm | F::R8Snorm | F::R8Uint | F::R8Sint) && matches!(chroma, F::Rg8Unorm | F::Rg8Snorm | F::Rg8Uint | F::Rg8Sint)
 }
 
+/// Whether `luma` and `chroma`, the size and format of each of a frame's planes, are planes
+/// [`Exporter::copy`] copies into a texture of a `width × height` ring: of the sizes
+/// [`planes_fit`] takes and the formats [`plane_formats_fit`] takes.
+#[cfg(feature = "wgpu")]
+pub(crate) fn copy_planes_fit(width: u32, height: u32, luma: ((u32, u32), wgpu::TextureFormat), chroma: ((u32, u32), wgpu::TextureFormat)) -> bool {
+    planes_fit(width, height, luma.0, chroma.0) && plane_formats_fit(luma.1, chroma.1)
+}
+
+/// Whether a ticket whose ready value is `ready` may be signaled after the newest one signaled,
+/// `signaled`, which then becomes `ready`. Tickets are signaled in the order `Exporter::copy`
+/// handed them out; a ticket that was never submitted may be skipped. An older ticket is refused:
+/// the newer ticket's signal went out before its copy, so its ready value could be reached while
+/// the copy still runs.
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) fn in_order(signaled: &mut u64, ready: u64) -> bool {
+    if ready <= *signaled {
+        return false;
+    }
+    *signaled = ready;
+    true
+}
+
 /// The graphics API and adapter of `device`, as [`check_export`](crate::check_export) takes them.
 #[cfg(feature = "wgpu")]
 pub fn device_backend(device: &wgpu::Device) -> (crate::Backend, Option<AdapterId>) {
@@ -634,16 +932,25 @@ pub fn device_backend(device: &wgpu::Device) -> (crate::Backend, Option<AdapterI
             return (crate::Backend::Vulkan { external_memory, timeline }, adapter);
         }
     }
+    #[cfg(target_os = "linux")]
+    if let Some((adapter, timeline, dmabuf)) = crate::dmabuf_ffi::export_backend(device) {
+        return (crate::Backend::Vulkan { external_memory: dmabuf, timeline }, adapter);
+    }
     let _ = device;
     (crate::Backend::Other, None)
 }
 
 #[cfg(feature = "wgpu")]
 impl Exporter {
-    /// An export ring of `width × height` on the adapter of `device`, opened on that device. The
-    /// device must run on Direct3D 12, or on Vulkan with `VK_KHR_external_memory_win32` and
-    /// timeline semaphores; the reason is returned otherwise. Elsewhere than Windows it returns
-    /// [`Fallback::Unsupported`].
+    /// An export ring of `width × height` on the adapter of `device`, opened on that device. On
+    /// Windows the device must run on Direct3D 12, or on Vulkan with
+    /// `VK_KHR_external_memory_win32` and timeline semaphores. On Linux it must run on Vulkan 1.2
+    /// with timeline semaphores, `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
+    /// `VK_EXT_image_drm_format_modifier` enabled (wgpu enables them whenever the adapter has
+    /// them), and
+    /// export an NV12 image of that size in a memory layout of two planes
+    /// ([`check_dmabuf_export`](crate::check_dmabuf_export)). The reason is returned otherwise.
+    /// Elsewhere it returns [`Fallback::Unsupported`].
     pub fn open(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Result<Exporter, Fallback> {
         let (backend, compositor) = device_backend(device);
         #[cfg(windows)]
@@ -654,17 +961,44 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, queue: queue.clone(), planes: None, raw: Arc::new(raw) })
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                signaled: 0,
+                queue: queue.clone(),
+                planes: None,
+                shared: Shared::new(raw),
+            })
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                return Err(Fallback::ImportFailed);
+            }
+            crate::fallback::check_export(backend, compositor)?;
+            let (ring, raw) = crate::dmabuf_ffi::export(device, queue, width, height)?;
+            Ok(Exporter {
+                ring,
+                slots: crate::ring::SlotTable::default(),
+                scratch: None,
+                signaled: 0,
+                queue: queue.clone(),
+                planes: None,
+                shared: Shared::new(raw),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = (backend, compositor);
             ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter {
                 ring,
                 slots: crate::ring::SlotTable::default(),
                 scratch: None,
+                signaled: 0,
                 queue: queue.clone(),
                 planes: None,
+                shared: Shared::new(),
             })
         }
     }
@@ -720,10 +1054,8 @@ impl Exporter {
         if let Some(reason) = self.ring.fallback() {
             return Err(reason);
         }
-        let size = |t: &wgpu::Texture| (t.width(), t.height());
-        if !matches!(planes, [luma, chroma] if planes_fit(self.ring.width(), self.ring.height(), size(luma), size(chroma))
-            && plane_formats_fit(luma.format(), chroma.format()))
-        {
+        let plane = |t: &wgpu::Texture| ((t.width(), t.height()), t.format());
+        if !matches!(planes, [luma, chroma] if copy_planes_fit(self.ring.width(), self.ring.height(), plane(luma), plane(chroma))) {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         }
@@ -731,11 +1063,16 @@ impl Exporter {
         // only once the encoder has released it.
         let Some(slot) = self.slots.pick_released(released) else { return Ok(None) };
         #[cfg(windows)]
-        let commands = match &*self.raw {
+        let commands = match &self.shared.raw {
             Raw::Dx12(r) => r.copy(device, planes, slot),
             Raw::Vulkan(r) => r.copy(planes, slot),
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let commands = {
+            let _ = device;
+            self.shared.raw.copy(planes, slot)
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
         let commands: Result<wgpu::CommandBuffer, Fallback> = {
             let _ = (device, planes);
             Err(Fallback::Unsupported)
@@ -745,28 +1082,34 @@ impl Exporter {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
-        let ticket = Ticket {
-            slot,
-            ready,
-            #[cfg(windows)]
-            _textures: Arc::clone(&self.raw),
-            _planes: kept_planes(&mut self.planes, &self.queue, planes),
-        };
+        let ticket = Ticket { slot, ready, _shared: Arc::clone(&self.shared), _planes: kept_planes(&mut self.planes, &self.queue, planes) };
         Ok(Some((commands, ticket)))
     }
 
     /// The frame of `ticket`, once its command buffer has been submitted: the ready fence is set
-    /// after the copy, and the frame is what an encoder session takes.
+    /// after the copy, and the frame is what an encoder session takes. Tickets are handed in in the
+    /// order [`Exporter::copy`] returned them, and one whose command buffer was not submitted is
+    /// left out. A ticket older than one already handed in is refused with
+    /// [`Fallback::ImportFailed`], which stops the export.
     pub fn submitted(&mut self, ticket: Ticket) -> Result<ExportFrame, Fallback> {
+        if !in_order(&mut self.signaled, ticket.ready) {
+            self.ring.refuse(Fallback::ImportFailed);
+            return Err(Fallback::ImportFailed);
+        }
         #[cfg(windows)]
-        let signaled = match &*self.raw {
+        let signaled = match &self.shared.raw {
             Raw::Dx12(r) => r.signal(ticket.ready),
             Raw::Vulkan(r) => {
                 r.signal(ticket.ready);
                 Ok(())
             }
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let signaled: Result<(), Fallback> = {
+            self.shared.raw.signal(ticket.ready);
+            Ok(())
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
         let signaled: Result<(), Fallback> = Err(Fallback::Unsupported);
         signaled.inspect_err(|&reason| self.ring.refuse(reason))?;
         ExportFrame::new(Arc::clone(&self.ring), ticket.slot, ticket.ready).ok_or(Fallback::ImportFailed)
@@ -775,13 +1118,16 @@ impl Exporter {
     /// Copy the values the compositor's queue has reached to the ready fence, without waiting.
     /// Only a Vulkan export has anything to do; [`Exporter::copy`] also calls it. When the ready
     /// fence cannot be set, [`Fallback::ImportFailed`] is recorded on the ring, as a Direct3D 12
-    /// export records it when its signal fails.
+    /// export records it when its signal fails. A Linux ring's encoder also reads the queue's value
+    /// itself ([`ExportRing::ready`]).
     pub fn poll(&self) {
         #[cfg(windows)]
-        if let Raw::Vulkan(r) = &*self.raw
+        if let Raw::Vulkan(r) = &self.shared.raw
             && !r.poll()
         {
             self.ring.refuse(Fallback::ImportFailed);
         }
+        #[cfg(target_os = "linux")]
+        self.shared.raw.poll();
     }
 }

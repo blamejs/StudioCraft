@@ -759,6 +759,40 @@ fn another_output_size_drops_the_gpu_queue_of_the_old_ring() {
     assert!(c.export_sink.is_some());
 }
 
+/// A queue published for one size and taken together with a newer size is not given to the
+/// converter of the newer size: only the queue published for that size is.
+#[test]
+fn a_gpu_queue_taken_with_a_newer_size_waits_for_the_queue_of_that_size() {
+    let Some(mut c) = compositor(32, 16) else { return };
+    let shared = RenderShared::default();
+    let sink = |width, height| Some(GpuSink { width, height, queue: Arc::new(Fifo::new(2)) });
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: Vec::new() }));
+    // The queue of the 16 x 8 session is still waiting when a 32 x 16 target is published.
+    shared.encode_gpu.publish(sink(16, 8));
+    shared.encode.publish(Some(EncodeTarget { width: 32, height: 16, sinks: Vec::new() }));
+    c.run(&shared, Tick(0));
+    assert!(c.nv12.as_ref().is_some_and(|n| (n.width, n.height) == (32, 16)));
+    assert!(c.export_sink.is_none(), "the 16 x 8 session cannot read a 32 x 16 ring");
+    shared.encode_gpu.publish(sink(32, 16));
+    c.run(&shared, Tick(1));
+    assert!(c.export_sink.is_some(), "the queue of the 32 x 16 session is used");
+    // Stopping needs no size.
+    shared.encode_gpu.publish(None);
+    c.run(&shared, Tick(2));
+    assert!(c.export_sink.is_none());
+}
+
+/// A submission counts as taken only while the device reports no new error and no fault: a device
+/// lost during it reaches the device-lost callback, not the error count.
+#[test]
+fn a_submission_on_a_lost_device_is_not_taken_though_no_error_was_counted() {
+    let health = craft_gpu_device::DeviceHealth::new();
+    assert!(submission_accepted(&health, health.errors()));
+    health.mark(craft_gpu_device::Fault::Lost("lost by the driver".into()));
+    assert_eq!(health.errors(), 0, "a loss is not an uncaptured error");
+    assert!(!submission_accepted(&health, 0));
+}
+
 #[test]
 fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     let Some(mut c) = compositor(32, 16) else { return };

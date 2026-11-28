@@ -19,7 +19,11 @@ pub enum Fallback {
     /// The display is rotated; desktop duplication gives its picture unrotated.
     Rotated,
     /// The compositor's Vulkan device was opened without `VK_KHR_external_memory_win32`, which
-    /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2).
+    /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2). On Linux: it was
+    /// opened without `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`
+    /// (an import also needs wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`; an export needs
+    /// `VK_KHR_external_memory_fd` as well, and wgpu enables the three whenever the adapter has
+    /// them).
     MissingExtension,
     /// The hardware encoder cannot open a session on the compositor's graphics adapter, so the
     /// program frames it encodes go through CPU memory.
@@ -27,6 +31,15 @@ pub enum Fallback {
     /// The system does not let this window be captured into textures (a window the capture API
     /// does not accept, or a capture the system or the person refused).
     Refused,
+    /// The compositor's device cannot read the captured buffers' pixel format with their memory
+    /// layout (their DRM format modifier), or a buffer's layout does not match the stream's. For
+    /// program frames on Linux: the device cannot make an NV12 image of the ring's size that it
+    /// can share as a DMA-BUF in any memory layout.
+    Modifier,
+    /// The compositor's device stopped before a copy into a program frame was seen to finish, or
+    /// rejected the submission that held the copy, so the encoder cannot tell whether the frame is
+    /// complete.
+    DeviceLost,
     /// The graphics device that holds the export ring, or the fences of a captured ring on the
     /// compositor's side, was removed or reset, so the fences no longer say which frames are done.
     /// Also recorded when a Vulkan compositor's export stops before the copies it submitted are
@@ -35,7 +48,7 @@ pub enum Fallback {
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 10] = [
+    pub(crate) const ALL: [Fallback; 12] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -45,6 +58,8 @@ impl Fallback {
         Fallback::MissingExtension,
         Fallback::NoEncoder,
         Fallback::Refused,
+        Fallback::Modifier,
+        Fallback::DeviceLost,
         Fallback::DeviceRemoved,
     ];
 
@@ -59,7 +74,9 @@ impl Fallback {
             Fallback::MissingExtension => 7,
             Fallback::NoEncoder => 8,
             Fallback::Refused => 9,
-            Fallback::DeviceRemoved => 10,
+            Fallback::Modifier => 10,
+            Fallback::DeviceLost => 11,
+            Fallback::DeviceRemoved => 12,
         }
     }
 
@@ -77,9 +94,13 @@ impl std::fmt::Display for Fallback {
             Fallback::Unsupported => "this system cannot share captured textures between devices",
             Fallback::Format => "the desktop is not in 8-bit color",
             Fallback::Rotated => "the display is rotated",
-            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures or has no timeline semaphores",
+            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared textures or has no timeline semaphores",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
+            Fallback::Modifier => "the compositor's device cannot share the picture in a memory layout the other side reads",
+            Fallback::DeviceLost => {
+                "the compositor's graphics device stopped, or refused the copy into a program frame, before the frame was finished"
+            }
             Fallback::DeviceRemoved => "the graphics device that holds the shared frames was removed or reset",
         })
     }
@@ -125,6 +146,23 @@ pub fn check_export(backend: Backend, compositor: Option<AdapterId>) -> Result<A
         return Err(if backend == Backend::Other { Fallback::UnsupportedBackend } else { Fallback::OtherAdapter });
     };
     check_import(backend, adapter, Some(adapter)).map(|()| adapter)
+}
+
+/// The adapter a Linux [`crate::ExportRing`] of DMA-BUF buffers for a compositor on `backend` and
+/// `compositor` is made on. The checks of [`check_export`] come first, with `external_memory`
+/// meaning `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`; then
+/// `modifiers`, the DRM format modifiers the device can export an NV12 image of the ring's size
+/// with, must not be empty ([`Fallback::Modifier`]). DMA-BUFs are shared through Vulkan only, so
+/// Direct3D 12 is [`Fallback::UnsupportedBackend`].
+pub fn check_dmabuf_export(backend: Backend, compositor: Option<AdapterId>, modifiers: &[u64]) -> Result<AdapterId, Fallback> {
+    if backend == Backend::Dx12 {
+        return Err(Fallback::UnsupportedBackend);
+    }
+    let adapter = check_export(backend, compositor)?;
+    if modifiers.is_empty() {
+        return Err(Fallback::Modifier);
+    }
+    Ok(adapter)
 }
 
 /// Open each of `handles` with `open`, in order. When one fails, every resource opened before it

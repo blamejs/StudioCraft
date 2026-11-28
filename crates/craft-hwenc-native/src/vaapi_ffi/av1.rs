@@ -185,12 +185,13 @@ pub(crate) struct Tiles {
 
 impl Tiles {
     /// The tiles of a `width` × `height` frame at `fps`: the first uniform grid whose largest
-    /// tile is at most 4096 pixels wide, holds at most [`MAX_TILE_AREA`] luma samples and codes at
+    /// tile is at most 4096 pixels wide, spans at most 2,304 superblocks, holds at most
+    /// [`MAX_TILE_AREA`] luma samples and codes at
     /// most [`MAX_TILE_RATE`] luma samples a second, counting whole 4 × 4 blocks, and whose last
-    /// column and row keep at least 8 pixels of the frame. Grids are tried by `cols_log2 + rows_log2`,
-    /// smallest first, then by `cols_log2`, smallest first. `None` when no uniform grid keeps
-    /// within the limits.
-    pub(crate) fn of(width: u32, height: u32, fps: (u32, u32)) -> Option<Tiles> {
+    /// column and row keep at least 8 pixels of the frame, and that has at most `max_tiles` tiles
+    /// (the driver's limit). Grids are tried by `cols_log2 + rows_log2`, smallest first, then by
+    /// `cols_log2`, smallest first. `None` when no uniform grid keeps within the limits.
+    pub(crate) fn of(width: u32, height: u32, fps: (u32, u32), max_tiles: u32) -> Option<Tiles> {
         let (mi_cols, mi_rows) = (2 * (width.div_ceil(8)), 2 * (height.div_ceil(8)));
         let (sb_cols, sb_rows) = (mi_cols.div_ceil(16), mi_rows.div_ceil(16));
         // MAX_TILE_WIDTH and MAX_TILE_AREA in 64 × 64 superblocks, MAX_TILE_COLS and MAX_TILE_ROWS.
@@ -211,14 +212,24 @@ impl Tiles {
                 // `TileHeight`), so a frame smaller than a superblock keeps its size rounded up to 8.
                 let samples = (u64::from(width_sb) * 64).min(u64::from(mi_cols) * 4) * (u64::from(height_sb) * 64).min(u64::from(mi_rows) * 4);
                 let per_second = samples.saturating_mul(u64::from(fps.0));
-                if width_sb > max_width_sb || samples > MAX_TILE_AREA || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1))) {
+                // `tileWidthSb * tileHeightSb` is at most `maxTileAreaSb` (the tile_info
+                // semantics), counted before the frame's edge crops the tile.
+                let area_sb = u64::from(width_sb) * u64::from(height_sb);
+                if width_sb > max_width_sb
+                    || area_sb > u64::from(max_area_sb)
+                    || samples > MAX_TILE_AREA
+                    || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1)))
+                {
                     continue;
                 }
                 // The last column and row keep at least 8 pixels of the frame (`CroppedTileWidth` and
                 // `CroppedTileHeight`). A frame narrower than 8 pixels has one tile and is not split.
                 let (cols, rows) = (sb_cols.div_ceil(width_sb.max(1)), sb_rows.div_ceil(height_sb.max(1)));
                 let cropped = |size: u32, each: u32, n: u32| u64::from(size).saturating_sub(u64::from(n.saturating_sub(1)) * u64::from(each) * 64);
-                if cropped(width, width_sb, cols) < u64::from(width.min(8)) || cropped(height, height_sb, rows) < u64::from(height.min(8)) {
+                if cropped(width, width_sb, cols) < u64::from(width.min(8))
+                    || cropped(height, height_sb, rows) < u64::from(height.min(8))
+                    || u64::from(cols) * u64::from(rows) > u64::from(max_tiles)
+                {
                     continue;
                 }
                 return Some(Tiles {
@@ -610,7 +621,7 @@ mod tests {
 
     /// The tiles of a `width` × `height` frame at 30 frames per second.
     fn tiles(width: u32, height: u32) -> Tiles {
-        Tiles::of(width, height, (30, 1)).unwrap()
+        Tiles::of(width, height, (30, 1), u32::MAX).unwrap()
     }
 
     const DEFAULT: Tools = Tools { tx_mode: TX_MODE_SELECT, filter: SWITCHABLE, tile_size_bytes: 4, obu_size_bytes: 4, max_tiles: u32::MAX };
@@ -788,7 +799,7 @@ mod tests {
 
         // Past the syntax's fewest tiles, the increment bits step up to the grid the session uses.
         for (width, height, fps, log2) in [(7680, 4320, (120, 1), (1, 2)), (4032, 4672, (30, 1), (0, 2)), (3840, 2160, (120, 1), (0, 1))] {
-            let tiles = Tiles::of(width, height, fps).unwrap();
+            let tiles = Tiles::of(width, height, fps, u32::MAX).unwrap();
             let h = frame_header(&tiles, &DEFAULT, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23));
             let r = read(&h.obu, (tiles.sb_cols, tiles.sb_rows));
             assert_eq!((r.tile_log2, (u32::from(tiles.cols_log2), u32::from(tiles.rows_log2))), (log2, log2), "{width}x{height} at {fps:?}");
@@ -844,22 +855,41 @@ mod tests {
         // Two rows of 37 superblocks make 4032 × 2368 tiles, past MAX_TILE_AREA: four rows of 19.
         let rounded = tiles(4032, 4672);
         assert_eq!((rounded.cols_log2, rounded.rows_log2, rounded.min_rows_log2, rounded.height_sb, rounded.count()), (0, 2, 1, 19, 4));
+        // Two rows of 63 × 37 superblocks hold 3984 × 2368 = 9,434,112 samples, inside
+        // MAX_TILE_AREA, but 2,331 superblocks, past the 2,304 a uniform tile may span: four rows.
+        let cropped = tiles(3984, 4672);
+        assert_eq!((cropped.cols_log2, cropped.rows_log2, cropped.width_sb, cropped.height_sb, cropped.count()), (0, 2, 63, 19, 4));
         // At 120 frames per second a tile codes at most 4,902,092 luma samples a frame.
-        assert_eq!(Tiles::of(3840, 2160, (60, 1)).map(|t| t.count()), Some(1), "8,294,400 samples at 60 frames per second");
-        let fast = Tiles::of(3840, 2160, (120, 1)).unwrap();
+        let of = |width, height, fps| Tiles::of(width, height, fps, u32::MAX);
+        assert_eq!(of(3840, 2160, (60, 1)).map(|t| t.count()), Some(1), "8,294,400 samples at 60 frames per second");
+        let fast = of(3840, 2160, (120, 1)).unwrap();
         assert_eq!((fast.cols_log2, fast.rows_log2, fast.height_sb, fast.count()), (0, 1, 17, 2));
-        let big = Tiles::of(7680, 4320, (120, 1)).unwrap();
+        let big = of(7680, 4320, (120, 1)).unwrap();
         assert_eq!((big.cols_log2, big.rows_log2, big.width_sb, big.height_sb, big.count()), (1, 2, 60, 17, 8));
-        assert_eq!(Tiles::of(7680, 4320, (60, 1)).map(|t| t.count()), Some(4), "3840 × 2176 at 60 frames per second fits");
-        assert_eq!(Tiles::of(16, 16, (u32::MAX, 1)), None, "one superblock coded faster than any tile may be");
+        assert_eq!(of(7680, 4320, (60, 1)).map(|t| t.count()), Some(4), "3840 × 2176 at 60 frames per second fits");
+        assert_eq!(of(16, 16, (u32::MAX, 1)), None, "one superblock coded faster than any tile may be");
         // A tile's size counts whole 4 × 4 blocks: 3826 pixels code as 3832, and two rows of
         // 3832 × 1280 at 120 frames per second pass the rate limit.
-        let blocks = Tiles::of(3826, 2554, (120, 1)).unwrap();
+        let blocks = of(3826, 2554, (120, 1)).unwrap();
         assert_eq!((blocks.cols_log2, blocks.rows_log2, blocks.height_sb, blocks.count()), (0, 2, 10, 4));
         // Eight rows of 7 superblocks leave the bottom row 2 pixels of the frame: two columns of
         // four rows instead.
-        let edge = Tiles::of(4096, 3138, (240, 1)).unwrap();
+        let edge = of(4096, 3138, (240, 1)).unwrap();
         assert_eq!((edge.cols_log2, edge.rows_log2, edge.width_sb, edge.height_sb, edge.count()), (1, 2, 32, 13, 8));
+    }
+
+    /// A grid with more tiles than the driver codes is passed over for a later one that fits.
+    #[test]
+    fn the_tile_grid_keeps_within_the_drivers_tile_limit() {
+        // At 3136 × 4096 and 200 frames per second the first grid is one column of eight rows.
+        let first = Tiles::of(3136, 4096, (200, 1), u32::MAX).unwrap();
+        assert_eq!((first.cols, first.rows), (1, 8));
+        // Eight columns of 7 superblocks make 7 columns, one row: 7 tiles.
+        let limited = Tiles::of(3136, 4096, (200, 1), 7).unwrap();
+        assert_eq!((limited.cols_log2, limited.cols, limited.rows, limited.count()), (3, 7, 1, 7));
+        assert_eq!(Tiles::of(3136, 4096, (200, 1), 8), Some(first), "a grid within the limit is kept");
+        assert_eq!(Tiles::of(3136, 4096, (200, 1), 1), None, "no grid has one tile");
+        assert_eq!(Tiles::of(1920, 1080, (30, 1), 1).map(|t| t.count()), Some(1));
     }
 
     #[test]

@@ -71,9 +71,7 @@ pub(crate) trait Grab {
 
 impl Grab for Display {
     fn open(target: &str) -> Result<Self, PluginError> {
-        let mut d = Display::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))?;
-        d.share_on_gpu();
-        Ok(d)
+        Display::open_shared(target).map_err(|e| PluginError::Unavailable(e.to_string()))
     }
     fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
         Display::grab(self, frame).into()

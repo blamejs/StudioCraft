@@ -64,12 +64,16 @@ pub fn record_loss(losses: &mut Vec<u64>, now: u64) {
     losses.drain(..extra);
 }
 
+/// The features a display capture that stays on the GPU needs: shared Windows textures, and
+/// DMA-BUF buffers on Linux.
+const SHARING: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32.union(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF);
+
 /// The window's wgpu setup: the instance over the backends `craft-gpu-device` uses (with
 /// `WGPU_BACKEND` still honored), the adapter `preference` asks for, and a device with that
 /// adapter's own limits, so an adapter below wgpu's default limits (an older or software one)
-/// opens. A Vulkan device on Windows also opens shared textures when the driver can, for a display
-/// capture that stays on the GPU. What the user should be told about the choice is put in
-/// `notices` when the window opens.
+/// opens. A Vulkan device on Windows also opens shared textures when the driver can, and one on
+/// Linux DMA-BUF buffers, for a display capture that stays on the GPU. What the user should be
+/// told about the choice is put in `notices` when the window opens.
 pub fn wgpu_setup(preference: Preference, notices: Arc<OnceLock<Vec<Notice>>>) -> egui_wgpu::WgpuSetup {
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     let desc = device::native_descriptor();
@@ -83,7 +87,7 @@ pub fn wgpu_setup(preference: Preference, notices: Arc<OnceLock<Vec<Notice>>>) -
     }));
     setup.device_descriptor = Arc::new(|adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
         label: Some("studiocraft window"),
-        required_features: adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
+        required_features: adapter.features() & SHARING,
         required_limits: adapter.limits(),
         ..Default::default()
     });
@@ -209,8 +213,9 @@ mod tests {
         // the device asks for the adapter's own limits, so an adapter below wgpu's defaults opens
         let descriptor = (setup.device_descriptor)(&adapters[0]);
         assert_eq!(descriptor.required_limits, adapters[0].limits());
-        // shared Windows textures are asked for only when the adapter has them
-        assert_eq!(descriptor.required_features, adapters[0].features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32);
+        // shared Windows textures and Linux DMA-BUFs are asked for only when the adapter has them
+        assert_eq!(descriptor.required_features, adapters[0].features() & SHARING);
+        assert!(SHARING.contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32 | wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF));
         assert!(pollster::block_on(adapters[0].request_device(&descriptor)).is_ok());
     }
 }

@@ -234,6 +234,336 @@ fn elsewhere_than_windows_the_capture_reports_the_fallback() {
     assert_eq!(WindowCapture::open(1, "display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
 }
 
+/// A device that can import BGRx and BGRA buffers laid out linearly or with modifier 7, and nothing
+/// in RGB order.
+fn dmabuf_caps_of(device: AdapterId) -> DmabufCaps {
+    DmabufCaps {
+        device,
+        formats: vec![(DmabufFormat::Bgrx, vec![MOD_LINEAR, 7]), (DmabufFormat::Bgra, vec![MOD_LINEAR]), (DmabufFormat::Rgbx, vec![])],
+    }
+}
+
+#[test]
+fn a_dmabuf_import_needs_vulkan_the_two_extensions_the_streams_device_and_a_known_modifier() {
+    let a = AdapterId(11);
+    let caps = dmabuf_caps_of(a);
+    let linear = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, linear), Ok(()));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgrx, modifier: 7 }), Ok(()));
+    // A compositor on another backend.
+    assert_eq!(check_dmabuf(false, true, Some(&caps), a, linear), Err(Fallback::UnsupportedBackend));
+    // A Vulkan device opened without the extensions, or one that reports nothing it can import.
+    assert_eq!(check_dmabuf(true, false, Some(&caps), a, linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf(true, true, None, a, linear), Err(Fallback::MissingExtension));
+    // A stream negotiated for another device.
+    assert_eq!(check_dmabuf(true, true, Some(&caps), AdapterId(12), linear), Err(Fallback::OtherAdapter));
+    // A modifier or a format the device cannot read, and the implicit modifier, which the import
+    // cannot take.
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgra, modifier: 7 }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Rgbx, modifier: MOD_LINEAR }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Rgba, modifier: MOD_LINEAR }), Err(Fallback::Modifier));
+    assert_eq!(check_dmabuf(true, true, Some(&caps), a, DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_INVALID }), Err(Fallback::Modifier));
+    // The backend comes first, then the extensions, then the device.
+    assert_eq!(check_dmabuf(false, false, None, AdapterId(12), linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_dmabuf(true, false, None, AdapterId(12), linear), Err(Fallback::MissingExtension));
+    assert_eq!(
+        check_dmabuf(true, true, Some(&caps), AdapterId(12), DmabufLayout { format: DmabufFormat::Rgba, modifier: 9 }),
+        Err(Fallback::OtherAdapter)
+    );
+}
+
+#[test]
+fn published_dmabuf_caps_drop_repeats_and_the_implicit_modifier_and_a_device_without_any_clears_them() {
+    let mut caps = dmabuf_caps_of(AdapterId(3));
+    caps.formats[0].1 = vec![7, MOD_INVALID, 7, MOD_LINEAR, 7];
+    caps.formats.push((DmabufFormat::Rgba, (0..1000).collect()));
+    publish_dmabuf_caps(Some(caps));
+    let published = dmabuf_caps().unwrap();
+    assert_eq!(published.modifiers(DmabufFormat::Bgrx), [7, MOD_LINEAR]);
+    assert_eq!(published.modifiers(DmabufFormat::Rgbx), [] as [u64; 0]);
+    assert_eq!(published.modifiers(DmabufFormat::Rgba).len(), 64, "a driver's list is capped");
+    publish_dmabuf_caps(Some(DmabufCaps { device: AdapterId(3), formats: vec![(DmabufFormat::Bgrx, vec![MOD_INVALID])] }));
+    assert!(dmabuf_caps().is_none(), "a device that imports nothing publishes nothing");
+    publish_dmabuf_caps(Some(dmabuf_caps_of(AdapterId(3))));
+    publish_dmabuf_caps(None);
+    assert!(dmabuf_caps().is_none());
+}
+
+#[test]
+fn a_device_uuid_names_one_device() {
+    let mut uuid = [0u8; 16];
+    let a = crate::dmabuf::adapter_from_uuid(uuid);
+    uuid[15] = 1;
+    let b = crate::dmabuf::adapter_from_uuid(uuid);
+    uuid[15] = 0;
+    uuid[7] = 2;
+    let c = crate::dmabuf::adapter_from_uuid(uuid);
+    assert!(a != b && b != c && a != c);
+    assert_eq!(crate::dmabuf::adapter_from_uuid(uuid), c);
+}
+
+#[test]
+fn kept_buffers_go_back_only_once_their_frames_are_read_and_a_buffer_past_the_limit_is_not_kept() {
+    let mut held = HoldQueue::new();
+    let mut back = Vec::new();
+    assert_eq!(held.keep('a', 1, 2), Ok(()));
+    assert_eq!(held.keep('b', 2, 2), Ok(()));
+    // A third buffer with a limit of two is not kept, and the two being read stay.
+    assert_eq!(held.keep('c', 3, 2), Err('c'));
+    assert_eq!(held.len(), 2);
+    held.release(0, |b| back.push(b));
+    assert!(back.is_empty(), "nothing has been read yet");
+    // The GPU has read frame 1, so its buffer goes back and the one of frame 2 stays.
+    held.release(1, |b| back.push(b));
+    assert_eq!((back.as_slice(), held.len()), (['a'].as_slice(), 1));
+    held.release(0, |b| back.push(b));
+    assert_eq!(held.len(), 1, "an older value gives nothing back");
+    // A limit of 0 keeps nothing, and no limit keeps more than MAX_HELD.
+    assert_eq!(held.keep('d', 4, 0), Err('d'));
+    assert_eq!(held.keep('e', 5, 100), Ok(()));
+    assert_eq!(held.keep('f', 6, 100), Ok(()));
+    assert_eq!(held.keep('g', 7, 100), Err('g'));
+    assert_eq!(held.len(), MAX_HELD);
+    // One value covers every earlier frame.
+    held.release(6, |b| back.push(b));
+    assert_eq!(back, ['a', 'b', 'e', 'f']);
+    // A buffer the stream removed is forgotten, not given back.
+    assert_eq!(held.keep('h', 8, 100), Ok(()));
+    assert!(held.forget(|&b| b == 'h'));
+    assert!(!held.forget(|&b| b == 'h'));
+    assert!(held.is_empty());
+    assert_eq!(held.keep('i', 9, 100), Ok(()));
+    held.release_all(|b| back.push(b));
+    assert!(held.is_empty());
+    assert_eq!(back, ['a', 'b', 'e', 'f', 'i']);
+}
+
+#[test]
+fn kept_buffers_whose_frames_were_dropped_undrawn_go_back_without_a_read() {
+    // A frame replaced before the compositor drew it, or dropped when the capture left the GPU, is
+    // never recorded as read, so its buffer goes back once every copy of it is gone.
+    let ring = SharedRing::detached(4, 4);
+    let frame = |ready| SharedFrame::watched(std::sync::Arc::clone(&ring), 0, ready).unwrap();
+    let (first, second, third) = (frame(1), frame(2), frame(3));
+    let copy = second.clone();
+    let mut held = HoldQueue::new();
+    for (name, f) in [('a', &first), ('b', &second), ('c', &third)] {
+        assert!(held.keep((name, f.watch().unwrap()), f.ready(), 100).is_ok());
+    }
+    let mut back = Vec::new();
+    let mut release = |held: &mut HoldQueue<(char, FrameWatch)>| held.release_unread(|(_, w)| w.dropped_undrawn(), |(b, _)| back.push(b));
+    release(&mut held);
+    assert_eq!(held.len(), 3, "every frame is still held");
+    // A buffer behind one whose frame is still held goes back too, but not while a copy is left.
+    drop(second);
+    release(&mut held);
+    assert_eq!(held.len(), 3, "a copy of the second frame is left");
+    drop(copy);
+    release(&mut held);
+    assert_eq!(held.len(), 2);
+    // A drawn frame waits for the compositor's read, even once it is gone.
+    third.mark_drawn();
+    drop(third);
+    drop(first);
+    release(&mut held);
+    assert_eq!(back, ['b', 'a']);
+    assert_eq!(held.len(), 1);
+    // A frame made without a watch has none.
+    assert!(SharedFrame::new(std::sync::Arc::clone(&ring), 0, 4).unwrap().watch().is_none());
+}
+
+#[cfg(target_os = "linux")]
+mod dmabuf {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::sync::Arc;
+
+    use super::*;
+
+    const LINEAR: DmabufLayout = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+
+    #[test]
+    fn every_frame_of_a_dmabuf_ring_is_readable_without_being_handed_out() {
+        // The capture side keeps each buffer itself and never takes one back, so the compositor
+        // reads any slot of the ring, beyond the shared textures' SLOTS too.
+        let ring = SharedRing::dmabuf(64, 1, LINEAR, AdapterId(1));
+        for (slot, ready) in [(0, 1), (SLOTS, 2), (MAX_BUFFERS - 1, 3)] {
+            assert!(frame(&ring, slot, ready).start_reading(), "slot {slot}");
+        }
+        // Shared textures are read only once the capture side has handed the frame out.
+        assert!(!frame(&SharedRing::detached(64, 1), 0, 1).start_reading());
+    }
+
+    #[test]
+    fn a_plane_holds_its_own_copy_of_the_descriptor() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let plane = DmabufPlane::duplicate(reader.as_raw_fd(), 64, 7680).unwrap();
+        assert_ne!(plane.fd.as_raw_fd(), reader.as_raw_fd());
+        assert_eq!((plane.offset(), plane.stride()), (64, 7680));
+        writer.write_all(&[1]).unwrap();
+        drop(reader);
+        drop(writer);
+        // The copy stays open after the stream's own descriptor is closed.
+        assert!(plane.ready(), "the copy still polls the pipe's byte");
+        assert!(DmabufPlane::duplicate(-1, 0, 4).is_err());
+        assert!(DmabufPlane::duplicate(i32::MAX, 0, 4).is_err(), "a number that is not open is refused");
+    }
+
+    #[test]
+    fn a_frame_whose_buffer_is_still_being_written_waits_and_the_compositor_goes_on() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap()));
+        let mut handoff = Handoff::default();
+        handoff.offer(frame(&ring, 0, 1));
+        // The pipe stands in for a buffer whose producer has not finished: every check returns at
+        // once and the frame stays.
+        for _ in 0..3 {
+            let done = handoff.pending().map_or(0, crate::dmabuf::completed);
+            assert!(handoff.take_ready(done).is_none());
+        }
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(1));
+        writer.write_all(&[1]).unwrap();
+        let done = handoff.pending().map_or(0, crate::dmabuf::completed);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(0));
+        // A slot without its plane is never ready.
+        assert_eq!(crate::dmabuf::completed(&frame(&ring, 1, 2)), 0);
+    }
+
+    #[test]
+    fn a_finished_dmabuf_frame_is_drawn_while_the_newer_buffer_is_still_being_written() {
+        let (done_reader, mut done_writer) = std::io::pipe().unwrap();
+        let (busy_reader, _busy_writer) = std::io::pipe().unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(done_reader.as_raw_fd(), 0, 16).unwrap()));
+        assert!(ring.set_plane(1, DmabufPlane::duplicate(busy_reader.as_raw_fd(), 0, 16).unwrap()));
+        done_writer.write_all(&[1]).unwrap();
+        let mut handoff = Handoff::default();
+        handoff.offer(frame(&ring, 0, 1));
+        handoff.offer(frame(&ring, 1, 2));
+        // Frame 2's buffer still has a write outstanding; frame 1's buffer is readable.
+        let done = handoff.reached(crate::dmabuf::completed);
+        assert_eq!(done, 1);
+        assert_eq!(handoff.take_ready(done).map(|f| f.slot()), Some(0));
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(2), "the newer frame keeps waiting");
+        assert_eq!(Handoff::default().reached(crate::dmabuf::completed), 0, "nothing waits");
+    }
+
+    #[test]
+    fn a_dmabuf_ring_has_a_slot_per_buffer_and_each_slot_gets_one_plane() {
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let plane = || DmabufPlane::duplicate(reader.as_raw_fd(), 0, 16).unwrap();
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert_eq!((ring.slots(), ring.dmabuf_layout(), ring.adapter(), ring.keeps_alpha()), (MAX_BUFFERS, Some(LINEAR), AdapterId(1), false));
+        assert!(SharedFrame::new(Arc::clone(&ring), MAX_BUFFERS - 1, 1).is_some());
+        assert!(SharedFrame::new(Arc::clone(&ring), MAX_BUFFERS, 1).is_none());
+        assert!(ring.set_plane(3, plane()));
+        assert!(!ring.set_plane(3, plane()), "a slot's plane is set once");
+        assert!(!ring.set_plane(MAX_BUFFERS, plane()));
+        assert!(ring.plane(3).is_some() && ring.plane(2).is_none());
+        let detached = SharedRing::detached(4, 2);
+        assert!(!detached.set_plane(0, plane()), "a ring of shared textures takes no planes");
+        assert_eq!((detached.slots(), detached.dmabuf_layout()), (SLOTS, None));
+    }
+
+    #[test]
+    fn a_stream_reuses_the_slot_of_a_buffer_it_has_seen_and_starts_a_new_ring_when_its_buffers_change() {
+        let pipes: Vec<_> = (0..MAX_BUFFERS + 1).map(|_| std::io::pipe().unwrap()).collect();
+        let fd = |i: usize| pipes[i].0.as_raw_fd();
+        let mut stream = DmabufStream::new();
+        assert!(matches!(stream.frame(fd(0), 0, 16), Ok(None)), "a stream in memory gives no frames");
+        assert!(!stream.active());
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(5))));
+        assert!(stream.active());
+        let a = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        let b = stream.frame(fd(1), 0, 16).unwrap().unwrap();
+        let a2 = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        assert_eq!((a.slot(), b.slot(), a2.slot()), (0, 1, 0));
+        assert_eq!((a.ready(), b.ready(), a2.ready()), (1, 2, 3));
+        assert!(Arc::ptr_eq(a.ring(), a2.ring()));
+        assert_eq!((a.width(), a.height(), a.ring().adapter()), (4, 2, AdapterId(5)));
+        // A buffer whose stride changed starts a new ring.
+        let c = stream.frame(fd(0), 0, 32).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(a.ring(), c.ring()));
+        assert_eq!((c.slot(), c.ring().plane(0).map(DmabufPlane::stride)), (0, Some(32)));
+        // Added or removed buffers start a new ring too.
+        stream.buffers_changed();
+        let d = stream.frame(fd(1), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(c.ring(), d.ring()));
+        // One buffer more than the ring holds starts a new ring.
+        let ring = Arc::clone(d.ring());
+        for i in 2..=MAX_BUFFERS {
+            let f = stream.frame(fd(i), 0, 16).unwrap().unwrap();
+            assert!(Arc::ptr_eq(&ring, f.ring()), "buffer {i} fits");
+        }
+        let e = stream.frame(fd(0), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(&ring, e.ring()));
+        assert_eq!(e.slot(), 0);
+        // The compositor's refusal is seen on the stream; a new format forgets the ring.
+        assert_eq!(stream.refused(), None);
+        e.ring().refuse(Fallback::Modifier);
+        assert_eq!(stream.refused(), Some(Fallback::Modifier));
+        stream.set_format(None);
+        assert_eq!(stream.refused(), None);
+        assert!(matches!(stream.frame(fd(0), 0, 16), Ok(None)));
+    }
+
+    #[test]
+    fn only_a_dmabuf_whose_rows_hold_the_picture_goes_to_the_driver() {
+        use crate::dmabuf_ffi::{is_dmabuf, plane_fits};
+        use std::os::fd::AsFd;
+        let (reader, _writer) = std::io::pipe().unwrap();
+        assert!(!is_dmabuf(reader.as_fd()), "a pipe is not a DMA-BUF");
+        assert!(plane_fits(1920, 1080, 0, 7680, true));
+        assert!(plane_fits(1920, 1080, 4096, 8192, true));
+        assert!(!plane_fits(1920, 1080, 0, 7676, true), "a linear row shorter than its pixels");
+        assert!(plane_fits(1920, 1080, 0, 7676, false), "a tiled layout's stride is the driver's");
+        assert!(!plane_fits(0, 1080, 0, 7680, true));
+        assert!(!plane_fits(1920, 0, 0, 7680, true));
+        assert!(!plane_fits(1920, 1080, 0, 0, false));
+        assert!(plane_fits(u32::MAX, u32::MAX, u32::MAX, u32::MAX, false), "the largest sizes do not overflow");
+        assert!(!plane_fits(u32::MAX, 1, 0, u32::MAX, true), "a row of u32::MAX pixels is longer than any stride");
+    }
+
+    #[test]
+    fn a_buffer_that_cannot_be_read_is_an_error_not_a_frame() {
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(5))));
+        assert_eq!(stream.frame(-1, 0, 16).err(), Some(Fallback::ImportFailed));
+        assert_eq!(stream.frame(i32::MAX, 0, 16).err(), Some(Fallback::ImportFailed), "a closed descriptor");
+        let (reader, _writer) = std::io::pipe().unwrap();
+        assert_eq!(stream.frame(reader.as_raw_fd(), 0, 0).err(), Some(Fallback::ImportFailed), "a stride of 0");
+        assert!(stream.frame(reader.as_raw_fd(), 0, 16).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_dmabuf_ring_records_the_newest_frame_the_compositor_has_read() {
+        let ring = SharedRing::dmabuf(4, 2, LINEAR, AdapterId(1));
+        assert_eq!(ring.dmabuf_released(), 0);
+        ring.release_dmabuf(3);
+        ring.release_dmabuf(2);
+        assert_eq!(ring.dmabuf_released(), 3, "a frame read late does not move the value back");
+        let textures = SharedRing::detached(4, 2);
+        textures.release_dmabuf(5);
+        assert_eq!(textures.dmabuf_released(), 0, "a ring of shared textures has no such value");
+        // All of a stream's rings record into one value, which the stream reads.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((4, 2, LINEAR, AdapterId(1))));
+        let first = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert_eq!(stream.released(), 0);
+        stream.buffers_changed();
+        let second = stream.frame(reader.as_raw_fd(), 0, 16).unwrap().unwrap();
+        assert!(!Arc::ptr_eq(first.ring(), second.ring()));
+        first.ring().release_dmabuf(first.ready());
+        assert_eq!(stream.released(), first.ready(), "a frame of an earlier ring is seen");
+        second.ring().release_dmabuf(second.ready());
+        assert_eq!((stream.released(), first.ring().dmabuf_released()), (second.ready(), second.ready()));
+        stream.set_format(None);
+        assert_eq!(stream.released(), second.ready(), "the value outlives the stream's format");
+    }
+}
+
 mod window {
     use std::collections::VecDeque;
 
@@ -437,6 +767,183 @@ fn an_export_needs_a_known_compositor_adapter_and_a_backend_that_shares_textures
 }
 
 #[test]
+fn a_dmabuf_export_needs_vulkan_the_extensions_timeline_semaphores_and_a_modifier() {
+    let a = AdapterId::from_parts(7, 0);
+    let with = Backend::Vulkan { external_memory: true, timeline: true };
+    let linear = [MOD_LINEAR];
+    assert_eq!(check_dmabuf_export(with, Some(a), &linear), Ok(a));
+    assert_eq!(check_dmabuf_export(Backend::Other, Some(a), &linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_dmabuf_export(Backend::Vulkan { external_memory: false, timeline: true }, Some(a), &linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf_export(Backend::Vulkan { external_memory: true, timeline: false }, Some(a), &linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf_export(with, None, &linear), Err(Fallback::OtherAdapter), "a driver that does not report its device");
+    assert_eq!(check_dmabuf_export(with, Some(a), &[]), Err(Fallback::Modifier), "no modifier the device can export the picture in");
+    assert_eq!(check_dmabuf_export(Backend::Other, Some(a), &[]), Err(Fallback::UnsupportedBackend), "the backend is checked first");
+    // A Windows export runs on Direct3D 12; DMA-BUFs are shared through Vulkan only.
+    assert_eq!(check_dmabuf_export(Backend::Dx12, Some(a), &linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_export(Backend::Dx12, Some(a)), Ok(a), "the Windows check is unchanged");
+}
+
+#[test]
+fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
+    // A 64 x 2 picture: two luma rows of 64 bytes, then one chroma row.
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(nv12_planes_fit(64, 2, 4096, [0, 2048], [256, 256], [512, 256], true), "padded rows");
+    assert!(!nv12_planes_fit(64, 2, 191, [0, 128], [64, 64], [128, 63], true), "the chroma row ends past the buffer");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [63, 64], [128, 64], true), "a linear row shorter than the picture");
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [32, 64], [128, 64], false), "a tiled layout's pitch is the driver's");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [0, 64], [128, 64], false), "a pitch of 0");
+    assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], [128, 64], true));
+    assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], [128, 64], true), "a chroma plane past the end");
+    let largest = u64::MAX - u64::from(u32::MAX);
+    assert!(
+        nv12_planes_fit(u32::MAX - 1, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], [largest; 2], true),
+        "the largest values do not overflow"
+    );
+    // Linear rows must lie inside their plane's reported bytes, not only inside the buffer.
+    assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [1, 1], true), "no reported plane holds a row");
+    assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 7], true), "the chroma plane holds 7 of its 8 bytes");
+    assert!(nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 8], true));
+    assert!(nv12_planes_fit(4, 2, 20, [0, 16], [8, 8], [12, 4], true), "a last row without padding after it");
+    assert!(nv12_planes_fit(3, 3, 22, [0, 12], [4, 4], [11, 8], true), "the last row needs only its pixels");
+    // A 3-pixel row has two chroma pairs: 4 bytes, past a 3-byte pitch.
+    assert!(!nv12_planes_fit(3, 2, 9, [0, 6], [3, 3], [6, 3], true), "an odd width needs a whole chroma pair");
+    assert!(nv12_planes_fit(3, 2, 10, [0, 6], [3, 4], [6, 4], true));
+    assert!(!nv12_planes_fit(u32::MAX, 2, u64::MAX, [0, 0], [u32::MAX; 2], [1, 1], true), "the chroma row of the widest odd picture");
+    assert!(nv12_planes_fit(4, 3, 64, [0, 32], [4, 4], [12, 8], true), "an odd height rounds the chroma rows up");
+    assert!(!nv12_planes_fit(4, 3, 39, [0, 32], [4, 4], [12, 7], true));
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [0, 64], true), "a plane of no bytes");
+}
+
+/// In a tiled layout the driver's plane sizes, not pitch x rows, are the planes' extent.
+#[test]
+fn a_tiled_nv12_picture_fits_by_the_plane_sizes_the_driver_reports() {
+    // A pitch of 4096 bytes times 2 rows ends past the 6144-byte buffer, but the driver reports a
+    // 4096-byte luma plane and a 2048-byte chroma plane, both inside it.
+    assert!(nv12_planes_fit(64, 2, 6144, [0, 4096], [4096, 4096], [4096, 2048], false), "pitch x rows is not a tiled plane's extent");
+    // Pitches that read as fitting, with reported planes that end past the buffer.
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [128, 4096], false), "the reported chroma plane ends past the buffer");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], [256, 64], false), "the reported luma plane ends past the buffer");
+}
+
+/// Tickets are signaled in the order they were handed out; one never submitted may be skipped,
+/// and an older one after a newer one is refused.
+#[test]
+fn export_tickets_are_signaled_in_the_order_they_were_handed_out() {
+    let mut signaled = 0;
+    assert!(crate::export::in_order(&mut signaled, 1));
+    assert!(crate::export::in_order(&mut signaled, 3), "ticket 2 was never submitted");
+    assert!(!crate::export::in_order(&mut signaled, 2), "ticket 3's signal went out first");
+    assert!(!crate::export::in_order(&mut signaled, 3), "a ticket handed in twice");
+    assert_eq!(signaled, 3);
+    assert!(crate::export::in_order(&mut signaled, 4));
+}
+
+#[test]
+fn a_linux_export_image_holds_whole_16_pixel_blocks() {
+    assert_eq!(ExportRing::padded_size(1920, 1080), Some((1920, 1088)));
+    assert_eq!(ExportRing::padded_size(1280, 720), Some((1280, 720)));
+    assert_eq!(ExportRing::padded_size(2, 2), Some((16, 16)));
+    assert_eq!(ExportRing::padded_size(u32::MAX - 1, 2), None, "no overflow");
+}
+
+#[test]
+fn a_device_number_is_the_one_the_c_library_makes() {
+    // /dev/dri/renderD128 is 226:128.
+    assert_eq!(crate::export::dev_number(226, 128), 0xe280);
+    assert_eq!(crate::export::dev_number(226, 0), 226 << 8);
+    assert_eq!(crate::export::dev_number(0x1000, 0), 0x1000 << 32, "the high bits of a major number");
+    assert_eq!(crate::export::dev_number(0, 0x100), 0x100 << 12, "the high bits of a minor number");
+    assert_eq!(crate::export::dev_number(u32::MAX, u32::MAX), u64::MAX, "every bit has its place");
+}
+
+struct Counter(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicBool);
+
+impl crate::export::ReadyCounter for Counter {
+    fn reached(&self) -> Option<u64> {
+        let readable = self.1.load(std::sync::atomic::Ordering::Acquire);
+        readable.then(|| self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+#[test]
+fn a_ring_reads_its_counter_while_it_exists_and_keeps_the_last_value() {
+    use std::sync::atomic::Ordering;
+    let ring = ExportRing::detached(64, 2);
+    let counter = std::sync::Arc::new(Counter(0.into(), true.into()));
+    let weak: std::sync::Weak<Counter> = std::sync::Arc::downgrade(&counter);
+    ring.count_ready_with(weak);
+    let late = exported(&ring, 0, 2);
+    assert!(!late.is_ready(), "the copy is still running");
+    counter.0.store(2, Ordering::Release);
+    assert!(late.is_ready(), "the encoder side reads the counter without the compositor");
+    // A counter that cannot be read now leaves the value it last gave.
+    counter.1.store(false, Ordering::Release);
+    assert_eq!(ring.ready(), 2);
+    counter.1.store(true, Ordering::Release);
+    counter.0.store(5, Ordering::Release);
+    assert_eq!(ring.ready(), 5);
+    ring.set_ready(4);
+    assert_eq!(ring.ready(), 5, "the value only grows");
+    // A second counter is ignored.
+    let other = std::sync::Arc::new(Counter(9.into(), true.into()));
+    let weak: std::sync::Weak<Counter> = std::sync::Arc::downgrade(&other);
+    ring.count_ready_with(weak);
+    assert_eq!(ring.ready(), 5);
+    drop(counter);
+    assert_eq!(ring.ready(), 5, "the value stays once the compositor side is gone");
+}
+
+/// A counter whose value grows on every read, like a semaphore the queue signals between reads.
+struct Advancing(std::sync::atomic::AtomicU64);
+
+impl crate::export::ReadyCounter for Advancing {
+    fn reached(&self) -> Option<u64> {
+        Some(self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1)
+    }
+}
+
+/// The value a caller compares is the value the ring keeps: a counter read again after the ring
+/// took its value would leave the ring behind once the counter is gone.
+#[test]
+fn a_ring_keeps_the_counter_value_its_caller_compares() {
+    let ring = ExportRing::detached(64, 2);
+    let counter = Advancing(0.into());
+    let read = ring.observe_counter(&counter);
+    assert_eq!(read, Some(ring.ready()), "the ring keeps the value that was compared");
+    assert_eq!(read, Some(1), "the counter was read once");
+    let unreadable = Counter(9.into(), false.into());
+    assert_eq!(ring.observe_counter(&unreadable), None);
+    assert_eq!(ring.ready(), 1, "an unreadable counter leaves the value");
+}
+
+/// Only the compositor's device moves a Linux ring with DMA-BUFs to a new ready value.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_linux_ring_with_buffers_ignores_set_ready() {
+    let ring = ExportRing::of_dmabufs(AdapterId::from_parts(7, 0), 64, 2, vec![], None);
+    ring.set_ready(1);
+    assert_eq!(ring.ready(), 0, "the copy of frame 1 may still run");
+    ring.observe_ready(1);
+    assert_eq!(ring.ready(), 1);
+}
+
+/// The last ready value is the one read from the device: an unread or short value records why
+/// the later frames never become ready.
+#[test]
+fn a_ring_settles_on_the_value_its_device_reached() {
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(Some(3), 3);
+    assert_eq!((ring.ready(), ring.fallback()), (3, None));
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(Some(2), 3);
+    assert_eq!((ring.ready(), ring.fallback()), (2, Some(Fallback::DeviceLost)));
+    let ring = ExportRing::detached(64, 2);
+    ring.settle_ready(None, 3);
+    assert_eq!((ring.ready(), ring.fallback()), (0, Some(Fallback::DeviceLost)));
+}
+
+#[test]
 fn an_export_ring_needs_even_sides() {
     let a = AdapterId::from_parts(7, 0);
     for (w, h) in [(0, 2), (2, 0), (3, 2), (2, 3), (u32::MAX, 2)] {
@@ -576,19 +1083,41 @@ fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
     assert!(!feed.stalled(), "one texture is still free");
 }
 
+/// How long a test waits for another thread before it reports that thread as stuck.
+const WAIT: Duration = Duration::from_secs(10);
+
 #[test]
 fn a_release_while_another_is_signaling_returns_at_once_and_its_value_is_signaled() {
-    let gate = export::ReleaseGate::default();
+    let gate = std::sync::Arc::new(export::ReleaseGate::default());
     let mut signaled = Vec::new();
+    let mut contender = None;
+    let mut returned = None;
     let held = gate.release(5, |value| {
         if signaled.is_empty() {
-            // A second thread releases while this call holds the gate; it must not wait for it.
-            let other = std::thread::scope(|s| s.spawn(|| gate.release(9, |_| panic!("only the caller that holds the gate signals"))).join());
-            assert!(matches!(other, Ok(true)), "the second release returns without signaling");
+            // A second thread releases while this call holds the gate; it must not wait for it. A
+            // release that waited would never return while the gate is held, so the holder stops
+            // waiting after `WAIT` and opens the gate, and the test fails instead of hanging.
+            let (done, answer) = std::sync::mpsc::channel();
+            let other = std::sync::Arc::clone(&gate);
+            let signaled_too = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = std::sync::Arc::clone(&signaled_too);
+            let thread = std::thread::spawn(move || {
+                let result = other.release(9, |_| {
+                    flag.store(true, std::sync::atomic::Ordering::Release);
+                    true
+                });
+                let _ = done.send(result);
+            });
+            returned = Some(answer.recv_timeout(WAIT).ok());
+            contender = Some((thread, signaled_too));
         }
         signaled.push(value);
         true
     });
+    let (thread, signaled_too) = contender.unwrap();
+    assert!(thread.join().is_ok());
+    assert_eq!(returned, Some(Some(true)), "the second release returns at once, without signaling");
+    assert!(!signaled_too.load(std::sync::atomic::Ordering::Acquire), "only the caller that holds the gate signals");
     assert!(held);
     assert_eq!(signaled, [5, 9], "the holder signals the value left while it was signaling");
     // A value not above the highest one signaled is not signaled again.
@@ -614,21 +1143,31 @@ fn a_removed_device_counts_no_frame_as_done_and_records_why() {
     let frame = exported(&ring, 0, 1);
     assert!(frame.ring().completed(export::REMOVED) < frame.ready());
     let mut slots = SlotTable::default();
-    let slot = slots.pick_released(0).unwrap();
-    slots.fill_released(slot, Instant::now()).unwrap();
-    assert_ne!(slots.pick_released(ring.completed(export::REMOVED)), Some(slot));
+    for _ in 0..SLOTS {
+        let slot = slots.pick_released(0).unwrap();
+        slots.fill_released(slot, Instant::now()).unwrap();
+    }
+    assert!(slots.pick_released(export::REMOVED).is_some(), "the raw value would free a texture");
+    assert_eq!(slots.pick_released(ring.completed(export::REMOVED)), None, "every texture holds a frame");
 }
 
 /// Once the queue has finished, a fence is raised only to the value its semaphore was read at:
-/// a short or unread value leaves the later frames not done and says the work did not finish.
+/// a short or unread value leaves the later frames not done and says the work did not finish. A
+/// fence that cannot be raised to a value the semaphore reached is recorded as a failed import.
 #[test]
 fn a_fence_is_raised_only_to_the_value_its_semaphore_reached() {
     let mut raised = Vec::new();
-    assert!(export::settle(Some(3), 3, |v| raised.push(v)));
-    assert!(export::settle(Some(4), 3, |v| raised.push(v)));
-    assert!(!export::settle(Some(2), 3, |v| raised.push(v)), "a device lost before the last signal");
-    assert!(!export::settle(None, 3, |v| raised.push(v)), "a value that could not be read");
+    let mut raise = |v| {
+        raised.push(v);
+        true
+    };
+    assert_eq!(export::settle(Some(3), 3, &mut raise), None);
+    assert_eq!(export::settle(Some(4), 3, &mut raise), None);
+    assert_eq!(export::settle(Some(2), 3, &mut raise), Some(Fallback::DeviceRemoved), "a device lost before the last signal");
+    assert_eq!(export::settle(None, 3, &mut raise), Some(Fallback::DeviceRemoved), "a value that could not be read");
     assert_eq!(raised, [3, 4, 2]);
+    assert_eq!(export::settle(Some(3), 3, |_| false), Some(Fallback::ImportFailed), "the fence could not be set");
+    assert_eq!(export::settle(Some(2), 3, |_| false), Some(Fallback::DeviceRemoved), "a short value stays a lost device");
 }
 
 #[test]
@@ -709,6 +1248,30 @@ fn a_stopped_encoders_textures_go_back_once_their_copies_finish() {
     assert!(slots.pick_released(ring.released()).is_some());
 }
 
+/// A session that starts while the compositor hands back a stopped encoder's frame still refuses
+/// that frame: the frame stays counted as handed back between the reads of the ring's counters.
+#[test]
+fn a_session_started_while_a_stopped_encoders_frame_is_reclaimed_refuses_that_frame() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    assert!(feed.offer(exported(&ring, 2, 3), 3).is_none());
+    // The encoder stops during the copy of frame 3, and the copy then finishes.
+    assert_eq!(feed.drain(), 1);
+    ring.set_ready(3);
+    assert_eq!(ring.released(), 0);
+    // The compositor reclaims frame 3 while the next session reads the ring.
+    let weak = std::sync::Arc::downgrade(&ring);
+    *ring.between_reads.lock().unwrap() = Some(Box::new(move || {
+        if let Some(ring) = weak.upgrade() {
+            ring.reclaim();
+        }
+    }));
+    let mut next = Feed::default();
+    assert_eq!(next.offer(exported(&ring, 2, 3), 3).map(|f| f.ready()), Some(3), "frame 3's texture went back");
+    assert_eq!(ring.released(), 3, "the reclaim ran during the reads");
+    assert!(next.offer(exported(&ring, 0, 4), 4).is_none(), "a newer frame is taken");
+}
+
 #[test]
 fn a_removed_device_on_the_compositors_side_counts_no_captured_frame_as_done() {
     let ring = SharedRing::detached(64, 2);
@@ -745,7 +1308,7 @@ fn the_export_copy_needs_a_luma_plane_of_the_rings_size_and_a_chroma_plane_of_ha
 #[test]
 fn a_vulkan_device_without_external_memory_or_timeline_semaphores_says_which_is_needed() {
     let message = Fallback::MissingExtension.to_string();
-    assert!(message.contains("shared Windows textures") && message.contains("timeline semaphores"), "{message}");
+    assert!(message.contains("shared textures") && message.contains("timeline semaphores"), "{message}");
 }
 
 #[test]
@@ -766,6 +1329,13 @@ fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
 #[cfg(feature = "wgpu")]
 mod gpu {
     use super::*;
+
+    /// The tests in this module run one at a time, so no two threads create instances and devices
+    /// at once.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -814,6 +1384,7 @@ mod gpu {
 
     #[test]
     fn the_opaque_copy_keeps_the_color_and_sets_alpha() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         let dst = texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
@@ -841,6 +1412,7 @@ mod gpu {
 
     #[test]
     fn a_window_picture_keeps_its_alpha_and_a_display_picture_does_not() {
+        let _gpu = serial();
         assert!(!SharedRing::detached(4, 2).keeps_alpha(), "a display's ring is drawn opaque");
         let Some((device, queue)) = device() else { return };
         let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
@@ -882,6 +1454,7 @@ mod gpu {
 
     #[test]
     fn a_ring_the_device_cannot_open_records_why_and_drops_the_frame() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let ring = SharedRing::detached(64, 1);
         let format = wgpu::TextureFormat::Bgra8Unorm;
@@ -907,6 +1480,7 @@ mod gpu {
 
     #[test]
     fn the_copy_that_readies_the_planes_uses_their_own_formats() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let plane = |format, w, h| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -943,6 +1517,110 @@ mod gpu {
         assert_eq!(crate::export::scratch_for(&device, &unorm, Some(scratch)), kept, "the same formats keep the textures");
     }
 
+    /// A device on wgpu's `backends`, opened with those of `features` the adapter has.
+    #[cfg(target_os = "linux")]
+    fn device_on(backends: wgpu::Backends, features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = backends;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no adapter on {backends:?}: this test is skipped");
+            return None;
+        };
+        let desc = wgpu::DeviceDescriptor { required_features: features & adapter.features(), ..Default::default() };
+        pollster::block_on(adapter.request_device(&desc)).ok()
+    }
+
+    /// A DMA-BUF ring whose slot 0 holds a pipe in place of a buffer, readable so that a frame in
+    /// it is ready and the import is tried.
+    #[cfg(target_os = "linux")]
+    fn pipe_ring(layout: DmabufLayout, device: AdapterId) -> (std::sync::Arc<SharedRing>, std::io::PipeReader) {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(&[1]).unwrap();
+        let ring = SharedRing::dmabuf(64, 1, layout, device);
+        assert!(ring.set_plane(0, DmabufPlane::duplicate(reader.as_raw_fd(), 0, 256).unwrap()));
+        (ring, reader)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dmabuf_ring_on_a_compositor_not_on_vulkan_falls_back_for_the_backend() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, AdapterId(1));
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| None), Err(Fallback::UnsupportedBackend));
+        assert_eq!(ring.fallback(), Some(Fallback::UnsupportedBackend));
+        assert_eq!(crate::dmabuf_ffi::caps(&device).err(), Some(Fallback::UnsupportedBackend));
+    }
+
+    /// A frame is recorded as read only once the GPU has finished the work submitted before it, it
+    /// is marked as drawn at once, and a ring of shared textures records nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dmabuf_frame_is_recorded_as_read_once_the_submitted_work_has_finished() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, AdapterId(1));
+        queue.submit([device.create_command_encoder(&Default::default()).finish()]);
+        let drawn = SharedFrame::watched(std::sync::Arc::clone(&ring), 0, 4).unwrap();
+        let mut watch = drawn.watch().unwrap();
+        crate::import::release_dmabuf_after_submitted(&queue, &drawn);
+        drop(drawn);
+        assert!(!watch.dropped_undrawn(), "a drawn frame waits for its read");
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(ring.dmabuf_released(), 4);
+        let textures = SharedRing::detached(64, 1);
+        crate::import::release_dmabuf_after_submitted(&queue, &SharedFrame::new(std::sync::Arc::clone(&textures), 0, 5).unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(textures.dmabuf_released(), 0);
+    }
+
+    /// On a Vulkan device: without the DMA-BUF feature the reason is the extension; with it, a ring
+    /// of another device, a modifier the device cannot read, and a descriptor that is not a DMA-BUF
+    /// each give their own reason.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_vulkan_compositor_imports_only_buffers_it_can_read() {
+        let _gpu = serial();
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let linear = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR };
+        let Some((plain, plain_queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::empty()) else { return };
+        assert_eq!(crate::dmabuf_ffi::caps(&plain).err(), Some(Fallback::MissingExtension));
+        let (ring, _pipe) = pipe_ring(linear, AdapterId(1));
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&plain, &plain_queue, format, |_, _| None), Err(Fallback::MissingExtension));
+
+        let Some((device, queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else { return };
+        let Ok(caps) = crate::dmabuf_ffi::caps(&device) else {
+            eprintln!("the Vulkan driver cannot import DMA-BUFs: the rest of this test is skipped");
+            return;
+        };
+        let other = AdapterId(caps.device.0 ^ 1);
+        let (ring, _pipe) = pipe_ring(linear, other);
+        let mut importer = Importer::new();
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::OtherAdapter));
+        let unknown = DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_INVALID };
+        let (ring, _pipe) = pipe_ring(unknown, caps.device);
+        importer.offer(frame(&ring, 0, 1));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::Modifier));
+        let Some(&modifier) = caps.modifiers(DmabufFormat::Bgrx).first() else {
+            eprintln!("the Vulkan driver lists no modifier for BGRx: the rest of this test is skipped");
+            return;
+        };
+        let (ring, _pipe) = pipe_ring(DmabufLayout { format: DmabufFormat::Bgrx, modifier }, caps.device);
+        importer.offer(frame(&ring, 0, 1));
+        // The pipe is not a DMA-BUF, so it never reaches the driver.
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| None), Err(Fallback::ImportFailed));
+        assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
+    }
+
     #[test]
     fn the_export_copy_needs_8_bit_one_and_two_channel_plane_formats() {
         use crate::export::plane_formats_fit;
@@ -961,6 +1639,7 @@ mod gpu {
     #[test]
     fn a_value_kept_until_done_outlives_the_submitted_work() {
         use std::sync::Arc;
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let value = Arc::new(());
         let src = texture(&device, 64, 1, wgpu::TextureUsages::COPY_SRC);
@@ -977,6 +1656,7 @@ mod gpu {
     #[test]
     fn copies_from_the_same_planes_share_one_entry_that_keeps_them() {
         use std::sync::Arc;
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let planes = [texture(&device, 64, 2, wgpu::TextureUsages::COPY_SRC), texture(&device, 32, 1, wgpu::TextureUsages::COPY_SRC)];
         let mut kept = None;
@@ -991,13 +1671,158 @@ mod gpu {
         assert!(kept.as_ref().is_some_and(|k| Arc::ptr_eq(k, &third)));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     #[test]
     fn elsewhere_than_windows_an_export_reports_the_fallback() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         assert_eq!(device_backend(&device), (Backend::Other, None));
         assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::Unsupported));
         assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
+    }
+
+    /// A compositor that runs on neither Direct3D 12 nor Vulkan exports nothing, for the backend;
+    /// odd sides are refused first.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_compositor_not_on_vulkan_exports_nothing() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        assert_eq!(device_backend(&device), (Backend::Other, None));
+        assert!(crate::dmabuf_ffi::export_backend(&device).is_none());
+        assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::UnsupportedBackend));
+        assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
+    }
+
+    /// A Vulkan device opened without the DMA-BUF feature still has the extensions when the adapter
+    /// has them, since wgpu enables them anyway; one without them gives the extension as the reason.
+    /// With the feature, the ring opens with three DMA-BUFs whose planes hold the picture, a copy goes into a free
+    /// image and its frame becomes ready once the queue has finished, without the compositor
+    /// polling; or the reason the driver cannot export comes back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_vulkan_compositor_exports_dmabufs_or_says_why_not() {
+        let _gpu = serial();
+        let Some((plain, plain_queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::empty()) else { return };
+        if let (Backend::Vulkan { external_memory: false, .. }, _) = device_backend(&plain) {
+            assert_eq!(Exporter::open(&plain, &plain_queue, 64, 2).err(), Some(Fallback::MissingExtension));
+        }
+        let Some((device, queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else { return };
+        let (backend, adapter) = device_backend(&device);
+        let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
+            Ok(e) => e,
+            Err(reason) => {
+                let expected = check_export(backend, adapter).err().unwrap_or(Fallback::Modifier);
+                assert!(reason == expected || reason == Fallback::ImportFailed, "{reason:?} for {backend:?}");
+                eprintln!("the Vulkan driver cannot export NV12 DMA-BUFs ({reason}): the rest of this test is skipped");
+                return;
+            }
+        };
+        let ring = std::sync::Arc::clone(exporter.ring());
+        for slot in 0..SLOTS {
+            let buffer = ring.buffer(slot).expect("a buffer in every slot");
+            // The images hold whole 16 x 16 blocks.
+            assert_eq!(buffer.image_size(), (64, 16));
+            let linear = buffer.modifier() == MOD_LINEAR;
+            assert!(nv12_planes_fit(64, 16, buffer.size(), buffer.offsets(), buffer.pitches(), buffer.plane_sizes(), linear));
+            assert!(crate::dmabuf_ffi::is_dmabuf(buffer.fd()));
+        }
+        assert!(ring.buffer(SLOTS).is_none());
+        let plane = |format, w, h| texture_of(&device, format, w, h);
+        let planes = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let mut encoder = device.create_command_encoder(&Default::default());
+        exporter.prepare(&device, &mut encoder, &planes);
+        let (commands, ticket) = exporter.copy(&device, &planes, Instant::now()).unwrap().unwrap();
+        queue.submit([encoder.finish(), commands]);
+        let frame = exporter.submitted(ticket).unwrap();
+        assert_eq!((frame.width(), frame.height(), frame.ready()), (64, 2, 1));
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert!(frame.is_ready(), "the encoder side reads the semaphore itself");
+        // The encoder refused the session: later frames come back with its reason.
+        ring.refuse(Fallback::NoEncoder);
+        assert_eq!(exporter.copy(&device, &planes, Instant::now()).err(), Some(Fallback::NoEncoder));
+        // The ring outlives the export and keeps the last value.
+        drop(exporter);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(ring.ready(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn texture_of(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    /// Each padded texel of a plane is written once, from the nearest texel of the picture's edge,
+    /// and nothing is read outside the picture.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_padding_of_a_linux_export_image_repeats_the_pictures_edge() {
+        use ash::vk;
+        for (src, dst) in
+            [((1920u32, 1080u32), (1920u32, 1088u32)), ((960, 540), (960, 544)), ((2, 2), (16, 16)), ((30, 8), (32, 16)), ((64, 16), (64, 16))]
+        {
+            let regions = crate::dmabuf_ffi::padding_regions(src, dst, vk::ImageAspectFlags::PLANE_1);
+            let mut written = std::collections::HashMap::new();
+            for r in &regions {
+                assert_eq!(r.dst_subresource.aspect_mask, vk::ImageAspectFlags::PLANE_1);
+                assert_eq!(r.src_subresource.aspect_mask, vk::ImageAspectFlags::COLOR);
+                for dy in 0..r.extent.height {
+                    for dx in 0..r.extent.width {
+                        let (sx, sy) = (r.src_offset.x as u32 + dx, r.src_offset.y as u32 + dy);
+                        let (x, y) = (r.dst_offset.x as u32 + dx, r.dst_offset.y as u32 + dy);
+                        assert!(sx < src.0 && sy < src.1, "{src:?}: a read outside the picture");
+                        assert!(x < dst.0 && y < dst.1, "{dst:?}: a write outside the plane");
+                        assert!(x >= src.0 || y >= src.1, "{src:?}: a write into the picture");
+                        assert_eq!((sx, sy), (x.min(src.0 - 1), y.min(src.1 - 1)), "the nearest edge texel");
+                        assert!(written.insert((x, y), ()).is_none(), "a texel written twice");
+                    }
+                }
+            }
+            assert_eq!(written.len() as u32, dst.0 * dst.1 - src.0 * src.1, "{src:?} in {dst:?}");
+        }
+        assert!(crate::dmabuf_ffi::padding_regions((0, 0), (16, 16), vk::ImageAspectFlags::PLANE_0).is_empty());
+    }
+
+    /// The raw copy into an export texture, on every backend, reads planes of one byte per texel
+    /// for luma and two for chroma: the converter's R8 and RG8 formats. A four-byte texture of the
+    /// right size is refused.
+    #[test]
+    fn an_export_copy_reads_only_planes_of_the_nv12_texel_sizes() {
+        use crate::export::{copy_planes_fit, plane_formats_fit};
+        use wgpu::TextureFormat as F;
+        assert!(!plane_formats_fit(F::R8Unorm, F::Rgba8Unorm), "a four-byte chroma texture");
+        assert!(!plane_formats_fit(F::Stencil8, F::Rg8Unorm), "a stencil texture");
+        // `Exporter::copy` checks the formats as well as the sizes before it records any command.
+        assert!(copy_planes_fit(64, 2, ((64, 2), F::R8Uint), ((32, 1), F::Rg8Uint)));
+        assert!(!copy_planes_fit(64, 2, ((64, 2), F::Rgba8Unorm), ((32, 1), F::Rg8Uint)), "a four-byte luma texture of the ring's size");
+        assert!(!copy_planes_fit(64, 2, ((64, 2), F::R8Uint), ((32, 1), F::Rgba8Unorm)), "a four-byte chroma texture of half the size");
+        assert!(!copy_planes_fit(64, 2, ((128, 2), F::R8Uint), ((32, 1), F::Rg8Uint)), "a luma plane wider than the ring");
+    }
+
+    /// The Linux export image is one non-disjoint NV12 image too, so its barriers name the color
+    /// aspect and cover both planes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_export_ownership_barriers_name_the_color_aspect_of_the_whole_image() {
+        use ash::vk;
+        let [acquire, hand_back] = crate::dmabuf_ffi::export_barriers(vk::Image::null(), 3);
+        for barrier in [acquire, hand_back] {
+            assert_eq!(barrier.subresource_range.aspect_mask, vk::ImageAspectFlags::COLOR);
+            assert_eq!((barrier.subresource_range.level_count, barrier.subresource_range.layer_count), (1, 1));
+        }
+        assert_eq!((acquire.src_queue_family_index, acquire.dst_queue_family_index), (vk::QUEUE_FAMILY_EXTERNAL, 3));
+        assert_eq!((acquire.old_layout, acquire.new_layout), (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL));
+        assert_eq!((hand_back.src_queue_family_index, hand_back.dst_queue_family_index), (3, vk::QUEUE_FAMILY_EXTERNAL));
+        assert_eq!((hand_back.old_layout, hand_back.new_layout), (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::GENERAL));
     }
 
     /// On a Windows device that can share textures, the export ring opens and a frame's planes are
@@ -1005,6 +1830,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_windows_compositor_exports_its_frames_or_says_why_not() {
+        let _gpu = serial();
         let Some((device, queue)) = device() else { return };
         let (backend, adapter) = device_backend(&device);
         let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
@@ -1060,6 +1886,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_vulkan_compositor_opens_rings_of_its_own_adapter() {
+        let _gpu = serial();
         let Some((device, queue)) = vulkan(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32) else { return };
         let (Some(own), timeline) = crate::vulkan_ffi::adapter(&device).expect("a Vulkan device") else {
             eprintln!("the Vulkan driver does not report its adapter: this test is skipped");
@@ -1104,6 +1931,7 @@ mod gpu {
     #[cfg(windows)]
     #[test]
     fn a_direct3d_12_device_is_not_opened_as_vulkan() {
+        let _gpu = serial();
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = wgpu::Backends::DX12;
         let instance = wgpu::Instance::new(desc);

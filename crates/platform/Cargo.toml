@@ -40,9 +40,12 @@ nokhwa-bindings-macos.workspace = true
 # PipeWire's registry, metadata and streams; serde_json reads the default-device metadata. Displays
 # and windows come from the screen-cast portal (ashpd, run by pollster on the capture thread) as
 # PipeWire streams, handed to the source thread through crossbeam queues. Cameras go through V4L2.
-# The display list comes from Wayland's outputs (wayland-client) or RandR under X11 (x11rb).
+# The display list comes from Wayland's outputs (wayland-client) or RandR under X11 (x11rb). A
+# display stream's DMA-BUF buffers are kept from the producer while the compositor reads them
+# (craft-gpu-interop's `pipewire` feature).
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
+craft-gpu-interop = { workspace = true, features = ["pipewire"] }
 serde_json.workspace = true
 ashpd.workspace = true
 futures-channel.workspace = true

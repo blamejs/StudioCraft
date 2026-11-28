@@ -9,8 +9,16 @@
 //! The other direction hands an NV12 program frame (an R8 luma and an RG8 chroma plane) to an
 //! encoder: read back into a mapped buffer, as the compositor does without an export ring, and
 //! copied into an export ring's texture, which runs only where [`Exporter::open`] succeeds
-//! (Windows on Direct3D 12, or Vulkan with the shared-memory extension). A copy, submission or
-//! release that fails during the export case stops the run.
+//! (Windows on Direct3D 12, or Vulkan with the shared-memory extension; Linux on Vulkan with the
+//! DMA-BUF and DRM format modifier extensions, where the ring's images are DMA-BUFs a VA-API
+//! encoder imports). Comparing `NV12 read-back` with `NV12 export ring copy` at a size gives what
+//! the GPU path saves per frame before the encoder. A copy, submission or release that fails during
+//! the export case stops the run.
+//!
+//! On Linux the display sizes also run `DMA-BUF import`: a linear BGRX DMA-BUF made over ordinary
+//! memory through `/dev/udmabuf`, handed to the importer as a screen-cast buffer and drawn into the
+//! source texture, on a Vulkan device with the DMA-BUF extensions. It does not run, and says why,
+//! where the device cannot import a linear buffer or `/dev/udmabuf` cannot be opened.
 
 #![allow(clippy::panic)]
 
@@ -23,19 +31,26 @@ const BACKENDS: [(&str, wgpu::Backends); 2] = [(" dx12", wgpu::Backends::DX12), 
 #[cfg(not(windows))]
 const BACKENDS: [(&str, wgpu::Backends); 1] = [("", wgpu::Backends::PRIMARY)];
 
+/// The features an export ring needs on the measured device, where the adapter has them.
+#[cfg(target_os = "linux")]
+const EXPORT_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+/// Elsewhere the Vulkan export opens its ring only on a device with the shared-memory feature.
+#[cfg(not(target_os = "linux"))]
+const EXPORT_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
+
 fn device(backends: wgpu::Backends) -> Option<(wgpu::Device, wgpu::Queue)> {
+    device_with(backends, EXPORT_FEATURES)
+}
+
+/// A device on `backends` with those of `features` its adapter has.
+fn device_with(backends: wgpu::Backends, features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = backends;
     let instance = wgpu::Instance::new(desc);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let info = adapter.get_info();
     eprintln!("adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
-    // The Vulkan export opens its ring only on a device with the shared-memory feature.
-    let desc = wgpu::DeviceDescriptor {
-        required_features: adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
-        required_limits: adapter.limits(),
-        ..Default::default()
-    };
+    let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & features, required_limits: adapter.limits(), ..Default::default() };
     pollster::block_on(adapter.request_device(&desc)).ok()
 }
 
@@ -58,6 +73,47 @@ fn bench(c: &mut Criterion) {
             Some((device, queue)) => bench_on(c, &device, &queue, suffix),
             None => eprintln!("no graphics adapter on {backends:?}: nothing to measure there"),
         }
+    }
+    #[cfg(target_os = "linux")]
+    bench_dmabuf(c);
+}
+
+/// A linear BGRX DMA-BUF of each display size into a source texture, as a Linux display capture's
+/// buffers are drawn.
+#[cfg(target_os = "linux")]
+fn bench_dmabuf(c: &mut Criterion) {
+    use craft_gpu_interop::{DmabufFormat, DmabufLayout, DmabufStream, Importer, MOD_LINEAR};
+    use std::os::fd::AsRawFd;
+    let Some((device, queue)) = device_with(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else {
+        return eprintln!("no Vulkan adapter: no DMA-BUF import to measure");
+    };
+    craft_gpu_interop::publish_import_caps(&device);
+    let Some(caps) = craft_gpu_interop::dmabuf_caps().filter(|caps| caps.supports(DmabufFormat::Bgrx, MOD_LINEAR)) else {
+        return eprintln!("the Vulkan device cannot import a linear BGRX DMA-BUF: no DMA-BUF import to measure");
+    };
+    for (size, w, h) in [("1080p", 1920u32, 1080u32), ("4k", 3840, 2160)] {
+        let stride = w * 4;
+        // A whole number of 4 KiB pages.
+        let len = (u64::from(stride) * u64::from(h)).div_ceil(4096) * 4096;
+        let buffer = match craft_gpu_interop::dmabuf_in_memory(len) {
+            Ok(fd) => fd,
+            Err(e) => return eprintln!("no DMA-BUF in memory for {size} ({e}): no DMA-BUF import to measure"),
+        };
+        let mut stream = DmabufStream::new();
+        stream.set_format(Some((w, h, DmabufLayout { format: DmabufFormat::Bgrx, modifier: MOD_LINEAR }, caps.device)));
+        let dst =
+            texture(&device, w, h, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let target = dst.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut importer = Importer::new();
+        c.bench_function(&format!("DMA-BUF import {size}"), |b| {
+            b.iter(|| {
+                let Ok(Some(frame)) = stream.frame(buffer.as_raw_fd(), 0, stride) else { return };
+                importer.offer(frame);
+                let drawn = importer.draw(&device, &queue, wgpu::TextureFormat::Bgra8Unorm, |_, _| Some(target.clone()));
+                std::hint::black_box(drawn.ok());
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            })
+        });
     }
 }
 

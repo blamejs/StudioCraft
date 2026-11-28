@@ -7,7 +7,8 @@
 //! skipped and counted, so a slow read-back never stalls compositing.
 //!
 //! A hardware encoder on the compositor's adapter can take the frames on the GPU instead: the
-//! planes are copied into an export ring's NV12 textures (`craft-gpu-interop`), and the one
+//! planes are copied into an export ring's NV12 textures (`craft-gpu-interop`; on Linux, Vulkan
+//! images whose memory is exported as DMA-BUFs for a VA-API encoder), and the one
 //! encoder queue of [`Nv12::set_export`] gets a [`GpuFrame`]. The read-back then runs only for the queues of the
 //! [`EncodeTarget`]. When the ring cannot be opened, or a copy or the encoder fails, the reason is
 //! kept, the export stops, and the read-back runs again.
@@ -38,6 +39,23 @@ pub struct EncodeTarget {
 pub struct GpuFrame {
     pub frame: ExportFrame,
     pub pts: Tick,
+}
+
+/// The queue of one encoder session on the GPU, and the output size that session was opened for:
+/// the size of the [`EncodeTarget`] published before it.
+#[derive(Clone)]
+pub struct GpuSink {
+    pub width: u32,
+    pub height: u32,
+    pub queue: Arc<Fifo<GpuFrame>>,
+}
+
+impl GpuSink {
+    /// Whether the session reads frames of `size`, the converter's output size (`None` while no
+    /// frames are converted).
+    pub fn fits(&self, size: Option<(u32, u32)>) -> bool {
+        size == Some((self.width, self.height))
+    }
 }
 
 /// The export of the frames to the GPU queues, while it runs.
@@ -234,18 +252,21 @@ impl Nv12 {
     }
 
     /// Hand the frame whose copy was submitted to the GPU queues; the ring's ready fence is set
-    /// after the copy. A failure stops the export.
-    pub(crate) fn exported(&mut self) {
+    /// after the copy. `accepted` is whether wgpu took the submission: a submission it rejected
+    /// reported an error, and its copy never runs. A rejected submission or another failure stops
+    /// the export.
+    pub(crate) fn exported(&mut self, accepted: bool) {
         let Some(export) = &mut self.export else { return };
         let Some((ticket, pts)) = export.ticket.take() else { return };
-        if export.commands.take().is_some() {
+        match handoff(export.commands.take().is_none(), accepted) {
             // The copy was never submitted: its texture is free again once the encoder releases a
             // later frame, since the released fence only grows.
-            return;
-        }
-        match export.exporter.submitted(ticket) {
-            Ok(frame) => export.sink.push(GpuFrame { frame, pts }),
-            Err(reason) => self.stop_export(reason),
+            Handoff::Skip => {}
+            Handoff::Stop(reason) => self.stop_export(reason),
+            Handoff::Submitted => match export.exporter.submitted(ticket) {
+                Ok(frame) => export.sink.push(GpuFrame { frame, pts }),
+                Err(reason) => self.stop_export(reason),
+            },
         }
     }
 
@@ -345,9 +366,41 @@ impl Nv12 {
     }
 }
 
+/// What happens to the frame of an export copy once the frame's commands went to the queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Handoff {
+    /// The copy was not submitted; the frame is left out.
+    Skip,
+    /// The frame goes to the encoder.
+    Submitted,
+    /// wgpu rejected the submission and the copy never runs. Its texture stays taken, so the
+    /// export stops and the frames go through memory.
+    Stop(Fallback),
+}
+
+/// The [`Handoff`] of an export copy whose command buffer was `submitted` in a submission wgpu
+/// `accepted`.
+fn handoff(submitted: bool, accepted: bool) -> Handoff {
+    match (submitted, accepted) {
+        (false, _) => Handoff::Skip,
+        (true, true) => Handoff::Submitted,
+        (true, false) => Handoff::Stop(Fallback::DeviceLost),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy whose submission wgpu rejected stops the export, so the ring's textures do not all
+    /// end up taken by copies that never ran.
+    #[test]
+    fn a_rejected_export_submission_stops_the_export() {
+        assert_eq!(handoff(true, true), Handoff::Submitted);
+        assert_eq!(handoff(true, false), Handoff::Stop(Fallback::DeviceLost));
+        assert_eq!(handoff(false, true), Handoff::Skip, "a copy that was never submitted");
+        assert_eq!(handoff(false, false), Handoff::Skip);
+    }
 
     #[test]
     fn shared_handles_are_reused_once_the_sinks_let_go() {
@@ -423,8 +476,11 @@ mod tests {
                 assert_eq!(n.fallback, None);
             }
             Err(reason) => {
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "linux")))]
                 assert_eq!(reason, Fallback::Unsupported);
+                // On Linux a device that cannot export DMA-BUFs gives its own reason.
+                #[cfg(target_os = "linux")]
+                assert_ne!(reason, Fallback::Unsupported);
                 assert_eq!(n.fallback, Some(reason));
                 assert!(!n.exporting());
                 assert!(n.reads_back(), "the read-back carries the frames instead");

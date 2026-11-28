@@ -2,7 +2,7 @@
 //! do without waiting on each other.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::fallback::Fallback;
@@ -74,6 +74,9 @@ pub struct SharedRing {
     #[cfg(windows)]
     #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
     pub(crate) handles: crate::dxgi_ffi::Handles,
+    /// The buffers of a Linux screen-cast stream, for a ring made with [`SharedRing::dmabuf`].
+    #[cfg(target_os = "linux")]
+    pub(crate) dmabuf: Option<Box<crate::dmabuf::DmabufSlots>>,
 }
 
 impl std::fmt::Debug for SharedRing {
@@ -104,6 +107,87 @@ impl SharedRing {
         }
     }
 
+    /// A ring for the buffers of a Linux screen-cast stream: `width` x `height` pictures in
+    /// `layout`, negotiated for the compositor device `device`. Its [`MAX_BUFFERS`] slots are
+    /// filled with [`SharedRing::set_plane`] as the stream hands its buffers over. The pictures are
+    /// drawn opaque.
+    ///
+    /// [`MAX_BUFFERS`]: crate::MAX_BUFFERS
+    #[cfg(target_os = "linux")]
+    pub fn dmabuf(width: u32, height: u32, layout: crate::DmabufLayout, device: AdapterId) -> Arc<SharedRing> {
+        SharedRing::dmabuf_released_with(width, height, layout, device, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// A ring like [`SharedRing::dmabuf`] whose read frames are recorded in `released`, the value
+    /// all rings of one stream share.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn dmabuf_released_with(
+        width: u32,
+        height: u32,
+        layout: crate::DmabufLayout,
+        device: AdapterId,
+        released: Arc<AtomicU64>,
+    ) -> Arc<SharedRing> {
+        Arc::new(SharedRing {
+            id: NEXT_RING.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            adapter: device,
+            alpha: false,
+            fallback: AtomicU8::new(0),
+            claims: Default::default(),
+            dmabuf: Some(Box::new(crate::dmabuf::DmabufSlots::new(layout, device, released))),
+        })
+    }
+
+    /// Put the plane of the buffer in `slot`. Returns `false`, and drops the plane, for a ring that
+    /// does not hold DMA-BUFs, a slot outside the ring, or a slot that already has its plane.
+    #[cfg(target_os = "linux")]
+    pub fn set_plane(&self, slot: usize, plane: crate::DmabufPlane) -> bool {
+        self.dmabuf.as_ref().and_then(|d| d.planes.get(slot)).is_some_and(|p| p.set(plane).is_ok())
+    }
+
+    /// The plane of the buffer in `slot`, once it has been put there.
+    #[cfg(target_os = "linux")]
+    pub fn plane(&self, slot: usize) -> Option<&crate::DmabufPlane> {
+        self.dmabuf.as_ref()?.planes.get(slot)?.get()
+    }
+
+    /// Record that the compositor has finished reading the frame `ready` of a ring of DMA-BUFs and
+    /// every frame before it, so the capture side gives their buffers back to the producer. A lower
+    /// value than one recorded before changes nothing.
+    #[cfg(target_os = "linux")]
+    pub fn release_dmabuf(&self, ready: u64) {
+        if let Some(d) = &self.dmabuf {
+            d.released.fetch_max(ready, Ordering::AcqRel);
+        }
+    }
+
+    /// The highest ready value [`SharedRing::release_dmabuf`] has recorded; 0 for a ring of shared
+    /// textures.
+    #[cfg(target_os = "linux")]
+    pub fn dmabuf_released(&self) -> u64 {
+        self.dmabuf.as_ref().map_or(0, |d| d.released.load(Ordering::Acquire))
+    }
+
+    /// The layout of the ring's buffers, for a ring of DMA-BUFs.
+    pub fn dmabuf_layout(&self) -> Option<crate::DmabufLayout> {
+        #[cfg(target_os = "linux")]
+        {
+            self.dmabuf.as_ref().map(|d| d.layout)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }
+
+    /// How many slots the ring has: [`SLOTS`], or [`MAX_BUFFERS`](crate::MAX_BUFFERS) for a ring of
+    /// DMA-BUFs.
+    pub fn slots(&self) -> usize {
+        if self.dmabuf_layout().is_some() { crate::MAX_BUFFERS } else { SLOTS }
+    }
+
     /// A ring without textures, which no device can import: its frames go through the fallback.
     /// For tests and tools that exercise the path without a capture.
     pub fn detached(width: u32, height: u32) -> Arc<SharedRing> {
@@ -117,6 +201,8 @@ impl SharedRing {
             claims: Default::default(),
             #[cfg(windows)]
             handles: crate::dxgi_ffi::Handles::none(),
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
         })
     }
 
@@ -185,8 +271,13 @@ impl SharedRing {
     }
 
     /// Mark the frame with value `ready` in texture `slot` as read by the compositor. False when
-    /// the capture side took the texture back first, or the texture holds another frame.
+    /// the capture side took the texture back first, or the texture holds another frame. A ring of
+    /// DMA-BUFs is never taken back: the capture side keeps each buffer until its frame is read or
+    /// dropped, so its frames are always readable.
     fn start_reading(&self, slot: usize, ready: u64) -> bool {
+        if self.dmabuf_layout().is_some() {
+            return slot < self.slots();
+        }
         self.claims
             .get(slot)
             .is_some_and(|c| c.compare_exchange(claim_of(ready, HANDED), claim_of(ready, READING), Ordering::AcqRel, Ordering::Acquire).is_ok())
@@ -209,14 +300,47 @@ pub struct SharedFrame {
     ring: Arc<SharedRing>,
     slot: u8,
     ready: u64,
+    /// Whether a draw has read the picture, for a frame made with [`SharedFrame::watched`].
+    drawn: Option<Arc<AtomicBool>>,
+}
+
+/// The capture side's view of a frame made with [`SharedFrame::watched`]: whether every copy of the
+/// frame is gone without a draw having read it, so its buffer can go back at once.
+#[derive(Debug)]
+pub struct FrameWatch(Arc<AtomicBool>);
+
+impl FrameWatch {
+    /// Whether no copy of the frame is left and none was drawn. A draw records itself before it
+    /// lets go of its copy, so a frame that was drawn never counts.
+    pub fn dropped_undrawn(&mut self) -> bool {
+        Arc::get_mut(&mut self.0).is_some_and(|drawn| !*drawn.get_mut())
+    }
 }
 
 impl SharedFrame {
     /// A frame in texture `slot` of `ring`, done when the ring's ready fence reaches `ready`.
-    /// Returns `None` for a slot outside the ring.
+    /// Returns `None` for a slot outside the ring ([`SharedRing::slots`]).
     pub fn new(ring: Arc<SharedRing>, slot: usize, ready: u64) -> Option<SharedFrame> {
-        let slot = u8::try_from(slot).ok().filter(|&s| usize::from(s) < SLOTS)?;
-        Some(SharedFrame { ring, slot, ready })
+        let slot = u8::try_from(slot).ok().filter(|&s| usize::from(s) < ring.slots())?;
+        Some(SharedFrame { ring, slot, ready, drawn: None })
+    }
+
+    /// A frame like [`SharedFrame::new`] that records whether a draw read it, which
+    /// [`SharedFrame::watch`] lets the capture side see.
+    pub fn watched(ring: Arc<SharedRing>, slot: usize, ready: u64) -> Option<SharedFrame> {
+        SharedFrame::new(ring, slot, ready).map(|f| SharedFrame { drawn: Some(Arc::new(AtomicBool::new(false))), ..f })
+    }
+
+    /// The capture side's view of a watched frame; `None` for one made with [`SharedFrame::new`].
+    pub fn watch(&self) -> Option<FrameWatch> {
+        self.drawn.as_ref().map(|d| FrameWatch(Arc::clone(d)))
+    }
+
+    /// Record that a draw reads the picture. The compositor calls it once the draw is submitted.
+    pub fn mark_drawn(&self) {
+        if let Some(drawn) = &self.drawn {
+            drawn.store(true, Ordering::Release);
+        }
     }
 
     pub fn ring(&self) -> &Arc<SharedRing> {
@@ -333,6 +457,14 @@ impl Handoff {
     /// The newest waiting frame.
     pub fn pending(&self) -> Option<&SharedFrame> {
         self.pending.as_ref()
+    }
+
+    /// The highest value that `completed` gives for the waiting frames, or 0 when none waits. A
+    /// ring that reports readiness per buffer gives each frame its own value, so the older frame is
+    /// checked even when the newest one's buffer is still being written.
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn reached(&self, completed: impl Fn(&SharedFrame) -> u64) -> u64 {
+        [self.pending.as_ref(), self.older.as_ref()].into_iter().flatten().map(completed).max().unwrap_or(0)
     }
 
     /// Forget the waiting frames.

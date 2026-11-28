@@ -62,10 +62,11 @@ fn damaged_files_are_errors_not_panics() {
         fb[i] ^= 0x5a;
         let _ = Model::read(&fb);
     }
-    // Every prefix of a real (small) model.
+    // Every prefix of a real (small) model is refused: each one cuts off data the model needs.
     let m = conv_relu();
+    assert!(Model::read(&m).is_ok());
     for n in 0..m.len() {
-        let _ = Model::read(&m[..n]);
+        assert!(Model::read(&m[..n]).is_err(), "a {n}-byte prefix of a {}-byte model loads", m.len());
     }
 }
 
@@ -773,6 +774,17 @@ fn huge_pool_strides_skip_cells_outside_the_input() {
     let mut y = [0.0; 2];
     max_pool(&[5.0], [1, 1], 1, [1, 2], [2, 2], [usize::MAX; 2], [0, usize::MAX], &mut y);
     assert_eq!(y, [f32::NEG_INFINITY, 5.0]);
+}
+
+/// A pool with no output columns returns at once instead of walking its output rows, since the
+/// load-time cost counts no window steps for it.
+#[test]
+fn empty_output_pools_walk_no_rows() {
+    let mut y: [f32; 0] = [];
+    // The sizes come from a model at run time. Without the early return, an unoptimized build
+    // walks all of these rows.
+    let (rows, cols) = std::hint::black_box((usize::MAX, 0));
+    max_pool(&[], [rows, cols], 1, [rows, cols], [1, 1], [1, 1], [0, 0], &mut y);
 }
 
 #[test]
