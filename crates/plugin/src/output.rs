@@ -42,9 +42,24 @@ pub struct OutputJob {
     pub stats: Arc<EncoderStats>,
     /// The master-clock time the output starts at: earlier frames and audio are not written.
     pub start: Tick,
+    /// The video encoders a stream's destinations may send with in place of `video_encoder`
+    /// ([`OwnEncoder`]); empty for other outputs.
+    pub other_encoders: Vec<Arc<dyn Encoder>>,
     /// Finished caption phrases for a stream to carry as closed captions; `None` sends none.
     /// Phrases already in the queue when the stream starts are discarded.
     pub captions: Option<Arc<Fifo<String>>>,
+}
+
+/// A video encoder a stream's destination runs for itself, in place of the stream's encoder. It
+/// encodes the same frames at the same size, rate and keyframe interval as the stream's encoder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnEncoder {
+    /// The encoder plug-in id: the stream's encoder or one of [`OutputJob::other_encoders`].
+    pub encoder: String,
+    /// The encoder's settings.
+    pub settings: Settings,
+    /// The video bitrate, in kbps.
+    pub kbps: u32,
 }
 
 /// An output type.
@@ -69,6 +84,13 @@ pub enum OutputStatus {
 pub trait OutputInstance: Send {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>>;
     fn audio(&self) -> Arc<Fifo<PooledBlock>>;
+    /// Frames the output can hold beyond its video queue and the frame taken from it: those
+    /// queued for, or being encoded by, the encoders a stream hands its frames on to. The
+    /// compositor keeps that many more frames, so they do not make its frame loop allocate. Read
+    /// without allocating; 0 for an output that encodes the frames it takes itself.
+    fn video_held(&self) -> usize {
+        0
+    }
     /// A queue for each audio stream the output writes, in the order of
     /// [`OutputJob::audio_streams`]; the first is [`OutputInstance::audio`]. An output that
     /// writes one stream returns that one.
@@ -147,7 +169,7 @@ pub trait OutputInstance: Send {
 }
 
 /// A destination of a stream as it is set up now, for [`OutputInstance::start_destination_as`].
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct DestinationSetup {
     pub id: String,
     /// `rtmp://host/app` or `rtmps://host/app`.
@@ -156,12 +178,19 @@ pub struct DestinationSetup {
     pub key: String,
     /// The id of the streaming service it is set up for; empty for none.
     pub service: String,
+    /// The video encoder it runs for itself; `None` to send what the stream's encoder makes.
+    pub encoder: Option<OwnEncoder>,
 }
 
 impl std::fmt::Debug for DestinationSetup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = if self.key.is_empty() { "" } else { "<redacted>" };
-        f.debug_struct("DestinationSetup").field("id", &self.id).field("key", &key).field("service", &self.service).finish_non_exhaustive()
+        f.debug_struct("DestinationSetup")
+            .field("id", &self.id)
+            .field("key", &key)
+            .field("service", &self.service)
+            .field("encoder", &self.encoder)
+            .finish_non_exhaustive()
     }
 }
 
@@ -287,13 +316,15 @@ pub enum Cause {
     BadAddress,
     /// The stream key is not valid.
     BadKey,
+    /// The video encoder the destination runs for itself could not start or stopped.
+    Encoder,
     /// Anything else.
     Other,
 }
 
 impl Cause {
     /// Every cause, in the order of [`Cause::id`]'s list.
-    pub const ALL: [Cause; 20] = [
+    pub const ALL: [Cause; 21] = [
         Cause::NoRoute,
         Cause::LookupFailed,
         Cause::LookupNotFound,
@@ -313,6 +344,7 @@ impl Cause {
         Cause::Lost,
         Cause::BadAddress,
         Cause::BadKey,
+        Cause::Encoder,
         Cause::Other,
     ];
 
@@ -338,6 +370,7 @@ impl Cause {
             Cause::Lost => "lost",
             Cause::BadAddress => "bad_address",
             Cause::BadKey => "bad_key",
+            Cause::Encoder => "encoder",
             Cause::Other => "other",
         }
     }

@@ -24,6 +24,7 @@ pub(crate) fn job(rate: RateControl) -> OutputJob {
         ffmpeg: PathBuf::new(),
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
+        other_encoders: Vec::new(),
         captions: None,
     }
 }
@@ -299,6 +300,40 @@ fn a_recording_not_finished_in_time_fails_and_leaves_the_file() {
     let file = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
     assert!(Demuxer::from_slice(&file).is_ok(), "the header was written");
+}
+
+#[test]
+fn recordings_that_end_together_share_one_deadline() {
+    let (path_a, path_b) = (temp_file("stuck-a"), temp_file("stuck-b"));
+    let mut held = Vec::new();
+    let mut stuck: Vec<Native> = [&path_a, &path_b]
+        .into_iter()
+        .map(|path| {
+            let (tx, rx) = mpsc::channel();
+            held.push(tx);
+            let mut j = job(RateControl::Quality(20));
+            j.video_encoder = Arc::new(Stuck(Mutex::new(Some(rx))));
+            let n = Native::start(&j, path).unwrap();
+            feed(&n.video(), &n.audio(), 0.2);
+            n
+        })
+        .collect();
+    let wait = Duration::from_secs(1);
+    let started = Instant::now();
+    for n in &stuck {
+        n.ask_end();
+    }
+    let (deadline, grace) = (started + wait, started + wait + wait / 2);
+    for n in &mut stuck {
+        let Err(e) = n.end_by(deadline, grace) else { panic!("a stuck recording finished") };
+        assert!(e.to_string().contains("not finished in time"), "{e}");
+    }
+    // One after the other, each would wait the whole time to its own deadline.
+    assert!(started.elapsed() < wait * 2, "{:?}", started.elapsed());
+    drop(held);
+    for path in [path_a, path_b] {
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }
 
 /// A video encoder that loses its last frames when it is flushed.

@@ -944,6 +944,7 @@ mod tests {
             ffmpeg: "ffmpeg".into(),
             stats: Arc::new(EncoderStats::default()),
             start: Tick(0),
+            other_encoders: Vec::new(),
             captions: None,
         };
         let args = input_args(&job);

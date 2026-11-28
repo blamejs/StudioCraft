@@ -20,14 +20,14 @@ use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_model::{KeyRef, Profile, RecordingFormat, RecordingQuality, Settings};
+use studiocraft_model::{Destination, KeyRef, Profile, RecordingFormat, RecordingQuality, Settings};
 use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_outputs::stream::diagnose;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
     Availability, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance,
-    OutputJob, OutputStatus, PluginError, RateControl, StreamCopyState, VideoFormat, VideoParams,
+    OutputJob, OutputStatus, OwnEncoder, PluginError, RateControl, StreamCopyState, VideoFormat, VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -283,6 +283,12 @@ pub(crate) struct Outputs {
     stream_check_keys: HashMap<String, Vec<String>>,
     /// The reconnect settings the last stream started with.
     stream_reconnect: Option<studiocraft_model::ReconnectSettings>,
+    /// The video encoder the last stream started with, after the `hardware` choice was resolved,
+    /// for the destinations started while it runs.
+    stream_encoder_id: Option<String>,
+    /// The video encoder the last stream started with as the profile named it, and its bitrate,
+    /// for the destinations started while it runs: a change to the profile does not change them.
+    stream_encoder: Option<(String, u32)>,
     /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
     /// their file or stream cleanly, oldest first.
     unfinished: Vec<(OutputKind, String)>,
@@ -311,6 +317,8 @@ pub(crate) struct Outputs {
     /// How many streams have started; the last one's number. Only the copy of that stream
     /// becomes [`Outputs::last_copy`] when its stop finishes.
     streams: u64,
+    /// [`Outputs::video_held`] at the last poll.
+    held_seen: usize,
 }
 
 /// Where a stop thread puts the state of the stream's copy once the stream has ended.
@@ -679,7 +687,19 @@ impl Outputs {
         for s in saved {
             ev.notices.push(save_notice(&s.path, s.handle.join()));
         }
+        // An encoder a destination started while the stream runs holds frames too.
+        let held = self.video_held();
+        if held != self.held_seen {
+            self.held_seen = held;
+            ev.sinks_changed = true;
+        }
         ev
+    }
+
+    /// The frames the active outputs can hold beyond their video queues
+    /// ([`OutputInstance::video_held`]).
+    pub(crate) fn video_held(&self) -> usize {
+        self.active.values().map(|a| a.instance.video_held()).fold(0, usize::saturating_add)
     }
 
     /// Keep the state a stop thread put in `copy`'s slot as the last stream's copy, and its
@@ -1015,9 +1035,44 @@ fn stream_check_key() -> String {
     format!("stream:{}", STREAMS.fetch_add(1, Ordering::Relaxed))
 }
 
+/// The video encoder destination `d` of profile `p` runs for itself, when the stream runs the
+/// encoder `stream`, as the profile named it, at its bitrate, and `stream_id` is that encoder with
+/// the `hardware` choice resolved; `None` when it sends what the stream's encoder makes. A
+/// destination that names no encoder or bitrate takes the stream's.
+fn own_encoder(p: &Profile, d: &Destination, stream: (&str, u32), stream_id: &str) -> Result<Option<OwnEncoder>, StudioError> {
+    let named = if d.video_encoder.is_empty() { stream.0 } else { d.video_encoder.as_str() };
+    let kbps = if d.video_bitrate_kbps == 0 { stream.1 } else { d.video_bitrate_kbps };
+    if (named, kbps) == stream {
+        return Ok(None);
+    }
+    // The stream's own choice is the encoder it resolved to.
+    let encoder = if named == stream.0 { stream_id } else { named };
+    if encoder == HARDWARE {
+        return Err(StudioError::Output(format!(
+            "destination `{}` can run the hardware encoder only when the stream does; choose an encoder by name for it in Settings › Stream",
+            d.id
+        )));
+    }
+    let settings = encoder_settings(p, OutputKind::Streaming, encoder);
+    Ok(Some(OwnEncoder { encoder: encoder.to_string(), settings, kbps }))
+}
+
+/// The video encoders a destination can run for itself: the built-in H.264 encoders, without the
+/// `hardware` choice.
+fn destination_encoders(registry: &studiocraft_plugin::Registry) -> Vec<Arc<dyn Encoder>> {
+    registry
+        .encoders()
+        .iter()
+        .filter(|e| e.kind() == EncoderKind::Video && e.streams() && e.ffmpeg().is_none() && e.id() != HARDWARE)
+        .cloned()
+        .collect()
+}
+
 /// The stream output's settings for profile `p`: each destination with its server and its key,
-/// the profile's key or one of `held`, the keys held for this session by name.
-fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settings, StudioError> {
+/// the profile's key or one of `held`, the keys held for this session by name. With `stream_id`,
+/// the stream's video encoder once resolved, a destination that runs an encoder of its own also
+/// names it.
+fn stream_settings(p: &Profile, held: &HashMap<String, String>, stream_id: Option<&str>) -> Result<Settings, StudioError> {
     p.stream.check().map_err(StudioError::Output)?;
     p.stream.reconnect.check().map_err(StudioError::Output)?;
     if !p.stream.destinations.iter().any(|d| d.enabled && !d.server.trim().is_empty()) {
@@ -1035,7 +1090,23 @@ fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settin
                 None => return Err(StudioError::Output(format!("the stream key `{name}` for destination `{}` is not set for this session", d.id))),
             },
         };
-        list.push(serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled, "service": d.service }));
+        let mut entry = serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled, "service": d.service });
+        if let Some(stream_id) = stream_id {
+            // A choice the stream cannot run for this destination fails it alone: it names the
+            // choice, and the stream refuses it as the destination starts. One that is off is
+            // started later, and the stream can run an encoder for it once its choice is changed.
+            let own = match own_encoder(p, d, (p.stream.video_encoder.as_str(), p.stream.video_bitrate()), stream_id) {
+                Ok(own) => own,
+                Err(_) => {
+                    let (named, kbps) = p.stream.encoder_of(d);
+                    Some(OwnEncoder { encoder: named.to_string(), settings: Settings::new(), kbps })
+                }
+            };
+            if let Some(own) = own {
+                entry["own_encoder"] = serde_json::json!({ "id": own.encoder, "kbps": own.kbps, "settings": own.settings });
+            }
+        }
+        list.push(entry);
     }
     let r = &p.stream.reconnect;
     let reconnect = serde_json::json!({
@@ -1066,6 +1137,7 @@ impl Plan {
             ffmpeg,
             stats,
             start,
+            other_encoders: Vec::new(),
             captions: None,
         }
     }
@@ -1517,9 +1589,9 @@ impl Studio {
         if let Some(d) = self.profile.stream.destinations.iter().find(|d| own && d.id == id) {
             let Some(key) = crate::golive::destination_key(&self.profile, &self.outputs.held_keys, d) else {
                 // One that is sending keeps its server and key, so it needs none of the profile's.
-                // A key that is not held is otherwise an error, also for one asked to stop. A start
-                // of one that is sending changes nothing, so none is asked for: one that ends
-                // meanwhile is not started again with the key it had.
+                // A key that is not held is otherwise an error, also for one asked to stop or whose
+                // thread has ended. A start of one that is sending changes nothing, so none is
+                // asked for: one that ends meanwhile is not started again with the key it had.
                 if a.instance.destination_sending(id) {
                     return Ok(());
                 }
@@ -1529,8 +1601,28 @@ impl Studio {
                 };
                 return Err(StudioError::Output(format!("the stream key `{name}` for destination `{id}` is not set for this session")));
             };
-            let setup =
-                DestinationSetup { id: id.to_string(), server: d.server.trim().to_string(), key: key.to_string(), service: d.service.clone() };
+            let stream_id = self.outputs.stream_encoder_id.as_deref().unwrap_or(self.profile.stream.video_encoder.as_str());
+            // Compared with the encoder the stream runs, not with the profile's, which may have
+            // changed since the stream started.
+            let stream = match &self.outputs.stream_encoder {
+                Some((named, kbps)) => (named.as_str(), *kbps),
+                None => (self.profile.stream.video_encoder.as_str(), self.profile.stream.video_bitrate()),
+            };
+            let encoder = match own_encoder(&self.profile, d, stream, stream_id) {
+                Ok(encoder) => encoder,
+                // One that is sending keeps the encoder it started with, and nothing changes, so
+                // its choice is checked only when it next starts afresh. No start follows the
+                // check, so one whose thread ended since is not started with its old encoder.
+                Err(_) if a.instance.destination_sending(id) => return Ok(()),
+                Err(e) => return Err(e),
+            };
+            let setup = DestinationSetup {
+                id: id.to_string(),
+                server: d.server.trim().to_string(),
+                key: key.to_string(),
+                service: d.service.clone(),
+                encoder,
+            };
             let (source, server, name, print) = (d.key.clone(), d.server.clone(), d.name.trim().to_string(), crate::golive::print(&d.server, key));
             // One that is sending keeps its server and key, and its record. One asked to stop that
             // has not stopped yet still shows as sending, and takes the profile's setup.
@@ -1767,7 +1859,9 @@ impl Studio {
         let mut check_key = None;
         if kind == OutputKind::Streaming {
             let key = stream_check_key();
-            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?.with("profile", key.as_str());
+            // The destinations' own encoders are added once the stream's encoder is resolved.
+            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys, None)?;
+            planned.settings = planned.settings.with("profile", key.as_str());
             check_key = Some(key);
             self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
             self.outputs.stream_prints = crate::golive::prints(&self.profile, &self.outputs.held_keys);
@@ -1840,6 +1934,14 @@ impl Studio {
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
         let start = self.clock.now();
         let mut job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        if kind == OutputKind::Streaming
+            && let Some(key) = &check_key
+        {
+            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys, Some(&planned.encoder_id))?.with("profile", key.as_str());
+            job.other_encoders = destination_encoders(&registry);
+            self.outputs.stream_encoder_id = Some(planned.encoder_id.clone());
+            self.outputs.stream_encoder = Some((self.profile.stream.video_encoder.clone(), self.profile.stream.video_bitrate()));
+        }
         if kind == OutputKind::Streaming {
             // Phrases live captions finish while the stream runs go out as closed captions.
             job.captions = Some(self.caption_feed());
@@ -2052,7 +2154,7 @@ pub(crate) mod tests {
     fn a_stream_sends_each_destination_with_its_key() {
         use studiocraft_model::Destination;
         let mut p = Profile::default();
-        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new()) else { panic!("a stream without a server") };
+        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new(), None) else { panic!("a stream without a server") };
         assert_eq!(e, "set a server in Settings › Stream first");
         p.stream.key = "profile-key".into();
         let d = |id: &str, server: &str, key: KeyRef, enabled: bool| Destination {
@@ -2069,10 +2171,10 @@ pub(crate) mod tests {
             d("d", "rtmp://d/live", KeyRef::Held("d".into()), false),
         ];
         p.stream.destinations[0].service = "twitch".into();
-        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new()) else { panic!("a held key that is not set") };
+        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new(), None) else { panic!("a held key that is not set") };
         assert_eq!(e, "the stream key `b` for destination `b` is not set for this session");
         let held = HashMap::from([("b".to_string(), "held-key".to_string())]);
-        let settings = stream_settings(&p, &held).unwrap();
+        let settings = stream_settings(&p, &held, None).unwrap();
         let want = serde_json::json!([
             { "id": "main", "server": "rtmp://a/live", "key": "profile-key", "enabled": true, "service": "twitch" },
             { "id": "b", "server": "rtmp://b/live", "key": "held-key", "enabled": true, "service": "" },
@@ -2086,20 +2188,100 @@ pub(crate) mod tests {
         let services: Vec<(&str, &str)> = checks.services.iter().map(|(id, s)| (id.as_str(), s.id)).collect();
         assert_eq!((services, checks.service_hosts), (vec![("main", "twitch")], false), "the service hosts are off by default");
         p.stream.check_service = true;
-        let on = stream_settings(&p, &held).unwrap();
+        let on = stream_settings(&p, &held, None).unwrap();
         assert_eq!(studiocraft_outputs::stream_checks(&on).map(|c| c.service_hosts), Ok(true));
         p.stream.check_service = false;
         let mut slow = p.clone();
         slow.stream.reconnect.max_tries = 0;
-        let Err(StudioError::Output(e)) = stream_settings(&slow, &held) else { panic!("reconnect settings out of range") };
+        let Err(StudioError::Output(e)) = stream_settings(&slow, &held, None) else { panic!("reconnect settings out of range") };
         assert!(e.contains("reconnect tries"), "{e}");
         p.stream.destinations[1].id = "main".into();
-        let Err(StudioError::Output(e)) = stream_settings(&p, &held) else { panic!("an id used twice") };
+        let Err(StudioError::Output(e)) = stream_settings(&p, &held, None) else { panic!("an id used twice") };
         assert!(e.contains("used twice"), "{e}");
         for on in &mut p.stream.destinations {
             on.enabled = false;
         }
-        assert!(stream_settings(&p, &held).is_err(), "every destination is off");
+        assert!(stream_settings(&p, &held, None).is_err(), "every destination is off");
+    }
+
+    #[test]
+    fn a_destination_with_its_own_encoder_names_it_in_the_stream_settings() {
+        use studiocraft_model::Destination;
+        let mut p = Profile::default();
+        p.stream.video_encoder = HARDWARE.into();
+        p.stream.video_bitrate_kbps = 6000;
+        p.stream.encoder_settings.insert("h264".into(), Settings::new().with("preset", "quality"));
+        let d = |id: &str, encoder: &str, kbps: u32| Destination {
+            id: id.into(),
+            server: format!("rtmp://{id}/live"),
+            key: KeyRef::None,
+            video_encoder: encoder.into(),
+            video_bitrate_kbps: kbps,
+            ..Destination::default()
+        };
+        p.stream.destinations = vec![d("a", "", 0), d("b", "h264", 2500), d("c", "", 3000), d("e", HARDWARE, 0)];
+        let settings = stream_settings(&p, &HashMap::new(), Some("h264")).unwrap();
+        let own: Vec<Option<serde_json::Value>> =
+            settings.get("destinations").and_then(|l| l.as_array()).unwrap().iter().map(|d| d.get("own_encoder").cloned()).collect();
+        assert_eq!(
+            own,
+            [
+                None,
+                Some(serde_json::json!({ "id": "h264", "kbps": 2500, "settings": { "preset": "quality" } })),
+                // The stream's choice is the encoder it resolved to, at the destination's bitrate.
+                Some(serde_json::json!({ "id": "h264", "kbps": 3000, "settings": { "preset": "quality" } })),
+                // Naming the stream's choice and bitrate shares the stream's encoder.
+                None,
+            ]
+        );
+        let targets = studiocraft_outputs::stream_targets(&settings).unwrap();
+        assert_eq!(targets[1].encoder, Some(OwnEncoder { encoder: "h264".into(), settings: Settings::new().with("preset", "quality"), kbps: 2500 }));
+        assert_eq!(targets[0].encoder, None);
+        // Without the resolved encoder no destination names one.
+        let early = stream_settings(&p, &HashMap::new(), None).unwrap();
+        assert!(early.get("destinations").and_then(|l| l.as_array()).unwrap().iter().all(|d| d.get("own_encoder").is_none()));
+        // The hardware choice needs the stream to run it too. The stream still starts: the
+        // destination names the choice, and the stream fails that destination alone. One that is
+        // off is checked when it starts, and names its choice too, so the stream splits its input
+        // for it.
+        p.stream.video_encoder = "h264".into();
+        own_encoder(&p, &p.stream.destinations[3], ("h264", 6000), "h264").unwrap_err();
+        for on in [true, false] {
+            p.stream.destinations[3].enabled = on;
+            let settings = stream_settings(&p, &HashMap::new(), Some("h264")).unwrap();
+            let listed = settings.get("destinations").and_then(|l| l.as_array()).unwrap();
+            assert_eq!(listed[3].get("own_encoder"), Some(&serde_json::json!({ "id": HARDWARE, "kbps": 6000, "settings": {} })), "{on}");
+            assert!(listed[1].get("own_encoder").is_some());
+        }
+    }
+
+    #[test]
+    fn a_destination_started_while_the_stream_runs_is_compared_with_the_running_encoder() {
+        use studiocraft_model::Destination;
+        // The stream started with h264 at 6000 kbps; the profile's bitrate changed to 5000 since.
+        let mut p = Profile::default();
+        p.stream.video_encoder = "h264".into();
+        p.stream.video_bitrate_kbps = 5000;
+        let d = |encoder: &str, kbps: u32| Destination { video_encoder: encoder.into(), video_bitrate_kbps: kbps, ..Destination::default() };
+        let running = ("h264", 6000);
+        let own = own_encoder(&p, &d("", 5000), running, "h264").unwrap();
+        assert_eq!(own.map(|o| (o.encoder, o.kbps)), Some(("h264".into(), 5000)), "5000 kbps is not what the stream runs");
+        assert_eq!(own_encoder(&p, &d("", 0), running, "h264").unwrap(), None);
+        assert_eq!(own_encoder(&p, &d("h264", 6000), running, "h264").unwrap(), None);
+        let own = own_encoder(&p, &d("other", 0), running, "h264").unwrap();
+        assert_eq!(own.map(|o| (o.encoder, o.kbps)), Some(("other".into(), 6000)), "the stream's bitrate as it runs");
+    }
+
+    #[test]
+    fn destinations_run_the_built_in_stream_encoders_only() {
+        let mut registry = studiocraft_plugin::Registry::new();
+        studiocraft_outputs::register_all(&mut registry).unwrap();
+        let ids: Vec<&str> = destination_encoders(&registry).iter().map(|e| e.id()).collect();
+        assert!(ids.contains(&"h264"), "{ids:?}");
+        assert!(!ids.contains(&HARDWARE), "{ids:?}");
+        for e in destination_encoders(&registry) {
+            assert!(e.kind() == EncoderKind::Video && e.streams() && e.ffmpeg().is_none(), "{}", e.id());
+        }
     }
 
     #[test]
@@ -2716,6 +2898,50 @@ pub(crate) mod tests {
             let failure = self.failure.lock().unwrap().clone();
             Some(StreamCopyState { path: self.ended.path.clone(), failure, ..StreamCopyState::default() })
         }
+    }
+
+    /// A stream whose destinations' encoders hold the frames the test sets.
+    struct HoldingStream {
+        held: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl OutputInstance for HoldingStream {
+        fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn video_held(&self) -> usize {
+            self.held.load(Ordering::SeqCst)
+        }
+        fn audio(&self) -> Arc<Fifo<PooledBlock>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn status(&self) -> OutputStatus {
+            OutputStatus::Running
+        }
+        fn target(&self) -> String {
+            String::new()
+        }
+        fn stop(&mut self) -> Result<(), PluginError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_encoders_get_new_sinks_when_a_streams_destinations_hold_more_frames() {
+        let mut o = Outputs::default();
+        let held = Arc::new(std::sync::atomic::AtomicUsize::new(9));
+        let instance = Box::new(HoldingStream { held: Arc::clone(&held) });
+        let stats = Arc::new(EncoderStats::default());
+        let active = Active { id: 1, instance, stats, started: Instant::now(), start: Tick(0), target: String::new(), hardware: None };
+        o.active.insert(OutputKind::Streaming, active);
+        assert!(o.poll().sinks_changed);
+        assert_eq!(o.video_held(), 9);
+        assert!(!o.poll().sinks_changed, "nothing changed");
+        // A destination starts an encoder of its own while the stream runs.
+        held.store(9 + 31, Ordering::SeqCst);
+        assert!(o.poll().sinks_changed);
+        assert_eq!(o.video_held(), 40);
+        assert!(!o.poll().sinks_changed);
     }
 
     /// The notices of `o` until nothing is active or finishing.

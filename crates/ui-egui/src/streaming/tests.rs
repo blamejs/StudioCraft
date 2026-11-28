@@ -71,7 +71,9 @@ fn destinations_are_added_up_to_the_limit() {
             enabled: false,
             server: "rtmp://b.example/app".into(),
             key: KeyRef::None,
-            service: String::new()
+            service: String::new(),
+            video_encoder: String::new(),
+            video_bitrate_kbps: 0,
         }
     );
     a.act(&ctx, Act::run("stream.destination_add", json!({"key": "held", "held_name": "night"})));
@@ -147,6 +149,132 @@ fn a_destination_is_changed_and_an_unchanged_one_is_not_saved_again() {
     run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "enabled": false, "key": "none"})).unwrap();
     let d = a.studio.profile().stream.destination("main").cloned().unwrap();
     assert!(!d.enabled && d.key == KeyRef::None);
+}
+
+#[test]
+fn a_destination_names_only_an_encoder_a_destination_can_run() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    assert_eq!(a.studio.profile().stream.video_encoder, "h264");
+    let unknown = "`video_encoder` is not a video encoder a destination can run: `none-such`";
+    let hardware = "`video_encoder` can be `hardware` only when the stream's encoder is `hardware`";
+    let before = a.studio.profile().clone();
+    for (id, params, want) in [
+        ("stream.destination_add", json!({"video_encoder": "none-such"}), unknown),
+        ("stream.destination_set", json!({"id": "main", "video_encoder": "none-such"}), unknown),
+        // An encoder that runs inside ffmpeg records, and a stream runs the built-in encoders only.
+        (
+            "stream.destination_set",
+            json!({"id": "main", "video_encoder": "x264"}),
+            "`video_encoder` is not a video encoder a destination can run: `x264`",
+        ),
+        ("stream.destination_add", json!({"video_encoder": "hardware"}), hardware),
+        ("stream.destination_set", json!({"id": "main", "video_encoder": "hardware"}), hardware),
+    ] {
+        let e = run(&mut a, &ctx, id, params.clone()).unwrap_err();
+        assert!(e.contains(want), "{params}: {e}");
+        assert_eq!(*a.studio.profile(), before, "{params}");
+    }
+    // With the stream on the hardware choice, a destination may name it too.
+    let mut p = a.studio.profile().clone();
+    p.stream.video_encoder = "hardware".into();
+    a.studio.set_profile(p).unwrap();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "video_encoder": "hardware", "video_bitrate_kbps": 1500})).unwrap();
+    assert_eq!(a.studio.profile().stream.destination("main").map(|d| d.video_encoder.as_str()), Some("hardware"));
+    run(&mut a, &ctx, "stream.destination_add", json!({"video_encoder": "h264"})).unwrap();
+}
+
+#[test]
+fn a_destination_cannot_name_an_encoder_the_list_shows_as_unable_to_start() {
+    struct Missing;
+    impl studiocraft_plugin::Plugin for Missing {
+        fn id(&self) -> &'static str {
+            "missing"
+        }
+        fn name(&self) -> &'static str {
+            "Missing"
+        }
+        fn schema(&self) -> studiocraft_plugin::SettingsSchema {
+            studiocraft_plugin::SettingsSchema::default()
+        }
+    }
+    impl studiocraft_plugin::Encoder for Missing {
+        fn codec(&self) -> studiocraft_plugin::Codec {
+            studiocraft_plugin::Codec::H264
+        }
+        fn availability(&self, _: &studiocraft_plugin::EncoderEnv) -> studiocraft_plugin::Availability {
+            studiocraft_plugin::Availability::NotInFfmpeg
+        }
+    }
+    let a = app();
+    let mut registry = studiocraft_plugin::Registry::new();
+    for e in a.studio().registry().encoders() {
+        registry.register_encoder(e.clone()).unwrap();
+    }
+    registry.register_encoder(std::sync::Arc::new(Missing)).unwrap();
+    let cmd = CommandRef::new("stream.destination_set");
+    assert!(destination_encoder_list(&registry, &[]).iter().any(|(id, _, ok)| id == "missing" && !*ok));
+    let Err(e) = check_destination_encoder(&cmd, &registry, Some("missing"), "h264") else {
+        panic!("an encoder that cannot start was taken");
+    };
+    assert!(e.english().contains("is not a video encoder a destination can run: `missing`"), "{}", e.english());
+    assert!(check_destination_encoder(&cmd, &registry, Some("h264"), "h264").is_ok());
+}
+
+#[test]
+fn a_destination_gets_its_own_encoder_and_the_list_says_which_share_one() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.destination_add", json!({"name": "Low", "video_encoder": "h264", "video_bitrate_kbps": 1500}));
+    assert_eq!(r.unwrap(), json!({"id": "destination-2"}));
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.destination_set", json!({"id": "destination-3", "video_encoder": "h264", "video_bitrate_kbps": 1500}));
+    assert_eq!(r.unwrap(), json!({"id": "destination-3", "changed": true}));
+    let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
+    assert_eq!((d.video_encoder.as_str(), d.video_bitrate_kbps), ("h264", 1500));
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert_eq!(listed["destinations"][1]["video_encoder"], json!("h264"));
+    assert_eq!(listed["destinations"][1]["video_bitrate_kbps"], json!(1500));
+    assert_eq!(listed["destinations"][0]["video_bitrate_kbps"], json!(0));
+    let s = &a.studio.profile().stream;
+    let want = json!([
+        {"video_encoder": s.video_encoder, "video_bitrate_kbps": s.video_bitrate(), "shared": true, "destinations": ["main"]},
+        {"video_encoder": "h264", "video_bitrate_kbps": 1500, "shared": false, "destinations": ["destination-2", "destination-3"]},
+    ]);
+    assert_eq!(listed["encoders"], want);
+    // Back to the stream's encoder and bitrate.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "destination-3", "video_encoder": "", "video_bitrate_kbps": 0})).unwrap();
+    let d = a.studio.profile().stream.destination("destination-3").cloned().unwrap();
+    assert_eq!((d.video_encoder.as_str(), d.video_bitrate_kbps), ("", 0));
+    let before = a.studio.profile().clone();
+    for (params, want) in [
+        (json!({"id": "main", "video_bitrate_kbps": 99}), "`video_bitrate_kbps` is 0 for the stream's bitrate or 100 to 200000"),
+        (json!({"id": "main", "video_bitrate_kbps": 200_001}), "`video_bitrate_kbps` is 0 for the stream's bitrate or 100 to 200000"),
+        (json!({"id": "main", "video_bitrate_kbps": -1}), "`video_bitrate_kbps` is a whole number"),
+        (json!({"id": "main", "video_encoder": "e".repeat(65)}), "`video_encoder` is longer than 64 bytes"),
+        (json!({"id": "main", "video_encoder": "h2\n64"}), "`video_encoder` has a control character"),
+        (json!({"id": "main", "video_encoder": 4}), "`video_encoder` is a string"),
+    ] {
+        let e = run(&mut a, &ctx, "stream.destination_set", params.clone()).unwrap_err();
+        assert!(e.contains(want), "{params}: {e}");
+        assert_eq!(*a.studio.profile(), before, "{params}");
+    }
+    // The window lists the encoders while a destination has one of its own.
+    let view = View { stream: &a.studio.profile().stream, running: false, own: true, live: &[], held: &|_| false, checks: &[], ingests: &[] };
+    let mut panel = StreamingPanel::default();
+    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut Vec::new()));
+    assert!(texts.iter().any(|t| t == "Own encoder, h264 at 1500 kbps: Low"), "{texts:?}");
+    let keeps =
+        "These are the profile's encoders. A destination that is sending keeps the encoder it started with until it is stopped and started again.";
+    assert!(!texts.iter().any(|t| t == keeps), "{texts:?}");
+    // While the stream runs, the list is the profile's, which a sending destination may not use yet.
+    for own in [true, false] {
+        let view = View { stream: &a.studio.profile().stream, running: true, own, live: &[], held: &|_| false, checks: &[], ingests: &[] };
+        let texts = drawn(|ui| show(ui, &view, &mut panel, &mut Vec::new()));
+        assert!(texts.iter().any(|t| t == keeps), "{texts:?}");
+    }
 }
 
 #[test]
@@ -635,6 +763,11 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
     // Every cause has its own text.
     let texts: std::collections::HashSet<&str> = Cause::ALL.iter().map(|c| cause_text(*c)).collect();
     assert_eq!(texts.len(), Cause::ALL.len());
+    // A destination whose own encoder stopped says so, with the encoder's error on hover.
+    let ended = state("a", DestinationStatus::Failed(Failure::new(Cause::Encoder, "its video encoder stopped: out of memory")));
+    assert_eq!(status_text(&d, true, Some(&ended)).0, "Failed: its video encoder stopped or could not start; check its video encoder settings");
+    assert_eq!(status_detail(true, Some(&ended)).as_deref(), Some("its video encoder stopped: out of memory"));
+    assert_eq!(listed(&d, true, Some(&ended), false)["cause"], json!("encoder"));
 }
 
 #[test]

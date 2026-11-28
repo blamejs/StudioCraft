@@ -1116,7 +1116,7 @@ fn retarget(
     match (target, current) {
         (None, _) => None,
         (Some(t), Some(mut n)) if (n.width, n.height) == crate::nv12::even_size(&t) => {
-            n.set_sinks(t.sinks);
+            n.set_sinks(t.sinks, t.held);
             Some(n)
         }
         (Some(t), _) => match Nv12::new(device, converter, t) {

@@ -24,6 +24,9 @@ pub struct EncodeTarget {
     pub height: u32,
     /// One queue per running recording or stream.
     pub sinks: Vec<Arc<Fifo<Arc<PooledFrame>>>>,
+    /// Frames the sinks' readers can hold beyond the queues and the frame each has taken, such as
+    /// those a stream hands on to the encoders of its destinations.
+    pub held: usize,
 }
 
 const FREE: u8 = 0;
@@ -62,6 +65,12 @@ fn in_flight(sinks: &[Arc<Fifo<Arc<PooledFrame>>>]) -> usize {
     sinks.iter().map(|s| s.capacity() + 1).sum()
 }
 
+/// How many shared handles to keep for `sinks` and the `held` frames their readers can hold
+/// beyond them: as many as they can hold at once, plus one.
+fn keep_for(sinks: &[Arc<Fifo<Arc<PooledFrame>>>], held: usize) -> usize {
+    in_flight(sinks).saturating_add(held).saturating_add(1)
+}
+
 /// `frame` in a shared handle from `kept` that no sink holds any more, or in a new one while
 /// fewer than `keep` have been made. The frame the reused handle held goes back to its pool.
 fn share(kept: &mut Vec<Arc<PooledFrame>>, keep: usize, frame: PooledFrame) -> Arc<PooledFrame> {
@@ -89,7 +98,7 @@ impl Nv12 {
         let (width, height) = even_size(&target);
         let planes = converter.planes(device, width, height)?;
         let size = planes.layout().buffer_size;
-        let shared_keep = in_flight(&target.sinks) + 1;
+        let shared_keep = keep_for(&target.sinks, target.held);
         let slots = (0..RING)
             .map(|_| Slot {
                 buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -116,11 +125,11 @@ impl Nv12 {
         })
     }
 
-    /// Send frames to `sinks` from now on. When they can hold more frames than the current
-    /// sinks, the pool and the kept handles grow to match, so full queues still do not make the
-    /// frame loop allocate.
-    pub(crate) fn set_sinks(&mut self, sinks: Vec<Arc<Fifo<Arc<PooledFrame>>>>) {
-        let keep = in_flight(&sinks) + 1;
+    /// Send frames to `sinks` from now on. When they and the `held` frames their readers can hold
+    /// beyond them come to more frames than before, the pool and the kept handles grow to match,
+    /// so full queues still do not make the frame loop allocate.
+    pub(crate) fn set_sinks(&mut self, sinks: Vec<Arc<Fifo<Arc<PooledFrame>>>>, held: usize) {
+        let keep = keep_for(&sinks, held);
         if keep > self.shared_keep {
             self.pool = Pool::new(keep + RING + 1, VideoFrame::default);
             self.shared.reserve(keep.saturating_sub(self.shared.len()));
@@ -251,25 +260,59 @@ mod tests {
     }
 
     #[test]
+    fn enough_handles_are_kept_for_frames_a_sinks_reader_hands_on() {
+        // A stream's split takes each frame from its queue and hands it to two encoders: one
+        // that keeps up and one whose reader stops, so its queue fills.
+        let sinks = vec![Arc::new(Fifo::new(4))];
+        let encoders: [Fifo<Arc<PooledFrame>>; 2] = [Fifo::new(4), Fifo::new(16)];
+        let held = encoders.iter().map(|e| e.capacity() + 1).sum();
+        let keep = keep_for(&sinks, held);
+        let pool: Arc<FramePool> = Pool::new(keep + RING + 1, VideoFrame::default);
+        let mut kept = Vec::new();
+        let mut reading = None;
+        let mut new_handles = 0;
+        for _ in 0..500 {
+            let handle = share(&mut kept, keep, pool.take());
+            if !kept.iter().any(|k| Arc::ptr_eq(k, &handle)) {
+                new_handles += 1;
+            }
+            sinks[0].push(handle);
+            if let Some(frame) = sinks[0].pop() {
+                for e in &encoders {
+                    e.push(Arc::clone(&frame));
+                }
+            }
+            reading = encoders[0].pop();
+        }
+        drop(reading);
+        assert_eq!(new_handles, 0, "every handle came from the kept ones");
+        assert!(pool.made() <= keep + 1, "{} frames made", pool.made());
+    }
+
+    #[test]
     fn a_new_sink_grows_the_pool_and_the_kept_handles() {
         // Machines without a GPU pass without checking.
         let Ok(gpu) = crate::Gpu::headless() else { return };
         let one = vec![Arc::new(Fifo::new(4))];
         let converter = crate::compositor::yuv_converter(&gpu.device);
-        let mut n = Nv12::new(&gpu.device, &converter, EncodeTarget { width: 64, height: 48, sinks: one.clone() }).unwrap();
+        let mut n = Nv12::new(&gpu.device, &converter, EncodeTarget { width: 64, height: 48, sinks: one.clone(), held: 0 }).unwrap();
         let (keep, capacity) = (n.shared_keep, n.pool.capacity());
-        n.set_sinks(vec![one[0].clone(), Arc::new(Fifo::new(30))]);
+        n.set_sinks(vec![one[0].clone(), Arc::new(Fifo::new(30))], 0);
         assert_eq!(n.shared_keep, keep + 31);
         assert_eq!(n.pool.capacity(), capacity + 31);
         assert_eq!(n.sinks.len(), 2);
         // Fewer sinks keep what is already there.
-        n.set_sinks(one);
+        n.set_sinks(one.clone(), 0);
         assert_eq!(n.shared_keep, keep + 31);
+        // Frames the sinks' readers hand on count too.
+        n.set_sinks(one, 40);
+        assert_eq!(n.shared_keep, keep + 40);
+        assert_eq!(n.pool.capacity(), capacity + 40);
     }
 
     #[test]
     fn output_sizes_are_made_even() {
-        let size = |width, height| even_size(&EncodeTarget { width, height, sinks: Vec::new() });
+        let size = |width, height| even_size(&EncodeTarget { width, height, sinks: Vec::new(), held: 0 });
         assert_eq!(size(1920, 1080), (1920, 1080));
         assert_eq!(size(853, 479), (854, 480));
         assert_eq!(size(0, 1), (2, 2));

@@ -10,10 +10,11 @@ use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
 use studiocraft_model::{
     AfterStop, AudioTracksSettings, AudioTracksWhen, FitMode, KeyRef, PauseAnchor, PauseAtZero, PauseSettings, Profile, ReconnectSettings,
-    RecordingFormat, RecordingQuality, ReplaySettings, VideoSettings,
+    RecordingFormat, RecordingQuality, ReplaySettings, StreamSettings, VIDEO_BITRATE_KBPS, VideoSettings,
 };
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
+use studiocraft_studio::HARDWARE_ENCODER as HARDWARE;
 
 use studiocraft_render::device::{Candidate, Preference};
 
@@ -541,11 +542,82 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(12.0);
+        Self::destination_encoders(ui, registry, &self.offered, s);
+        ui.add_space(12.0);
         Self::reconnect(ui, &mut s.reconnect);
         ui.add_space(12.0);
         Self::connection_check(ui, &mut s.check_service);
         ui.add_space(12.0);
         Self::stream_copy(ui, &mut s.save_copy);
+    }
+
+    /// The Destination encoders section of the Stream tab: the video encoder and bitrate each
+    /// destination sends with, and which destinations share an encoder.
+    fn destination_encoders(ui: &mut Ui, registry: &Registry, offered: &[String], s: &mut StreamSettings) {
+        ui.label(RichText::new(tl!("Destination encoders")).strong());
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(tl!(
+                "A destination can run a video encoder of its own at its own bitrate, with the same picture size, frame rate and keyframe \
+                 interval. Each encoder of its own uses more CPU or GPU time. Destinations with the same encoder, settings and bitrate \
+                 share one encoder."
+            ))
+            .small()
+            .weak(),
+        );
+        let encoders = destination_encoder_list(registry, offered);
+        let name_of = |id: &str| encoders.iter().find(|(e, _, _)| e == id).map_or_else(|| id.to_string(), |(_, n, _)| n.clone());
+        let stream_bitrate = s.video_bitrate();
+        egui::Grid::new("destination-encoders").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
+            for (i, d) in s.destinations.iter_mut().enumerate() {
+                ui.label(if d.name.trim().is_empty() { d.id.clone() } else { d.name.trim().to_string() });
+                let shown = if d.video_encoder.is_empty() { tl!("The stream's encoder").to_string() } else { name_of(&d.video_encoder) };
+                craft_ui::ComboBox::from_id_salt(("destination-encoder", i)).selected_text(shown).width(220.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.video_encoder, String::new(), tl!("The stream's encoder"));
+                    for (id, name, available) in &encoders {
+                        let text = if *available {
+                            name.clone()
+                        } else {
+                            craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name.as_str())])
+                        };
+                        ui.add_enabled_ui(*available, |ui| ui.selectable_value(&mut d.video_encoder, id.clone(), text));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let mut own = d.video_bitrate_kbps != 0;
+                    if ui.checkbox(&mut own, tl!("Own bitrate")).changed() {
+                        d.video_bitrate_kbps = if own { stream_bitrate } else { 0 };
+                    }
+                    if own {
+                        ui.add(
+                            egui::DragValue::new(&mut d.video_bitrate_kbps).range(VIDEO_BITRATE_KBPS).speed(50.0).suffix(format!(" {}", tl!("kbps"))),
+                        );
+                    }
+                });
+                ui.end_row();
+            }
+        });
+        ui.add_space(4.0);
+        for g in s.encoder_groups().into_iter().filter(|g| g.shared || !g.destinations.is_empty()) {
+            let encoder =
+                craft_i18n::fmt(tl!("{encoder} at {n} kbps"), &[("encoder", &name_of(&g.video_encoder)), ("n", &g.video_bitrate_kbps.to_string())]);
+            let names: Vec<String> = g
+                .destinations
+                .iter()
+                .map(|id| {
+                    s.destination(id).map_or_else(|| id.clone(), |d| if d.name.trim().is_empty() { d.id.clone() } else { d.name.trim().to_string() })
+                })
+                .collect();
+            let line = match (g.shared, names.is_empty()) {
+                (true, true) => craft_i18n::fmt(tl!("The stream's encoder, {encoder}: no destination"), &[("encoder", &encoder)]),
+                (true, false) => craft_i18n::fmt(
+                    tl!("The stream's encoder, {encoder}: {destinations}"),
+                    &[("encoder", &encoder), ("destinations", &names.join(", "))],
+                ),
+                _ => craft_i18n::fmt(tl!("Own encoder, {encoder}: {destinations}"), &[("encoder", &encoder), ("destinations", &names.join(", "))]),
+            };
+            ui.label(RichText::new(line).small());
+        }
     }
 
     /// The Copy of the stream section of the Stream tab: whether the stream also writes what it
@@ -1102,6 +1174,16 @@ fn listed_encoders<'a>(registry: &'a Registry, offered: &[String], streaming: bo
         .collect()
 }
 
+/// The video encoders a destination can choose besides the stream's: the stream's list without
+/// the hardware choice, each with its name and whether it can start.
+pub(crate) fn destination_encoder_list(registry: &Registry, offered: &[String]) -> Vec<(String, String, bool)> {
+    listed_encoders(registry, offered, true)
+        .into_iter()
+        .filter(|(e, _)| e.id() != HARDWARE)
+        .map(|(e, available)| (e.id().to_string(), tl!(e.name()).to_string(), available))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1121,6 +1203,40 @@ mod tests {
         assert!(!streaming.iter().any(|(id, _)| *id == "nvenc_native_hevc"), "a stream carries H.264: {streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
+
+    #[test]
+    fn a_destination_cannot_choose_an_encoder_that_cannot_start() {
+        struct Missing;
+        impl studiocraft_plugin::Plugin for Missing {
+            fn id(&self) -> &'static str {
+                "missing"
+            }
+            fn name(&self) -> &'static str {
+                "Missing"
+            }
+            fn schema(&self) -> studiocraft_plugin::SettingsSchema {
+                studiocraft_plugin::SettingsSchema::default()
+            }
+        }
+        impl studiocraft_plugin::Encoder for Missing {
+            fn codec(&self) -> studiocraft_plugin::Codec {
+                studiocraft_plugin::Codec::H264
+            }
+            fn availability(&self, _: &EncoderEnv) -> Availability {
+                Availability::NotInFfmpeg
+            }
+        }
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let mut registry = Registry::new();
+        for e in app.studio().registry().encoders() {
+            registry.register_encoder(e.clone()).unwrap();
+        }
+        registry.register_encoder(std::sync::Arc::new(Missing)).unwrap();
+        let list = destination_encoder_list(&registry, &[]);
+        assert!(list.iter().any(|(id, _, ok)| id == "h264" && *ok), "{list:?}");
+        assert!(list.iter().any(|(id, _, ok)| id == "missing" && !*ok), "{list:?}");
+        assert!(!list.iter().any(|(id, _, _)| id == HARDWARE), "{list:?}");
     }
 
     #[test]
