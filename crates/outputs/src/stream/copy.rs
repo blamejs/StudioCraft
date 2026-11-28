@@ -270,6 +270,10 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         Err(e) => return shared.fail(not_finished(&e)),
     };
     match w.flush() {
+        Ok(()) if shared.last_video.load(Ordering::SeqCst) == 0 => {
+            // A file with no picture has no clip for a timeline to describe.
+            shared.fail(format!("the copy of the stream at {shown} holds no video frame"));
+        }
         Ok(()) => {
             // A stop that gave up on the copy has reported it as not finished, and it stays so.
             shared.settle(FINISHED);

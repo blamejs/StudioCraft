@@ -2239,6 +2239,22 @@ fn a_copy_that_a_stop_left_unfinished_stays_unfinished() {
 }
 
 #[test]
+fn a_copy_that_wrote_no_video_frame_is_not_finished() {
+    let dir = TestDir::new("stream-copy-no-video");
+    let path = dir.file();
+    let file = std::fs::File::create(&path).unwrap();
+    let open: copy::Open = Box::new(move || Ok(Box::new(file) as Box<dyn copy::CopyFile>));
+    let (fanout, rx, tracks) = copy_feed();
+    let mut c = copy::StreamCopy::start(path, open, tracks, rx);
+    // The stream ends before the copy receives any picture.
+    drop(fanout);
+    c.finish(Duration::from_secs(60));
+    let state = c.state();
+    assert!(!state.finished, "{state:?}");
+    assert!(state.failure.as_deref().is_some_and(|f| f.contains("holds no video frame")), "{state:?}");
+}
+
+#[test]
 fn a_copy_whose_thread_panicked_is_a_failure() {
     let dir = TestDir::new("stream-copy-panic");
     let path = dir.file();

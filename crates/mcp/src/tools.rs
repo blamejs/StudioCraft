@@ -361,7 +361,8 @@ fn studio_tool_definitions() -> Vec<Value> {
             "record_marker",
             "Mark the running recording and stream copy",
             "Add a marker to the running recording and to the copy the running stream saves at this moment, as Add Recording Marker \
-             does. When a recording or a stream's copy with markers stops, `<file name>.otio` is written beside its file with each \
+             does. When a recording or a stream's copy with markers stops and its file is finished, `<file name>.otio` is written \
+             beside the file with each \
              marker at its frame. `name` is 1 to 256 characters with no control characters (default \"Marker N\", the output's Nth \
              marker). Returns the marker's `name` and `seconds` from the start of the recording, or of the copy when the recording \
              does not keep it, \

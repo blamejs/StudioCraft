@@ -153,8 +153,8 @@ pub enum RuntimeAction {
     },
     /// The markers of the running session, or of the last one.
     MarkerList,
-    /// Rename the session's marker `index` (from 1) to `name` in the recording and the take of
-    /// audio tracks that hold it.
+    /// Rename the session's marker `index` (from 1) to `name` in the recording, the stream's copy
+    /// and the take of audio tracks that hold it.
     MarkerRename {
         index: usize,
         name: String,
@@ -565,8 +565,9 @@ pub enum Command {
     /// The markers `marker.add` set in the running session, or in the last one.
     #[serde(rename = "marker.list")]
     MarkerList {},
-    /// Rename the session's marker `index` (from 1, as `marker.list` numbers it) in the recording
-    /// and the take of audio tracks that hold it, while they run or after they ended.
+    /// Rename the session's marker `index` (from 1, as `marker.list` numbers it) in the recording,
+    /// the stream's copy and the take of audio tracks that hold it, while they run or after they
+    /// ended.
     #[serde(rename = "marker.rename")]
     MarkerRename { index: usize, name: String },
     /// Forget the hardware encoders' test results, in the session and in the file that keeps

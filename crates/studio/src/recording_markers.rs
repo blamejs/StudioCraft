@@ -1844,12 +1844,20 @@ mod tests {
         assert_eq!(frames, (2.0 * fps).ceil() + 1.0, "the clip ends at the file's last picture, not the 90th frame");
     }
 
-    /// Stop the stream of `studio` and wait for its timeline files.
+    /// Stop the stream of `studio` and wait for its timeline files. A stop that leaves an output
+    /// running fails the test after 60 seconds instead of hanging it.
     fn stop_stream(studio: &mut Studio) {
         studio.stop_output(OutputKind::Streaming);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while studio.outputs.any_active() {
             let events = studio.outputs.poll();
             studio.notices.extend(events.notices);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "an output is still active 60 s after the stream stopped; copy: {}, notices: {:?}",
+                studio.stream_copy_json(),
+                studio.notices
+            );
             std::thread::yield_now();
         }
         studio.sync_recording_markers();
