@@ -29,10 +29,38 @@ enum Plan {
     Accept,
     /// Refuse the publish command.
     Refuse,
+    /// Refuse the publish command once the test opens the hold.
+    RefuseWhenOpen(&'static Hold),
     /// Refuse the connect command.
     RefuseConnect,
     /// Take the stream and drop the connection after this many audio and video messages.
     DropAfter(usize),
+}
+
+/// A hold a server's plan waits at until the test opens it.
+#[derive(Debug, Default)]
+struct Hold {
+    open: Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+
+impl Hold {
+    /// A hold that lives for the rest of the test run, so a plan can keep it.
+    fn new() -> &'static Hold {
+        Box::leak(Box::default())
+    }
+
+    fn open(&self) {
+        *lock(&self.open) = true;
+        self.opened.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut open = lock(&self.open);
+        while !*open {
+            open = self.opened.wait(open).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
 }
 
 /// What the test server saw.
@@ -154,7 +182,10 @@ impl Conn {
         }
         let name = self.serve_until_publish()?;
         let _ = seen.send(Seen::Publish(name));
-        if let Plan::Refuse = plan {
+        if let Plan::RefuseWhenOpen(hold) = plan {
+            hold.wait();
+        }
+        if let Plan::Refuse | Plan::RefuseWhenOpen(_) = plan {
             self.status("error", "NetStream.Publish.BadName").map_err(craft_rtmp::Error::Io)?;
         } else {
             self.status("status", "NetStream.Publish.Start").map_err(craft_rtmp::Error::Io)?;
@@ -3280,6 +3311,49 @@ fn an_encoder_that_ended_is_dropped_without_another_start() {
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen_a);
+}
+
+#[test]
+fn a_destination_whose_own_encoder_stops_while_it_connects_fails_for_the_encoder() {
+    let hold = Hold::new();
+    let (b, seen_b) = server(vec![Plan::RefuseWhenOpen(hold)]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![with_own("b", &b, "kb", own(800, "speed"))], quick()).unwrap();
+    let feed = Feed::new(&out);
+    // The server has the publish command and has not answered it yet.
+    assert_eq!(next(&seen_b), Seen::Publish("kb".into()));
+    let _ = lock(&out.own)[0].1.stop();
+    let stopped = Instant::now();
+    while !feed_of(&out, "b").control.is_ended() {
+        assert!(stopped.elapsed() < GUARD, "the encoder did not end");
+        std::thread::yield_now();
+    }
+    // The refusal that follows is not why it cannot send.
+    hold.open();
+    let DestinationStatus::Failed(f) = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_))).status else { unreachable_state() };
+    assert_eq!(f.cause, Cause::Encoder);
+    assert!(f.detail.starts_with("its video encoder stopped"), "{}", f.detail);
+    drop(feed);
+    let _ = out.stop();
+    until_closed(&seen_b);
+}
+
+#[test]
+fn each_encoder_left_unused_counts_while_it_ends() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![with_own("b", &closed_url(), "kb", own(1200, "quality"))], quick()).unwrap();
+    drop(feed_for_test(&out, &own(800, "quality")));
+    drop(feed_for_test(&out, &own(700, "quality")));
+    {
+        let mut groups = lock(&out.own);
+        out.drop_unused(&mut groups, false);
+        assert_eq!(groups.len(), 1);
+    }
+    // Two encoders end at once, and each counts toward the limit until it has ended.
+    assert_eq!(lock(&out.ending).len(), 2);
+    // b has no server to reach, so the stream may have failed by now.
+    let _ = out.stop();
+    assert!(lock(&out.ending).is_empty());
 }
 
 #[test]

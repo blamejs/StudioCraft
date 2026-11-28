@@ -1720,6 +1720,19 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             (after_loss, refusals, failures) = (false, 0, 0);
             d.uncheck();
         }
+        // The encoder this try sends from ended while it connected: a refusal or a lost connection
+        // is not why it cannot send. It fails for the encoder, unless it was started again with
+        // another one, which the next turn tries.
+        if connected.is_err()
+            && feed.own.is_some()
+            && feed.control.is_ended()
+            && let Some(ended) = d.feed_ended(hub)
+        {
+            if d.fail_ended(hub, ended) {
+                return;
+            }
+            continue;
+        }
         let tried = match connected {
             Ok(p) => Ok(p),
             // Stopped while it connected: the next turn ends the thread.
@@ -2392,14 +2405,20 @@ impl Streaming {
         self.retire(&unused);
         // An encoder can take seconds to end, which a status read must not wait for. One started
         // next for the limit waits, so it does not compete with them for an encoder session. When
-        // no thread can be started, they end here.
+        // no thread can be started, they end here. Each ends on a thread of its own, so each one
+        // still ending counts toward the limit.
         for (_, native) in &unused {
             native.ask_end();
         }
         if end_here {
             drop(unused);
-        } else if let Ok(t) = std::thread::Builder::new().name("encoder end".into()).spawn(move || drop(unused)) {
-            lock(&self.ending).push(t);
+            return;
+        }
+        for group in unused {
+            // A thread that cannot start drops its closure, and so the encoder, here.
+            if let Ok(t) = std::thread::Builder::new().name("encoder end".into()).spawn(move || drop(group)) {
+                lock(&self.ending).push(t);
+            }
         }
     }
 
