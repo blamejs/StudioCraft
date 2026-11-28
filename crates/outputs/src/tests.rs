@@ -18,7 +18,7 @@ use super::*;
 #[test]
 fn a_stream_reads_its_destinations_or_one_server() {
     let one = stream_targets(&Settings::new().with("server", "rtmp://x/app").with("key", "k")).unwrap();
-    assert_eq!(one, vec![Target { id: "main".into(), server: "rtmp://x/app".into(), key: "k".into(), enabled: true }]);
+    assert_eq!(one, vec![Target { id: "main".into(), server: "rtmp://x/app".into(), key: "k".into(), enabled: true, encoder: None }]);
     let list = serde_json::json!([
         { "id": "a", "server": "rtmp://a/live", "key": "1" },
         { "id": "b", "server": "rtmps://b/live", "key": null, "enabled": false },
@@ -35,6 +35,34 @@ fn a_stream_reads_its_destinations_or_one_server() {
     let long: Vec<serde_json::Value> = (0..=most).map(|_| serde_json::json!(1)).collect();
     let Err(e) = stream_targets(&Settings::new().with("destinations", long)) else { panic!("a list that is too long") };
     assert!(e.to_string().contains(&format!("at most {most} destinations")), "{e}");
+}
+
+#[test]
+fn a_destination_reads_the_encoder_it_runs_for_itself() {
+    let list = serde_json::json!([
+        { "id": "a", "server": "rtmp://a/live" },
+        { "id": "b", "server": "rtmp://b/live", "own_encoder": null },
+        { "id": "c", "server": "rtmp://c/live", "own_encoder": { "id": "x264", "kbps": 2500 } },
+        { "id": "d", "server": "rtmp://d/live", "own_encoder": { "id": "x264", "kbps": 900, "settings": { "preset": "fast" } } },
+    ]);
+    let t = stream_targets(&Settings::new().with("destinations", list)).unwrap();
+    assert_eq!(t[0].encoder, None);
+    assert_eq!(t[1].encoder, None);
+    assert_eq!(t[2].encoder, Some(OwnEncoder { encoder: "x264".into(), settings: Settings::new(), kbps: 2500 }));
+    assert_eq!(t[3].encoder, Some(OwnEncoder { encoder: "x264".into(), settings: Settings::new().with("preset", "fast"), kbps: 900 }));
+    for (bad, says) in [
+        (serde_json::json!("x264"), "not an object"),
+        (serde_json::json!({ "kbps": 2500 }), "without an encoder id"),
+        (serde_json::json!({ "id": "", "kbps": 2500 }), "without an encoder id"),
+        (serde_json::json!({ "id": "x264" }), "without a bitrate"),
+        (serde_json::json!({ "id": "x264", "kbps": -1 }), "without a bitrate"),
+        (serde_json::json!({ "id": "x264", "kbps": 4_294_967_296_u64 }), "without a bitrate"),
+        (serde_json::json!({ "id": "x264", "kbps": 2500, "settings": [] }), "settings are not an object"),
+    ] {
+        let list = serde_json::json!([{ "id": "a", "server": "rtmp://a/live", "own_encoder": bad.clone() }]);
+        let Err(e) = stream_targets(&Settings::new().with("destinations", list)) else { panic!("{bad} was taken") };
+        assert!(e.to_string().contains(says), "{bad}: {e}");
+    }
 }
 
 #[test]
@@ -234,6 +262,7 @@ fn job(program: PathBuf, rate: RateControl) -> OutputJob {
         ffmpeg: program,
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
+        other_encoders: Vec::new(),
         captions: None,
     }
 }

@@ -6586,6 +6586,7 @@ dependencies = [
 name = "studiocraft-outputs"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "arc-swap",
  "craft-audio",
  "craft-captions",
  "craft-closed-captions",

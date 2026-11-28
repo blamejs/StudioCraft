@@ -30,7 +30,7 @@ use studiocraft_media::audio::PooledBlock;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PooledFrame;
 use studiocraft_model::{Field, FieldKind, PathMode, ReconnectSettings, Settings, SettingsSchema};
-use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
+use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, OwnEncoder, Plugin, PluginError, RateControl, Registry};
 
 use crate::native::Native;
 pub use crate::stream::{AutoCheck, Streaming, Target};
@@ -232,7 +232,8 @@ impl Plugin for Stream {
 pub fn stream_targets(settings: &Settings) -> Result<Vec<Target>, PluginError> {
     let Some(list) = settings.get("destinations") else {
         let server = settings.str("server").unwrap_or_default();
-        return Ok(vec![Target { id: "main".into(), server: server.into(), key: settings.str("key").unwrap_or_default().into(), enabled: true }]);
+        let key = settings.str("key").unwrap_or_default().into();
+        return Ok(vec![Target { id: "main".into(), server: server.into(), key, enabled: true, encoder: None }]);
     };
     let Some(list) = list.as_array() else {
         return Err(PluginError::Failed("the stream's destinations are not a list".into()));
@@ -260,9 +261,29 @@ pub fn stream_targets(settings: &Settings) -> Result<Vec<Target>, PluginError> {
             if !d.is_object() {
                 return Err(PluginError::Failed(format!("destination {} is not an object", i + 1)));
             }
-            Ok(Target { id: text("id")?, server: text("server")?, key: text("key")?, enabled })
+            Ok(Target { id: text("id")?, server: text("server")?, key: text("key")?, enabled, encoder: own_encoder(d, i)? })
         })
         .collect()
+}
+
+/// The `own_encoder` object of destination `i`, `{id, kbps, settings}`: the encoder it runs for
+/// itself; `None` when absent or null. A value of the wrong type is an error; `settings` may be
+/// left out for the encoder's defaults.
+fn own_encoder(d: &serde_json::Value, i: usize) -> Result<Option<OwnEncoder>, PluginError> {
+    let bad = |what: &str| PluginError::Failed(format!("destination {} has an own_encoder {what}", i + 1));
+    let o = match d.get("own_encoder") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::Object(o)) => o,
+        Some(_) => return Err(bad("that is not an object")),
+    };
+    let encoder = o.get("id").and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad("without an encoder id"))?;
+    let kbps = o.get("kbps").and_then(serde_json::Value::as_u64).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad("without a bitrate"))?;
+    let settings = match o.get("settings") {
+        None | Some(serde_json::Value::Null) => Settings::new(),
+        Some(v @ serde_json::Value::Object(_)) => serde_json::from_value(v.clone()).map_err(|_| bad("whose settings cannot be read"))?,
+        Some(_) => return Err(bad("whose settings are not an object")),
+    };
+    Ok(Some(OwnEncoder { encoder: encoder.to_string(), settings, kbps }))
 }
 
 /// The reconnect settings in a stream's settings: the `reconnect` object, each value optional and

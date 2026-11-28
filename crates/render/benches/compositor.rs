@@ -84,7 +84,7 @@ fn bench(c: &mut Criterion) {
     });
 
     let sink = Arc::new(Fifo::new(8));
-    comp.set_encode(Some(EncodeTarget { width: 1920, height: 1080, sinks: vec![Arc::clone(&sink)] }));
+    comp.set_encode(Some(EncodeTarget { width: 1920, height: 1080, sinks: vec![Arc::clone(&sink)], held: 0 }));
     c.bench_function("compositor/1080p 9 items + upload + NV12 read-back", |b| {
         b.iter(|| {
             publish_capture(&capture);

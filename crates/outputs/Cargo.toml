@@ -18,6 +18,8 @@ craft-flv.workspace = true
 craft-closed-captions.workspace = true
 craft-packet.workspace = true
 craft-rtmp.workspace = true
+# A destination's server and key are published together and read without a lock.
+arc-swap.workspace = true
 crossbeam-queue.workspace = true
 log.workspace = true
 portable-atomic.workspace = true

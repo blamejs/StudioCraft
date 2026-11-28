@@ -288,12 +288,42 @@ pub struct Destination {
     /// for a server of the user's own choosing. A service id this version does not know is kept
     /// and shown as a custom server.
     pub service: String,
+    /// The video encoder plug-in id it sends with; empty for the stream's encoder.
+    pub video_encoder: String,
+    /// The video bitrate it sends with, in kbps; 0 for the stream's bitrate.
+    pub video_bitrate_kbps: u32,
 }
 
 impl Default for Destination {
     fn default() -> Self {
-        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None, service: String::new() }
+        Self {
+            id: String::new(),
+            name: String::new(),
+            enabled: true,
+            server: String::new(),
+            key: KeyRef::None,
+            service: String::new(),
+            video_encoder: String::new(),
+            video_bitrate_kbps: 0,
+        }
     }
+}
+
+/// The video bitrates a stream and a destination may set, in kbps.
+pub const VIDEO_BITRATE_KBPS: std::ops::RangeInclusive<u32> = 100..=200_000;
+/// Longest video encoder id a destination may name, in bytes.
+pub const MAX_ENCODER_ID: usize = 64;
+
+/// One video encoder of a stream and the destinations that send what it makes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncoderGroup {
+    /// The encoder plug-in id.
+    pub video_encoder: String,
+    pub video_bitrate_kbps: u32,
+    /// Whether this is the stream's encoder, which runs for as long as the stream does.
+    pub shared: bool,
+    /// The ids of its destinations, in the order they are listed.
+    pub destinations: Vec<String>,
 }
 
 /// Most destinations a profile holds.
@@ -431,8 +461,52 @@ impl StreamSettings {
         self.destinations.first().map_or("", |d| d.server.as_str())
     }
 
+    /// The stream's video bitrate as a stream starts with it, in [`VIDEO_BITRATE_KBPS`].
+    pub fn video_bitrate(&self) -> u32 {
+        self.video_bitrate_kbps.clamp(*VIDEO_BITRATE_KBPS.start(), *VIDEO_BITRATE_KBPS.end())
+    }
+
+    /// The video encoder plug-in id and bitrate `d` sends with: each its own when it sets one,
+    /// else the stream's.
+    pub fn encoder_of<'a>(&'a self, d: &'a Destination) -> (&'a str, u32) {
+        let encoder = if d.video_encoder.is_empty() { self.video_encoder.as_str() } else { d.video_encoder.as_str() };
+        let kbps = if d.video_bitrate_kbps == 0 { self.video_bitrate() } else { d.video_bitrate_kbps };
+        (encoder, kbps)
+    }
+
+    /// Whether `d` sends what the stream's encoder makes: its encoder and bitrate are the stream's,
+    /// whether it names them or not.
+    pub fn shares_encoder(&self, d: &Destination) -> bool {
+        self.encoder_of(d) == (self.video_encoder.as_str(), self.video_bitrate())
+    }
+
+    /// The video encoders the destinations send with: the stream's first, then one for each other
+    /// encoder and bitrate in the order a destination first names it, each with its destinations.
+    /// Destinations that name the same encoder and bitrate share one encoder.
+    pub fn encoder_groups(&self) -> Vec<EncoderGroup> {
+        let mut groups = vec![EncoderGroup {
+            video_encoder: self.video_encoder.clone(),
+            video_bitrate_kbps: self.video_bitrate(),
+            shared: true,
+            destinations: Vec::new(),
+        }];
+        for d in &self.destinations {
+            let (encoder, kbps) = self.encoder_of(d);
+            match groups.iter_mut().find(|g| g.video_encoder == encoder && g.video_bitrate_kbps == kbps) {
+                Some(g) => g.destinations.push(d.id.clone()),
+                None => groups.push(EncoderGroup {
+                    video_encoder: encoder.to_string(),
+                    video_bitrate_kbps: kbps,
+                    shared: false,
+                    destinations: vec![d.id.clone()],
+                }),
+            }
+        }
+        groups
+    }
+
     /// The first problem with the destinations, as an error message: too many, an empty or long
-    /// id, or an id used twice.
+    /// id, an id used twice, or an encoder id or bitrate of one that cannot be.
     pub fn check(&self) -> Result<(), String> {
         if self.destinations.len() > MAX_DESTINATIONS {
             return Err(format!("the stream has {} destinations; at most {MAX_DESTINATIONS} are allowed", self.destinations.len()));
@@ -446,6 +520,18 @@ impl StreamSettings {
             }
             if self.destinations[..i].iter().any(|o| o.id == d.id) {
                 return Err(format!("the destination id `{}` is used twice", d.id));
+            }
+            if d.video_encoder.len() > MAX_ENCODER_ID || d.video_encoder.chars().any(char::is_control) {
+                return Err(format!("destination `{}` names a video encoder id that is not valid", d.id));
+            }
+            if d.video_bitrate_kbps != 0 && !VIDEO_BITRATE_KBPS.contains(&d.video_bitrate_kbps) {
+                return Err(format!(
+                    "destination `{}` has a video bitrate of {} kbps; it must be {} to {} kbps, or 0 for the stream's",
+                    d.id,
+                    d.video_bitrate_kbps,
+                    VIDEO_BITRATE_KBPS.start(),
+                    VIDEO_BITRATE_KBPS.end()
+                ));
             }
         }
         Ok(())

@@ -57,6 +57,7 @@ pub use outputs::{
 };
 pub use pause::{countdown_text, media_extensions as pause_media_extensions, paused_text};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
+pub use studiocraft_outputs::encoders::HARDWARE as HARDWARE_ENCODER;
 pub use studiocraft_outputs::stream::diagnose;
 pub use studiocraft_outputs::stream::ingests;
 pub use studiocraft_platform::PlatformError;
@@ -1809,7 +1810,8 @@ impl Studio {
         let vs = self.profile.video.sanitized();
         let mut sinks = self.outputs.video_sinks();
         sinks.extend(self.virtual_camera_sink());
-        let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks });
+        let held = self.outputs.video_held();
+        let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks, held });
         v.shared.encode.publish(target);
     }
 
@@ -1831,7 +1833,7 @@ impl Studio {
         let canvas = self.canvas();
         let target = self.scope_feed.as_ref().map(|f| {
             let (width, height) = scope_size(canvas, f.max_width, f.max_height);
-            studiocraft_render::EncodeTarget { width, height, sinks: vec![Arc::clone(&f.sink)] }
+            studiocraft_render::EncodeTarget { width, height, sinks: vec![Arc::clone(&f.sink)], held: 0 }
         });
         v.shared.scope.publish(target);
     }

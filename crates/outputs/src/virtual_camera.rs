@@ -365,6 +365,7 @@ mod tests {
             ffmpeg: std::path::PathBuf::new(),
             stats: Arc::new(EncoderStats::default()),
             start: studiocraft_media::Tick(0),
+            other_encoders: Vec::new(),
             captions: None,
         };
         let settings = Settings::new().with("device", "/dev/studiocraft-no-such-camera");
